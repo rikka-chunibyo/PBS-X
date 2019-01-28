@@ -72,24 +72,14 @@ fn main() {
         },
     }
 
-    let addr = ([0,0,0,0,0,0,0,0], 8007).into();
+    let addr = ([127,0,0,1], 82).into();
 
     lazy_static!{
        static ref ROUTER: Router = proxmox_backup::api2::router();
     }
 
-    let mut config = ApiConfig::new("/usr/share/javascript/proxmox-backup", &ROUTER);
-
-    // add default dirs which includes jquery and bootstrap
-    // my $base = '/usr/share/libpve-http-server-perl';
-    // add_dirs($self->{dirs}, '/css/' => "$base/css/");
-    // add_dirs($self->{dirs}, '/js/' => "$base/js/");
-    // add_dirs($self->{dirs}, '/fonts/' => "$base/fonts/");
-    config.add_alias("novnc", "/usr/share/novnc-pve");
-    config.add_alias("extjs", "/usr/share/javascript/extjs");
-    config.add_alias("fontawesome", "/usr/share/fonts-font-awesome");
-    config.add_alias("xtermjs", "/usr/share/pve-xtermjs");
-    config.add_alias("widgettoolkit", "/usr/share/javascript/proxmox-widget-toolkit");
+    let config = ApiConfig::new(
+        "/usr/share/javascript/proxmox-backup", &ROUTER, RpcEnvironmentType::PRIVILEDGED);
 
     let rest_server = RestServer::new(config);
 
