@@ -226,7 +226,7 @@ pub fn delete_drive(name: String, _param: Value) -> Result<(), Error> {
     },
 )]
 /// Scan tape drives
-pub fn scan_tape_drives(_param: Value) -> Result<Vec<TapeDeviceInfo>, Error> {
+pub fn scan_drives(_param: Value) -> Result<Vec<TapeDeviceInfo>, Error> {
 
     let list = linux_tape_device_list();
 
@@ -234,15 +234,14 @@ pub fn scan_tape_drives(_param: Value) -> Result<Vec<TapeDeviceInfo>, Error> {
 }
 
 
-const SCAN_DRIVES: Router = Router::new()
-    .get(&API_METHOD_SCAN_TAPE_DRIVES);
+pub const SCAN_DRIVES: Router = Router::new()
+    .get(&API_METHOD_SCAN_DRIVES);
 
 
 const ITEM_ROUTER: Router = Router::new()
     .get(&API_METHOD_GET_CONFIG)
     .put(&API_METHOD_UPDATE_DRIVE)
-    .delete(&API_METHOD_DELETE_DRIVE)
-    .subdirs(&[("scan", &SCAN_DRIVES)]);
+    .delete(&API_METHOD_DELETE_DRIVE);
 
 
 pub const ROUTER: Router = Router::new()
