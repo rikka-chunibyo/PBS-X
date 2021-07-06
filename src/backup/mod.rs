@@ -178,44 +178,36 @@ pub fn backup_group() -> Result<nix::unistd::Group, Error> {
     }
 }
 
-mod file_formats;
-pub use file_formats::*;
-
-mod manifest;
-pub use manifest::*;
-
-mod crypt_config;
-pub use crypt_config::*;
+pub use pbs_datastore::catalog::*;
+pub use pbs_datastore::catalog;
+pub use pbs_datastore::file_formats::*;
+pub use pbs_datastore::file_formats;
+pub use pbs_datastore::index::*;
+pub use pbs_datastore::index;
+pub use pbs_datastore::crypt_config;
+pub use pbs_datastore::crypt_config::*;
+pub use pbs_datastore::crypt_reader;
+pub use pbs_datastore::crypt_reader::*;
+pub use pbs_datastore::crypt_writer;
+pub use pbs_datastore::crypt_writer::*;
+pub use pbs_datastore::data_blob;
+pub use pbs_datastore::data_blob::*;
+pub use pbs_datastore::data_blob_reader;
+pub use pbs_datastore::data_blob_reader::*;
+pub use pbs_datastore::data_blob_writer;
+pub use pbs_datastore::data_blob_writer::*;
+pub use pbs_datastore::checksum_reader;
+pub use pbs_datastore::checksum_reader::*;
+pub use pbs_datastore::checksum_writer;
+pub use pbs_datastore::checksum_writer::*;
+pub use pbs_datastore::chunker;
+pub use pbs_datastore::chunker::*;
 
 mod key_derivation;
 pub use key_derivation::*;
 
-mod crypt_reader;
-pub use crypt_reader::*;
-
-mod crypt_writer;
-pub use crypt_writer::*;
-
-mod checksum_reader;
-pub use checksum_reader::*;
-
-mod checksum_writer;
-pub use checksum_writer::*;
-
-mod chunker;
-pub use chunker::*;
-
-mod data_blob;
-pub use data_blob::*;
-
-mod data_blob_reader;
-pub use data_blob_reader::*;
-
-mod data_blob_writer;
-pub use data_blob_writer::*;
-
-mod catalog;
-pub use catalog::*;
+mod manifest;
+pub use manifest::*;
 
 mod chunk_stream;
 pub use chunk_stream::*;
@@ -228,9 +220,6 @@ pub use read_chunk::*;
 
 mod chunk_store;
 pub use chunk_store::*;
-
-mod index;
-pub use index::*;
 
 mod fixed_index;
 pub use fixed_index::*;
