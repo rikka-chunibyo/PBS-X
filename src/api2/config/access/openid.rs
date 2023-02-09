@@ -61,10 +61,7 @@ pub fn create_openid_realm(config: OpenIdRealmConfig) -> Result<(), Error> {
 
     let (mut domains, _digest) = domains::config()?;
 
-    if config.realm == "pbs"
-        || config.realm == "pam"
-        || domains.sections.get(&config.realm).is_some()
-    {
+    if domains::exists(&domains, &config.realm) {
         param_bail!("realm", "realm '{}' already exists.", config.realm);
     }
 
