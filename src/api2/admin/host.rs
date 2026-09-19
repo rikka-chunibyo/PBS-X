@@ -4,10 +4,11 @@ use serde_json::Value;
 use proxmox_router::{http_bail, ApiMethod, Permission, Router, RpcEnvironment, SubdirMap};
 use proxmox_schema::api;
 
-use pbs_api_types::{Authid, BackupNamespace, BackupType};
+use pbs_api_types::{Authid, BackupNamespace, BackupType, JOB_ID_SCHEMA};
 use pbsx_api_types::{
-    HostAgentHeartbeat, HostAgentStatus, HostBackupJobConfig, HostConfig, HostListItem,
-    HostSnapshotListItem, HOST_ID_SCHEMA, PRIV_HOST_AGENT, PRIV_HOST_AUDIT,
+    HostAgentHeartbeat, HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand, HostConfig,
+    HostListItem, HostSnapshotListItem, HOST_ID_SCHEMA, PRIV_HOST_AGENT, PRIV_HOST_AUDIT,
+    PRIV_HOST_MODIFY,
 };
 use pbs_config::CachedUserInfo;
 
@@ -233,11 +234,45 @@ pub async fn list_host_snapshots(
     .map_err(|err| anyhow::format_err!("failed to await host snapshot listing: {err}"))?
 }
 
-const HEARTBEAT_ROUTER: Router = Router::new().post(&API_METHOD_HEARTBEAT);
 
+#[api(
+    protected: true,
+    input: {
+        properties: {
+            name: { schema: HOST_ID_SCHEMA },
+            id: { schema: JOB_ID_SCHEMA },
+        },
+    },
+    returns: { type: HostBackupRunCommand },
+    access: {
+        permission: &Permission::Privilege(&["host", "{name}"], PRIV_HOST_MODIFY, false),
+    },
+)]
+/// Queue a configured host backup job for immediate pickup by its agent.
+pub fn run_backup(name: String, id: String) -> Result<HostBackupRunCommand, Error> {
+    let host = get_host_config(&name)?;
+    if !host.enable {
+        http_bail!(FORBIDDEN, "host '{}' is disabled", name);
+    }
+    let (config, _) = pbs_config::host_backup::config()?;
+    let job: HostBackupJobConfig = config
+        .lookup("host-backup", &id)
+        .map_err(|_| anyhow::format_err!("host backup job '{}' does not exist", id))?;
+    if job.host != name {
+        http_bail!(BAD_REQUEST, "job '{}' belongs to host '{}', not '{}'", id, job.host, name);
+    }
+    if !job.enable {
+        http_bail!(BAD_REQUEST, "host backup job '{}' is disabled", id);
+    }
+    crate::server::host::queue_host_backup(&job)
+}
+
+const HEARTBEAT_ROUTER: Router = Router::new().post(&API_METHOD_HEARTBEAT);
+const BACKUP_ROUTER: Router = Router::new().post(&API_METHOD_RUN_BACKUP);
 const SNAPSHOTS_ROUTER: Router = Router::new().get(&API_METHOD_LIST_HOST_SNAPSHOTS);
 
 const ITEM_SUBDIRS: SubdirMap = &[
+    ("backup", &BACKUP_ROUTER),
     ("heartbeat", &HEARTBEAT_ROUTER),
     ("snapshots", &SNAPSHOTS_ROUTER),
 ];

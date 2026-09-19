@@ -1,0 +1,365 @@
+package backupproxy
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/pbs-plus/pxar/buzhash"
+	"github.com/pbs-plus/pxar/datastore"
+)
+
+func newTestLocalStore(t *testing.T) (*LocalStore, string) {
+	t.Helper()
+	dir := t.TempDir()
+	config, _ := buzhash.NewConfig(4096)
+	ls, err := NewLocalStore(dir, config, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ls, dir
+}
+
+func TestLocalStoreStartSession(t *testing.T) {
+	ls, _ := newTestLocalStore(t)
+
+	sess, err := ls.StartSession(context.TODO(), BackupConfig{
+		BackupType: datastore.BackupVM,
+		BackupID:   "100",
+		BackupTime: 1700000000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess == nil {
+		t.Error("session should not be nil")
+	}
+}
+
+func TestLocalStoreUploadArchive(t *testing.T) {
+	ls, dir := newTestLocalStore(t)
+
+	sess, err := ls.StartSession(context.TODO(), BackupConfig{
+		BackupType: datastore.BackupVM,
+		BackupID:   "100",
+		BackupTime: 1700000000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := make([]byte, 50<<10)
+	_, _ = rand.Read(data)
+
+	result, err := sess.UploadArchive(context.Background(), "root.pxar.didx", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Filename != "root.pxar.didx" {
+		t.Errorf("filename = %q, want %q", result.Filename, "root.pxar.didx")
+	}
+	if result.Size == 0 {
+		t.Error("index size should not be 0")
+	}
+
+	// Verify index file exists
+	indexPath := filepath.Join(dir, "root.pxar.didx")
+	raw, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("index file not found: %v", err)
+	}
+
+	// Verify it's a valid dynamic index
+	reader, err := datastore.ParseDynamicIndex(raw)
+	if err != nil {
+		t.Fatalf("read dynamic index: %v", err)
+	}
+	if reader.Count() == 0 {
+		t.Error("index should have at least one chunk")
+	}
+}
+
+func TestLocalStoreUploadBlob(t *testing.T) {
+	ls, dir := newTestLocalStore(t)
+
+	sess, _ := ls.StartSession(context.TODO(), BackupConfig{
+		BackupType: datastore.BackupCT,
+		BackupID:   "200",
+	})
+
+	blobData := []byte(`{"key": "value"}`)
+	if err := sess.UploadBlob(context.TODO(), "config.json", blobData); err != nil {
+		t.Fatal(err)
+	}
+
+	blobPath := filepath.Join(dir, "config.json")
+	raw, err := os.ReadFile(blobPath)
+	if err != nil {
+		t.Fatalf("blob file not found: %v", err)
+	}
+	decoded, err := datastore.DecodeBlob(nil, raw)
+	if err != nil {
+		t.Fatalf("decode blob: %v", err)
+	}
+	if !bytes.Equal(decoded, blobData) {
+		t.Error("blob content mismatch")
+	}
+}
+
+func TestLocalStoreFinish(t *testing.T) {
+	ls, dir := newTestLocalStore(t)
+
+	sess, _ := ls.StartSession(context.TODO(), BackupConfig{
+		BackupType: datastore.BackupHost,
+		BackupID:   "myhost",
+		BackupTime: 1700000000,
+	})
+
+	data := make([]byte, 10<<10)
+	_, _ = rand.Read(data)
+
+	_, _ = sess.UploadArchive(context.Background(), "root.pxar.didx", bytes.NewReader(data))
+	_ = sess.UploadBlob(context.TODO(), "config.json", []byte("config"))
+
+	manifest, err := sess.Finish(context.TODO())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if manifest.BackupType != "host" {
+		t.Errorf("type = %q, want %q", manifest.BackupType, "host")
+	}
+	if manifest.BackupID != "myhost" {
+		t.Errorf("id = %q, want %q", manifest.BackupID, "myhost")
+	}
+	if len(manifest.Files) != 2 {
+		t.Fatalf("files = %d, want 2", len(manifest.Files))
+	}
+
+	// Verify manifest file exists
+	manifestPath := filepath.Join(dir, "index.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("manifest not found: %v", err)
+	}
+
+	parsed, err := datastore.UnmarshalManifest(raw)
+	if err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	if len(parsed.Files) != 2 {
+		t.Errorf("parsed files = %d, want 2", len(parsed.Files))
+	}
+}
+
+func TestLocalStoreRoundTrip(t *testing.T) {
+	ls, dir := newTestLocalStore(t)
+
+	sess, _ := ls.StartSession(context.TODO(), BackupConfig{
+		BackupType: datastore.BackupVM,
+		BackupID:   "100",
+	})
+
+	data := make([]byte, 30<<10)
+	_, _ = rand.Read(data)
+
+	result, err := sess.UploadArchive(context.Background(), "root.pxar.didx", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Read back index
+	indexPath := filepath.Join(dir, result.Filename)
+	raw, _ := os.ReadFile(indexPath)
+	reader, _ := datastore.ParseDynamicIndex(raw)
+
+	// Load and verify each chunk
+	chunkStore, _ := datastore.NewChunkStore(dir)
+	var reconstructed bytes.Buffer
+	for i := 0; i < reader.Count(); i++ {
+		info, ok := reader.ChunkInfo(i)
+		if !ok {
+			t.Fatalf("chunk %d not found", i)
+		}
+
+		chunkData, err := chunkStore.LoadChunk(info.Digest)
+		if err != nil {
+			t.Fatalf("load chunk %d: %v", i, err)
+		}
+
+		decoded, err := datastore.DecodeBlob(nil, chunkData)
+		if err != nil {
+			t.Fatalf("decode blob %d: %v", i, err)
+		}
+
+		reconstructed.Write(decoded)
+	}
+
+	if !bytes.Equal(reconstructed.Bytes(), data) {
+		t.Error("reconstructed data doesn't match original")
+	}
+}
+
+func TestLocalStoreDeduplication(t *testing.T) {
+	ls, _ := newTestLocalStore(t)
+
+	data := make([]byte, 20<<10)
+	_, _ = rand.Read(data)
+
+	// First upload
+	sess1, _ := ls.StartSession(context.TODO(), BackupConfig{BackupID: "1"})
+	_, err := sess1.UploadArchive(context.Background(), "root.pxar.didx", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Count chunks from first upload
+	indexPath := filepath.Join(ls.baseDir, "root.pxar.didx")
+	raw1, _ := os.ReadFile(indexPath)
+	reader1, _ := datastore.ParseDynamicIndex(raw1)
+	chunkCount := reader1.Count()
+
+	// Second upload with same data
+	sess2, _ := ls.StartSession(context.TODO(), BackupConfig{BackupID: "2"})
+	_, err = sess2.UploadArchive(context.Background(), "root2.pxar.didx", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify same number of chunks
+	indexPath2 := filepath.Join(ls.baseDir, "root2.pxar.didx")
+	raw2, _ := os.ReadFile(indexPath2)
+	reader2, _ := datastore.ParseDynamicIndex(raw2)
+
+	if reader2.Count() != chunkCount {
+		t.Errorf("second upload: %d chunks, want %d", reader2.Count(), chunkCount)
+	}
+
+	// Verify same digests
+	for i := range chunkCount {
+		d1, _ := reader1.IndexDigest(i)
+		d2, _ := reader2.IndexDigest(i)
+		if d1 != d2 {
+			t.Errorf("chunk %d: digest mismatch", i)
+		}
+	}
+}
+
+func TestLocalStoreIndexDigest(t *testing.T) {
+	ls, _ := newTestLocalStore(t)
+
+	sess, _ := ls.StartSession(context.TODO(), BackupConfig{})
+	data := []byte("test data for index digest verification")
+
+	result, err := sess.UploadArchive(context.Background(), "test.pxar.didx", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify digest is hex-encodable and correct
+	digestHex := hex.EncodeToString(result.Digest[:])
+	if len(digestHex) != 64 {
+		t.Errorf("digest hex length = %d, want 64", len(digestHex))
+	}
+
+	// Verify manifest entry has the digest
+	_, _ = sess.Finish(context.TODO())
+}
+
+func TestLocalStoreUploadSplitArchive(t *testing.T) {
+	ls, dir := newTestLocalStore(t)
+
+	sess, _ := ls.StartSession(context.TODO(), BackupConfig{
+		BackupType: datastore.BackupVM,
+		BackupID:   "200",
+	})
+
+	metaData := make([]byte, 8*1024)
+	payloadData := make([]byte, 50*1024)
+	_, _ = rand.Read(metaData)
+	_, _ = rand.Read(payloadData)
+
+	splitResult, err := sess.UploadSplitArchive(
+		context.TODO(),
+		"root.mpxar.didx", bytes.NewReader(metaData),
+		"root.ppxar.didx", bytes.NewReader(payloadData),
+	)
+	if err != nil {
+		t.Fatalf("UploadSplitArchive: %v", err)
+	}
+
+	if splitResult.MetadataResult.Filename != "root.mpxar.didx" {
+		t.Errorf("metadata filename = %q, want root.mpxar.didx", splitResult.MetadataResult.Filename)
+	}
+	if splitResult.PayloadResult.Filename != "root.ppxar.didx" {
+		t.Errorf("payload filename = %q, want root.ppxar.didx", splitResult.PayloadResult.Filename)
+	}
+	if splitResult.MetadataResult.Size == 0 {
+		t.Error("metadata size should not be zero")
+	}
+	if splitResult.PayloadResult.Size == 0 {
+		t.Error("payload size should not be zero")
+	}
+
+	// Verify both index files exist
+	metaPath := filepath.Join(dir, "root.mpxar.didx")
+	payloadPath := filepath.Join(dir, "root.ppxar.didx")
+
+	metaRaw, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("metadata index not found: %v", err)
+	}
+	payloadRaw, err := os.ReadFile(payloadPath)
+	if err != nil {
+		t.Fatalf("payload index not found: %v", err)
+	}
+
+	metaIdx, err := datastore.ParseDynamicIndex(metaRaw)
+	if err != nil {
+		t.Fatalf("read metadata didx: %v", err)
+	}
+	payloadIdx, err := datastore.ParseDynamicIndex(payloadRaw)
+	if err != nil {
+		t.Fatalf("read payload didx: %v", err)
+	}
+
+	if metaIdx.Count() == 0 {
+		t.Error("metadata index should have at least one chunk")
+	}
+	if payloadIdx.Count() == 0 {
+		t.Error("payload index should have at least one chunk")
+	}
+
+	t.Logf("Split archive: metadata=%d chunks (%d bytes), payload=%d chunks (%d bytes)",
+		metaIdx.Count(), splitResult.MetadataResult.Size,
+		payloadIdx.Count(), splitResult.PayloadResult.Size)
+
+	// Verify both chunks can be loaded and their data reconstructed
+	chunkStore, _ := datastore.NewChunkStore(dir)
+
+	var reconstructed bytes.Buffer
+	for i := 0; i < payloadIdx.Count(); i++ {
+		info, ok := payloadIdx.ChunkInfo(i)
+		if !ok {
+			t.Fatalf("payload chunk %d not found", i)
+		}
+		chunkData, err := chunkStore.LoadChunk(info.Digest)
+		if err != nil {
+			t.Fatalf("load payload chunk %d: %v", i, err)
+		}
+		decoded, err := datastore.DecodeBlob(nil, chunkData)
+		if err != nil {
+			t.Fatalf("decode payload chunk %d: %v", i, err)
+		}
+		reconstructed.Write(decoded)
+	}
+
+	if !bytes.Equal(reconstructed.Bytes(), payloadData) {
+		t.Error("reconstructed payload doesn't match original")
+	}
+}

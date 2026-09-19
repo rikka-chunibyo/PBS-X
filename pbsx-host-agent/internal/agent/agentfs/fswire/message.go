@@ -44,8 +44,17 @@ type (
 	}
 
 	BackupReq struct {
-		BackupID   string `cbor:"job_id"`
-		Drive      string `cbor:"drive"`
+		BackupID            string   `cbor:"job_id"`
+		HostID              string   `cbor:"host_id,omitempty"`
+		Store               string   `cbor:"store,omitempty"`
+		Namespace           string   `cbor:"namespace,omitempty"`
+		Sources             []string `cbor:"sources,omitempty"`
+		SnapshotMode        string   `cbor:"snapshot_mode,omitempty"`
+		ChangeDetectionMode string   `cbor:"change_detection_mode,omitempty"`
+
+		// Legacy PBS Plus/PBS-X bridge fields. Kept during migration so older
+		// control-plane callers fail gracefully rather than breaking decoding.
+		Drive      string `cbor:"drive,omitempty"`
 		SourceMode string `cbor:"source_mode,omitempty"`
 		ReadMode   string `cbor:"read_mode,omitempty"`
 		Extras     string `cbor:"extras,omitempty"`

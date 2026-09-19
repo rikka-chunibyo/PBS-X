@@ -28,6 +28,30 @@ Ext.define('PBS.HostBackupJobView', {
 	    }).show();
 	},
 
+	runJob: function() {
+	    let me = this;
+	    let view = me.getView();
+	    let selection = view.getSelection();
+	    if (selection.length < 1) return;
+
+	    let id = selection[0].data.id;
+	    Proxmox.Utils.API2Request({
+		method: 'POST',
+		url: `/admin/host/${encodeURIComponent(view.host)}/backup`,
+		params: { id },
+		success: function(response) {
+		    let runId = response.result.data['run-id'];
+		    Ext.Msg.alert(
+			gettext('Backup queued'),
+			Ext.String.format(gettext('Run {0} was queued for this host.'), Ext.String.htmlEncode(runId)),
+		    );
+		},
+		failure: function(response) {
+		    Ext.Msg.alert(gettext('Error'), response.htmlStatus);
+		},
+	    });
+	},
+
 	editJob: function() {
 	    let view = this.getView();
 	    let selection = view.getSelection();
@@ -65,6 +89,14 @@ Ext.define('PBS.HostBackupJobView', {
 	    xtype: 'proxmoxStdRemoveButton',
 	    baseurl: '/config/host-backup',
 	    callback: 'reload',
+	},
+	'-',
+	{
+	    xtype: 'proxmoxButton',
+	    text: gettext('Run now'),
+	    iconCls: 'fa fa-play',
+	    disabled: true,
+	    handler: 'runJob',
 	},
     ],
 

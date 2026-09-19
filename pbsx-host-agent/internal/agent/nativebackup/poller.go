@@ -1,0 +1,134 @@
+package nativebackup
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/pbs-x/pbsx-host-agent/internal/agent"
+	"github.com/pbs-x/pbsx-host-agent/internal/log"
+)
+
+type runCommand struct {
+	RunID               string   `json:"run-id"`
+	JobID               string   `json:"job-id"`
+	HostID              string   `json:"host-id"`
+	Store               string   `json:"store"`
+	Namespace           string   `json:"ns,omitempty"`
+	Sources             []string `json:"sources"`
+	SnapshotMode        string   `json:"snapshot-mode"`
+	ChangeDetectionMode string   `json:"change-detection-mode"`
+	RequestedAt         int64    `json:"requested-at"`
+	BackupTime          int64    `json:"backup-time"`
+}
+
+type runFinish struct {
+	HostID       string  `json:"host-id"`
+	RunID        string  `json:"run-id"`
+	Success      bool    `json:"success"`
+	Error        string  `json:"error,omitempty"`
+	BackupTime   *int64  `json:"backup-time,omitempty"`
+	Files        *uint64 `json:"files,omitempty"`
+	Directories  *uint64 `json:"directories,omitempty"`
+	LogicalBytes *uint64 `json:"logical-bytes,omitempty"`
+	DurationMS   *uint64 `json:"duration-ms,omitempty"`
+}
+
+// Poll continuously claims server-owned backup runs and executes them one at a
+// time. A run is not claimed again while this goroutine is executing it.
+func Poll(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	for {
+		if err := pollOnce(ctx); err != nil && ctx.Err() == nil {
+			log.Warn("native backup poll failed", "error", err.Error())
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
+}
+
+func pollOnce(ctx context.Context) error {
+	hostID, err := agent.AgentHostID()
+	if err != nil {
+		return err
+	}
+	var runs []runCommand
+	path := "/pbsx/agent/next?host-id=" + url.QueryEscape(hostID)
+	if err := agent.PBSAPIRequest(ctx, http.MethodGet, path, nil, &runs); err != nil {
+		return err
+	}
+	if len(runs) == 0 {
+		return nil
+	}
+	run := runs[0]
+	if run.HostID != hostID {
+		return fmt.Errorf("server returned run %q for host %q to host %q", run.RunID, run.HostID, hostID)
+	}
+	log.Info("claimed native host backup", "run_id", run.RunID, "job", run.JobID, "requested_at", run.RequestedAt)
+
+	result, runErr := Run(ctx, Job{
+		ID:                  run.JobID,
+		HostID:              run.HostID,
+		Datastore:           run.Store,
+		Namespace:           run.Namespace,
+		Sources:             run.Sources,
+		SnapshotMode:        run.SnapshotMode,
+		ChangeDetectionMode: run.ChangeDetectionMode,
+		BackupTime:          run.BackupTime,
+	})
+	if ctx.Err() != nil {
+		// Leave the command in running/ so a restarted agent can recover it.
+		return ctx.Err()
+	}
+
+	finish := runFinish{HostID: hostID, RunID: run.RunID, Success: runErr == nil}
+	if runErr != nil {
+		finish.Error = truncate(runErr.Error(), 8192)
+	} else if result != nil {
+		finish.BackupTime = &result.BackupTime
+		files := uint64(max(result.Files, 0))
+		dirs := uint64(max(result.Directories, 0))
+		logical := uint64(max(result.LogicalBytes, 0))
+		duration := uint64(max(result.Duration.Milliseconds(), 0))
+		finish.Files = &files
+		finish.Directories = &dirs
+		finish.LogicalBytes = &logical
+		finish.DurationMS = &duration
+	}
+
+	// Do not claim another run until completion is durably acknowledged. This
+	// also handles a lost finish response without creating concurrent duplicates.
+	for {
+		err := agent.PBSAPIRequest(ctx, http.MethodPost, "/pbsx/agent/finish", finish, nil)
+		if err == nil {
+			if runErr != nil {
+				log.Error(runErr, "native backup run completed with failure", "run_id", run.RunID, "job", run.JobID)
+			} else {
+				log.Info("native backup run acknowledged", "run_id", run.RunID, "job", run.JobID)
+			}
+			return nil
+		}
+		log.Warn("failed to report native backup completion; retrying", "run_id", run.RunID, "error", err.Error())
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+func truncate(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit]
+}

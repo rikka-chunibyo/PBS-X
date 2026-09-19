@@ -9,45 +9,56 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
 
 type BtrfsSnapshotHandler struct{}
 
 func (b *BtrfsSnapshotHandler) CreateSnapshot(jobID string, sourcePath string) (Snapshot, error) {
 	if !b.IsSupported(sourcePath) {
-		return Snapshot{}, fmt.Errorf("source path %q is not on a Btrfs volume", sourcePath)
+		return Snapshot{}, fmt.Errorf("source path %q is not on Btrfs", sourcePath)
+	}
+	mount, err := findMount(sourcePath)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	abs, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	rel, err := filepath.Rel(mount.Target, abs)
+	if err != nil {
+		return Snapshot{}, err
 	}
 
-	tmpDir := os.TempDir()
-	snapshotPath := filepath.Join(tmpDir, "pbsx-btrfs", jobID)
-	timeStarted := time.Now()
-
-	if err := b.DeleteSnapshot(Snapshot{Path: snapshotPath}); err != nil {
-		log.Error(err, "")
+	base := filepath.Join(mount.Target, ".pbsx-snapshots")
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return Snapshot{}, fmt.Errorf("create Btrfs snapshot directory: %w", err)
 	}
+	name := fmt.Sprintf("%s-%d", safeSnapshotComponent(jobID), time.Now().UTC().UnixNano())
+	backend := filepath.Join(base, name)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "btrfs", "subvolume", "snapshot", sourcePath, snapshotPath)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return Snapshot{}, fmt.Errorf("failed to create Btrfs snapshot: %s, %w", string(output), err)
+	// Snapshot the mounted subvolume, then expose the requested subdirectory
+	// inside that read-only snapshot. This works for jobs targeting /home/foo
+	// instead of requiring every configured source to itself be a subvolume.
+	if output, err := exec.CommandContext(ctx, "btrfs", "subvolume", "snapshot", "-r", mount.Target, backend).CombinedOutput(); err != nil {
+		return Snapshot{}, fmt.Errorf("create Btrfs snapshot: %s: %w", strings.TrimSpace(string(output)), err)
 	}
-
-	return Snapshot{
-		Path:        snapshotPath,
-		TimeStarted: timeStarted,
-		SourcePath:  sourcePath,
-		Handler:     b,
-	}, nil
+	root := backend
+	if rel != "." && rel != "" {
+		root = filepath.Join(backend, rel)
+	}
+	return Snapshot{Path: root, BackendPath: backend, TimeStarted: time.Now(), SourcePath: sourcePath, Handler: b}, nil
 }
 
 func (b *BtrfsSnapshotHandler) DeleteSnapshot(snapshot Snapshot) error {
-	cmd := exec.Command("btrfs", "subvolume", "delete", snapshot.Path)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to delete Btrfs snapshot: %s, %w", string(output), err)
+	backend := snapshot.BackendPath
+	if backend == "" {
+		backend = snapshot.Path
+	}
+	if output, err := exec.Command("btrfs", "subvolume", "delete", backend).CombinedOutput(); err != nil {
+		return fmt.Errorf("delete Btrfs snapshot %q: %s: %w", backend, strings.TrimSpace(string(output)), err)
 	}
 	return nil
 }
@@ -56,11 +67,6 @@ func (b *BtrfsSnapshotHandler) IsSupported(sourcePath string) bool {
 	if runtime.GOOS == "windows" {
 		return false
 	}
-
-	cmd := exec.Command("stat", "-f", "-c", "%T", sourcePath)
-	output, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(output)) == "btrfs"
+	mount, err := findMount(sourcePath)
+	return err == nil && mount.FSType == "btrfs"
 }

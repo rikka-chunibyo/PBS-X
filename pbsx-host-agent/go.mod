@@ -145,3 +145,5 @@ require (
 )
 
 tool golang.org/x/tools/cmd/deadcode
+
+replace github.com/pbs-plus/pxar => ./third_party/pxar

@@ -11,6 +11,7 @@ pub mod config;
 pub mod helpers;
 pub mod node;
 pub mod ping;
+pub mod pbsx;
 pub mod pull;
 pub mod push;
 pub mod reader;
@@ -29,6 +30,7 @@ const SUBDIRS: SubdirMap = &sorted!([
     ("config", &config::ROUTER),
     ("nodes", &node::ROUTER),
     ("ping", &ping::ROUTER),
+    ("pbsx", &pbsx::ROUTER),
     ("pull", &pull::ROUTER),
     ("push", &push::ROUTER),
     ("reader", &reader::ROUTER),

@@ -90,6 +90,26 @@ fn upgrade_to_backup_protocol(
 
         let user_info = CachedUserInfo::new()?;
 
+        // PBS-X agent upload tokens are ordinary PBS API tokens with deliberately narrow ACLs.
+        // Bind them to their registered Host ID as a second line of defense so a compromised
+        // machine cannot create snapshots for a different host even on a datastore it may use.
+        if let Some(host_id) = crate::server::host::host_for_upload_auth(&auth_id)? {
+            if backup_dir_arg.ty() != BackupType::Host || backup_dir_arg.id() != host_id.as_str() {
+                proxmox_router::http_bail!(
+                    FORBIDDEN,
+                    "PBS-X agent token is bound to host '{}'",
+                    host_id
+                );
+            }
+            if !crate::server::host::upload_target_allowed(&host_id, &store, &backup_ns)? {
+                proxmox_router::http_bail!(
+                    FORBIDDEN,
+                    "PBS-X host '{}' has no enabled backup job targeting this datastore/namespace",
+                    host_id
+                );
+            }
+        }
+
         user_info
             .check_privs(
                 &auth_id,

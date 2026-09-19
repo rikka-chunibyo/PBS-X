@@ -2,11 +2,18 @@ package snapshots
 
 import (
 	"errors"
+	"strings"
 	"time"
+	"unicode"
 )
 
+// Snapshot is a point-in-time filesystem view suitable for direct PXAR walking.
+// Path is always the browsable filesystem root for the selected source. BackendPath
+// is provider-private state used to tear the snapshot down (for example a ZFS
+// dataset@snapshot name or an LVM snapshot block device).
 type Snapshot struct {
 	Path        string          `json:"path"`
+	BackendPath string          `json:"backend_path,omitempty"`
 	TimeStarted time.Time       `json:"time_started"`
 	SourcePath  string          `json:"source_path"`
 	Direct      bool            `json:"direct"`
@@ -17,6 +24,26 @@ type SnapshotHandler interface {
 	CreateSnapshot(jobID string, sourcePath string) (Snapshot, error)
 	DeleteSnapshot(snapshot Snapshot) error
 	IsSupported(sourcePath string) bool
+}
+
+func safeSnapshotComponent(value string) string {
+	value = strings.TrimSpace(value)
+	var b strings.Builder
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-.")
+	if out == "" {
+		return "backup"
+	}
+	if len(out) > 48 {
+		out = out[:48]
+	}
+	return out
 }
 
 var (

@@ -126,6 +126,7 @@ pub fn create_host_backup_job(
     section_config.set_data(&config.id, "host-backup", &config)?;
     pbs_config::host_backup::save_config(&section_config)?;
     crate::server::jobstate::create_state_file("hostbackup", &config.id)?;
+    crate::server::host::sync_host_upload_acl(&config.host)?;
     Ok(())
 }
 
@@ -208,6 +209,7 @@ pub fn update_host_backup_job(
     pbs_config::detect_modified_configuration_file(digest.as_deref(), &expected_digest)?;
 
     let mut data: HostBackupJobConfig = config.lookup("host-backup", &id)?;
+    let previous_host = data.host.clone();
     if !check_modify_access(&user_info, &auth_id, &data) {
         bail!("permission check failed");
     }
@@ -263,6 +265,10 @@ pub fn update_host_backup_job(
 
     config.set_data(&id, "host-backup", &data)?;
     pbs_config::host_backup::save_config(&config)?;
+    crate::server::host::sync_host_upload_acl(&previous_host)?;
+    if data.host != previous_host {
+        crate::server::host::sync_host_upload_acl(&data.host)?;
+    }
     Ok(())
 }
 
@@ -302,6 +308,7 @@ pub fn delete_host_backup_job(
     config.sections.remove(&id);
     pbs_config::host_backup::save_config(&config)?;
     crate::server::jobstate::remove_state_file("hostbackup", &id)?;
+    crate::server::host::sync_host_upload_acl(&job.host)?;
     Ok(())
 }
 

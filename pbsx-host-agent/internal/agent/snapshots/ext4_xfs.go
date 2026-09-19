@@ -1,37 +1,32 @@
 package snapshots
 
-import (
-	"fmt"
-	"os/exec"
-	"strings"
-)
+import "fmt"
 
 type EXT4XFSHandler struct{}
 
 func (e *EXT4XFSHandler) CreateSnapshot(jobID string, sourcePath string) (Snapshot, error) {
-	if !e.IsSupported(sourcePath) {
-		return Snapshot{}, fmt.Errorf("source path %q is not on an EXT4 or XFS filesystem", sourcePath)
+	fsType, err := detectFilesystem(sourcePath)
+	if err != nil {
+		return Snapshot{}, err
 	}
-
-	lvmHandler := &LVMSnapshotHandler{}
-	if !lvmHandler.IsSupported(sourcePath) {
-		return Snapshot{}, fmt.Errorf("EXT4/XFS snapshot requires LVM, but LVM is not supported for %q", sourcePath)
+	if fsType != "ext4" && fsType != "xfs" {
+		return Snapshot{}, fmt.Errorf("source path %q is %s, not ext4/xfs", sourcePath, fsType)
 	}
-
-	return lvmHandler.CreateSnapshot(jobID, sourcePath)
+	lvm := &LVMSnapshotHandler{}
+	if !lvm.IsSupported(sourcePath) {
+		return Snapshot{}, fmt.Errorf("%s source %q is not backed by an LVM logical volume", fsType, sourcePath)
+	}
+	return lvm.CreateSnapshot(jobID, sourcePath)
 }
 
 func (e *EXT4XFSHandler) DeleteSnapshot(snapshot Snapshot) error {
-	lvmHandler := &LVMSnapshotHandler{}
-	return lvmHandler.DeleteSnapshot(snapshot)
+	return (&LVMSnapshotHandler{}).DeleteSnapshot(snapshot)
 }
 
 func (e *EXT4XFSHandler) IsSupported(sourcePath string) bool {
-	cmd := exec.Command("lsblk", "-no", "FSTYPE", sourcePath)
-	output, err := cmd.Output()
-	if err != nil {
+	fsType, err := detectFilesystem(sourcePath)
+	if err != nil || (fsType != "ext4" && fsType != "xfs") {
 		return false
 	}
-	fsType := strings.TrimSpace(string(output))
-	return fsType == "ext4" || fsType == "xfs"
+	return (&LVMSnapshotHandler{}).IsSupported(sourcePath)
 }

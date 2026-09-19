@@ -6,18 +6,25 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{format_err, Error};
+use anyhow::{bail, format_err, Error};
 use nix::sys::stat::Mode;
 
 use proxmox_sys::fs::{create_path, file_read_optional_string, replace_file, CreateOptions};
 
-use pbsx_api_types::{HostAgentStatus, HostEnrollmentToken};
+use pbs_api_types::{Authid, Tokenname, Userid};
+use pbsx_api_types::{
+    HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand, HostBackupRunResult, HostConfig,
+    HostEnrollmentToken,
+};
 use pbs_buildcfg::PROXMOX_BACKUP_STATE_DIR_M;
 use pbs_config::{open_backup_lockfile, BackupLockGuard};
 
 pub const HOST_STATUS_BASEDIR: &str = concat!(PROXMOX_BACKUP_STATE_DIR_M!(), "/host-status");
 pub const HOST_ENROLLMENT_BASEDIR: &str =
     concat!(PROXMOX_BACKUP_STATE_DIR_M!(), "/pbsx-enrollment");
+pub const HOST_CREDENTIAL_BASEDIR: &str =
+    concat!(PROXMOX_BACKUP_STATE_DIR_M!(), "/pbsx-agent-credentials");
+pub const HOST_RUN_BASEDIR: &str = concat!(PROXMOX_BACKUP_STATE_DIR_M!(), "/pbsx-host-runs");
 
 const HOST_ENROLLMENT_TTL: i64 = 15 * 60;
 
@@ -25,6 +32,14 @@ const HOST_ENROLLMENT_TTL: i64 = 15 * 60;
 struct HostEnrollmentRecord {
     digest: String,
     expires: i64,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct HostAgentCredentialRecord {
+    pub certificate_fingerprint: String,
+    pub backup_auth_id: String,
+    pub issued: i64,
 }
 
 /// A host is shown as online if it has checked in within this many seconds.
@@ -49,9 +64,23 @@ pub fn create_host_status_dir() -> Result<(), Error> {
     create_path(
         HOST_ENROLLMENT_BASEDIR,
         Some(options.clone()),
-        Some(options),
+        Some(options.clone()),
     )
     .map_err(|err: Error| format_err!("unable to create PBS-X enrollment directory - {err}"))?;
+
+    create_path(
+        HOST_CREDENTIAL_BASEDIR,
+        Some(options.clone()),
+        Some(options.clone()),
+    )
+    .map_err(|err: Error| format_err!("unable to create PBS-X credential directory - {err}"))?;
+
+    create_path(
+        HOST_RUN_BASEDIR,
+        Some(options.clone()),
+        Some(options),
+    )
+    .map_err(|err: Error| format_err!("unable to create PBS-X host run directory - {err}"))?;
 
     Ok(())
 }
@@ -130,7 +159,200 @@ pub fn create_enrollment_token(host: &str) -> Result<HostEnrollmentToken, Error>
     replace_file(&path, &raw, options, true)
         .map_err(|err| format_err!("unable to persist enrollment token for host '{host}' - {err}"))?;
 
-    Ok(HostEnrollmentToken { token, expires })
+    Ok(HostEnrollmentToken {
+        token,
+        expires,
+        server_fingerprint: crate::cert_info()?.fingerprint()?,
+    })
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&left, &right) in a.iter().zip(b.iter()) {
+        diff |= left ^ right;
+    }
+    diff == 0
+}
+
+/// Validate and consume a one-time enrollment token. A successful check always removes it.
+pub fn consume_enrollment_token(host: &str, token: &str) -> Result<(), Error> {
+    let path = enrollment_path(host);
+    let _lock = get_lock(&path)?;
+    let raw = file_read_optional_string(&path)?
+        .ok_or_else(|| format_err!("no enrollment token exists for host '{host}'"))?;
+    let record: HostEnrollmentRecord = serde_json::from_str(&raw)
+        .map_err(|err| format_err!("unable to parse enrollment token for host '{host}' - {err}"))?;
+
+    if record.expires < proxmox_time::epoch_i64() {
+        let _ = std::fs::remove_file(&path);
+        bail!("enrollment token for host '{host}' has expired");
+    }
+
+    let supplied = hex::encode(openssl::sha::sha256(token.as_bytes()));
+    if !constant_time_eq(record.digest.as_bytes(), supplied.as_bytes()) {
+        bail!("invalid enrollment token for host '{host}'");
+    }
+
+    std::fs::remove_file(&path)
+        .map_err(|err| format_err!("unable to consume enrollment token for host '{host}' - {err}"))?;
+    Ok(())
+}
+
+fn credential_path(host: &str) -> PathBuf {
+    let mut path = PathBuf::from(HOST_CREDENTIAL_BASEDIR);
+    path.push(format!("{host}.json"));
+    path
+}
+
+pub fn read_host_credentials(host: &str) -> Result<Option<HostAgentCredentialRecord>, Error> {
+    let path = credential_path(host);
+    let Some(raw) = file_read_optional_string(&path)? else {
+        return Ok(None);
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|err| format_err!("unable to parse credentials for host '{host}' - {err}"))
+}
+
+pub fn write_host_credentials(host: &str, record: &HostAgentCredentialRecord) -> Result<(), Error> {
+    create_host_status_dir()?;
+    let path = credential_path(host);
+    let _lock = get_lock(&path)?;
+    let raw = serde_json::to_vec(record)?;
+    let backup_user = pbs_config::backup_user()?;
+    let options = CreateOptions::new()
+        .perm(Mode::from_bits_truncate(0o0640))
+        .owner(backup_user.uid)
+        .group(backup_user.gid);
+    replace_file(&path, &raw, options, true)
+        .map_err(|err| format_err!("unable to persist credentials for host '{host}' - {err}"))
+}
+
+/// Return the host bound to a PBS upload token, if it is a PBS-X agent token.
+pub fn host_for_upload_auth(auth_id: &Authid) -> Result<Option<String>, Error> {
+    if !auth_id.is_token() {
+        return Ok(None);
+    }
+    let entries = match std::fs::read_dir(HOST_CREDENTIAL_BASEDIR) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let wanted = auth_id.to_string();
+    for entry in entries {
+        let entry = entry?;
+        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let raw = std::fs::read_to_string(entry.path())?;
+        let record: HostAgentCredentialRecord = serde_json::from_str(&raw)?;
+        if record.backup_auth_id == wanted {
+            if let Some(stem) = entry.path().file_stem().and_then(|stem| stem.to_str()) {
+                return Ok(Some(stem.to_string()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn token_name_for_host(host: &str) -> Result<Tokenname, Error> {
+    let digest = hex::encode(openssl::sha::sha256(host.as_bytes()));
+    format!("pbsx-{}", &digest[..24]).parse().map_err(Error::from)
+}
+
+pub fn upload_target_allowed(host: &str, store: &str, ns: &pbs_api_types::BackupNamespace) -> Result<bool, Error> {
+    let (config, _) = pbs_config::host_backup::config()?;
+    let jobs: Vec<HostBackupJobConfig> = config.convert_to_typed_array("host-backup")?;
+    Ok(jobs.into_iter().any(|job| {
+        job.enable
+            && job.host == host
+            && job.store == store
+            && match &job.ns {
+                Some(job_ns) => job_ns == ns,
+                None => ns.is_root(),
+            }
+    }))
+}
+
+fn sync_host_upload_acl_for(host: &str, auth_id: &Authid) -> Result<(), Error> {
+    let _lock = pbs_config::acl::lock_config()?;
+    let (mut acl, _) = pbs_config::acl::config()?;
+    acl.delete_authid(auth_id);
+    acl.insert_user_role(&format!("/host/{host}"), auth_id, "HostAgent", false);
+
+    let (config, _) = pbs_config::host_backup::config()?;
+    let jobs: Vec<HostBackupJobConfig> = config.convert_to_typed_array("host-backup")?;
+    for job in jobs.into_iter().filter(|job| job.enable && job.host == host) {
+        let path = format!("/{}", job.datastore_acl_path().join("/"));
+        acl.insert_user_role(&path, auth_id, "DatastoreBackup", false);
+    }
+    pbs_config::acl::save_config(&acl)
+}
+
+/// Refresh datastore/host ACLs for an already enrolled host after its job configuration changes.
+pub fn sync_host_upload_acl(host: &str) -> Result<(), Error> {
+    let Some(record) = read_host_credentials(host)? else {
+        return Ok(());
+    };
+    let auth_id: Authid = record.backup_auth_id.parse()?;
+    sync_host_upload_acl_for(host, &auth_id)
+}
+
+/// Rotate the narrow PBS API token used by an agent for native backup uploads.
+pub fn issue_host_upload_token(host: &str) -> Result<(String, String), Error> {
+    let userid = Userid::root_userid().clone();
+    let token_name = token_name_for_host(host)?;
+    let token_id = Authid::from((userid.clone(), Some(token_name.clone())));
+
+    let (user_config, _) = pbs_config::user::config()?;
+    if user_config.sections.contains_key(&token_id.to_string()) {
+        crate::api2::access::user::delete_token(userid.clone(), token_name.clone(), None)?;
+    }
+
+    let value = crate::api2::access::user::generate_token(
+        userid,
+        token_name,
+        Some(format!("PBS-X host agent: {host}")),
+        Some(true),
+        None,
+        None,
+    )?;
+    let auth_id = value["tokenid"]
+        .as_str()
+        .ok_or_else(|| format_err!("generated token response has no tokenid"))?
+        .parse::<Authid>()?;
+    let secret = value["value"]
+        .as_str()
+        .ok_or_else(|| format_err!("generated token response has no secret"))?
+        .to_string();
+
+    sync_host_upload_acl_for(host, &auth_id)?;
+    Ok((auth_id.to_string(), secret))
+}
+
+/// Remove the agent upload token and stored credential fingerprint for a host.
+pub fn remove_host_credentials(host: &str) -> Result<(), Error> {
+    if let Some(record) = read_host_credentials(host)? {
+        if let Ok(auth_id) = record.backup_auth_id.parse::<Authid>() {
+            if let Some(token_name) = auth_id.tokenname().map(ToOwned::to_owned) {
+                let _ = crate::api2::access::user::delete_token(
+                    auth_id.user().clone(),
+                    token_name,
+                    None,
+                );
+            }
+        }
+    }
+    let path = credential_path(host);
+    let _lock = get_lock(&path)?;
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// Remove any outstanding enrollment credential for a host.
@@ -148,6 +370,8 @@ pub fn remove_enrollment_token(host: &str) -> Result<(), Error> {
 /// Remove runtime state after deleting a host definition.
 pub fn remove_host_status(host: &str) -> Result<(), Error> {
     remove_enrollment_token(host)?;
+    remove_host_credentials(host)?;
+    remove_host_runs(host)?;
     let path = status_path(host);
     let _lock = get_lock(&path)?;
 
@@ -166,6 +390,204 @@ pub fn remove_host_status(host: &str) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct HostBackupRunHistory {
+    command: HostBackupRunCommand,
+    result: HostBackupRunResult,
+    finished_at: i64,
+}
+
+fn run_host_dir(host: &str) -> PathBuf {
+    let mut path = PathBuf::from(HOST_RUN_BASEDIR);
+    path.push(host);
+    path
+}
+
+fn create_run_dirs(host: &str) -> Result<(), Error> {
+    create_host_status_dir()?;
+    let backup_user = pbs_config::backup_user()?;
+    let options = CreateOptions::new()
+        .perm(Mode::from_bits_truncate(0o0750))
+        .owner(backup_user.uid)
+        .group(backup_user.gid);
+    let host_dir = run_host_dir(host);
+    create_path(&host_dir, Some(options.clone()), Some(options.clone()))?;
+    for child in ["queued", "running", "history"] {
+        create_path(
+            host_dir.join(child),
+            Some(options.clone()),
+            Some(options.clone()),
+        )?;
+    }
+    Ok(())
+}
+
+fn host_run_lock(host: &str) -> Result<BackupLockGuard, Error> {
+    create_run_dirs(host)?;
+    open_backup_lockfile(run_host_dir(host).join(".lock"), None, true)
+}
+
+fn write_run_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), Error> {
+    let backup_user = pbs_config::backup_user()?;
+    let options = CreateOptions::new()
+        .perm(Mode::from_bits_truncate(0o0640))
+        .owner(backup_user.uid)
+        .group(backup_user.gid);
+    let raw = serde_json::to_vec_pretty(value)?;
+    replace_file(path, &raw, options, true)?;
+    Ok(())
+}
+
+fn read_run_command(path: &Path) -> Result<HostBackupRunCommand, Error> {
+    let raw = std::fs::read(path)?;
+    serde_json::from_slice(&raw)
+        .map_err(|err| format_err!("unable to parse PBS-X host run '{}': {err}", path.display()))
+}
+
+/// Queue one configured host backup job for pickup by the enrolled agent.
+pub fn queue_host_backup(job: &HostBackupJobConfig) -> Result<HostBackupRunCommand, Error> {
+    let (host_config, _) = pbs_config::host::config()?;
+    let host: HostConfig = host_config
+        .lookup("host", &job.host)
+        .map_err(|_| format_err!("PBS-X host '{}' does not exist", job.host))?;
+    if !host.enable {
+        bail!("PBS-X host '{}' is disabled", job.host);
+    }
+
+    create_run_dirs(&job.host)?;
+    let _lock = host_run_lock(&job.host)?;
+
+    // Coalesce duplicate schedule/manual requests for the same job while the host is offline or
+    // still processing it. We want one current recovery point, not a backlog of missed intervals.
+    let base = run_host_dir(&job.host);
+    for state in ["running", "queued"] {
+        let dir = base.join(state);
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(existing) = read_run_command(&path) {
+                    if existing.job_id == job.id {
+                        return Ok(existing);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut random = [0u8; 12];
+    proxmox_sys::linux::fill_with_random_data(&mut random)?;
+    let requested_at = proxmox_time::epoch_i64();
+
+    // Assign backup time on the PBS-X server rather than trusting the agent clock. Keep it
+    // monotonic across queued/running work for this host and stable across agent retries.
+    let mut backup_time = requested_at;
+    for state in ["running", "queued"] {
+        let dir = base.join(state);
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
+                }
+                if let Ok(existing) = read_run_command(&path) {
+                    backup_time = backup_time.max(existing.backup_time.saturating_add(1));
+                }
+            }
+        }
+    }
+
+    let run_id = format!("{}-{}", requested_at, hex::encode(random));
+    let command = HostBackupRunCommand {
+        run_id: run_id.clone(),
+        job_id: job.id.clone(),
+        host_id: job.host.clone(),
+        store: job.store.clone(),
+        ns: job.ns.clone(),
+        sources: job.sources.clone(),
+        snapshot_mode: job.snapshot_mode,
+        change_detection_mode: job.change_detection_mode,
+        requested_at,
+        backup_time,
+    };
+    let path = run_host_dir(&job.host)
+        .join("queued")
+        .join(format!("{run_id}.json"));
+    write_run_json(&path, &command)?;
+    Ok(command)
+}
+
+fn first_json_file(path: &Path) -> Result<Option<PathBuf>, Error> {
+    let mut files = match std::fs::read_dir(path) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|v| v.to_str()) == Some("json"))
+            .collect::<Vec<_>>(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    files.sort();
+    Ok(files.into_iter().next())
+}
+
+/// Atomically claim the next run for a host. An existing running command is returned again so an
+/// agent restart can recover a run whose HTTP response or process was lost.
+pub fn claim_host_backup(host: &str) -> Result<Option<HostBackupRunCommand>, Error> {
+    create_run_dirs(host)?;
+    let _lock = host_run_lock(host)?;
+    let base = run_host_dir(host);
+    if let Some(path) = first_json_file(&base.join("running"))? {
+        return read_run_command(&path).map(Some);
+    }
+    let Some(queued) = first_json_file(&base.join("queued"))? else {
+        return Ok(None);
+    };
+    let file_name = queued
+        .file_name()
+        .ok_or_else(|| format_err!("invalid queued host run path"))?;
+    let running = base.join("running").join(file_name);
+    std::fs::rename(&queued, &running)?;
+    read_run_command(&running).map(Some)
+}
+
+/// Complete a claimed run and move it into immutable history.
+pub fn finish_host_backup(result: &HostBackupRunResult) -> Result<(), Error> {
+    create_run_dirs(&result.host_id)?;
+    let _lock = host_run_lock(&result.host_id)?;
+    let base = run_host_dir(&result.host_id);
+    let running = base.join("running").join(format!("{}.json", result.run_id));
+    let command = read_run_command(&running)
+        .map_err(|_| format_err!("host run '{}' is not currently claimed", result.run_id))?;
+    if command.host_id != result.host_id {
+        bail!("host run identity mismatch");
+    }
+    let record = HostBackupRunHistory {
+        command,
+        result: result.clone(),
+        finished_at: proxmox_time::epoch_i64(),
+    };
+    let history = base.join("history").join(format!("{}.json", result.run_id));
+    write_run_json(&history, &record)?;
+    std::fs::remove_file(running)?;
+    Ok(())
+}
+
+/// Remove queued/running state when the host itself is deleted. Historical records are deleted
+/// with the host because they are only orchestration metadata; actual backups remain in datastores.
+pub fn remove_host_runs(host: &str) -> Result<(), Error> {
+    let path = run_host_dir(host);
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// Decide whether a persisted status still represents a connected agent.

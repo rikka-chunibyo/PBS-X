@@ -1,0 +1,419 @@
+// Package pxar implements the Proxmox Archive format for Go.
+//
+// pxar is a binary archive format for efficient backup and storage of file system
+// metadata and content with support for random access via goodbye tables.
+//
+// # Entry Model
+//
+// An archive is a stream of typed entries (Entry). Each entry has a Kind that
+// identifies it as a directory, file, symlink, device node, socket, FIFO, or
+// goodbye table marker. File entries carry content inline; directory entries
+// contain child entries followed by a goodbye table for O(log n) filename
+// lookups.
+//
+// # Metadata
+//
+// Every filesystem entry carries a Metadata struct with POSIX stat information
+// (format.Stat), extended attributes (XAttr), POSIX ACLs, file capabilities
+// (FCaps), and quota project IDs. Use MetadataBuilder to construct Metadata
+// with a fluent API:
+//
+//	meta := pxar.FileMetadata(0o644).
+//	    Owner(1000, 1000).
+//	    Build()
+//
+// # File Name Validation
+//
+// Use CheckPathComponent to validate path components before encoding:
+//
+//	if !pxar.CheckPathComponent(name) {
+//	    return fmt.Errorf("invalid filename: %s", name)
+//	}
+//
+// # Errors
+//
+// The package exports sentinel errors for common error conditions:
+//
+//	if errors.Is(err, pxar.ErrNotFound) { ... }
+//	if errors.Is(err, pxar.ErrInvalidFilename) { ... }
+package pxar
+
+import (
+	"errors"
+	"path/filepath"
+	"strings"
+	"time"
+	"unsafe"
+
+	"github.com/pbs-plus/pxar/format"
+)
+
+// Sentinel errors for common error conditions.
+var (
+	ErrNotFound        = errors.New("pxar: entry not found")
+	ErrInvalidFilename = errors.New("pxar: invalid filename")
+	ErrInvalidHeader   = errors.New("pxar: invalid header")
+	ErrNotDirectory    = errors.New("pxar: not a directory")
+	ErrNotRegularFile  = errors.New("pxar: not a regular file")
+)
+
+// EntryKind identifies the type of a pxar archive entry.
+type EntryKind int
+
+const (
+	KindVersion      EntryKind = iota // Format version
+	KindPrelude                       // Prelude blob
+	KindSymlink                       // Symbolic link
+	KindHardlink                      // Hard link
+	KindDevice                        // Device node
+	KindSocket                        // Unix socket
+	KindFIFO                          // Named pipe
+	KindFile                          // Regular file
+	KindDirectory                     // Directory
+	KindGoodbyeTable                  // End-of-directory marker
+)
+
+// Entry represents an item in a pxar archive.
+type Entry struct {
+	Metadata      Metadata
+	Path          string // full path (e.g. "/backup/etc/file.txt")
+	name          string // base name, set directly by accessor/decoder to avoid filepath.Base
+	LinkTarget    string
+	DeviceInfo    format.Device
+	Kind          EntryKind
+	FileSize      uint64
+	FileOffset    uint64
+	PayloadOffset uint64
+	ContentOffset uint64
+	LinkOffset    uint64 // relative offset to hardlink target (from FILENAME header)
+}
+
+// IsDir reports whether the entry is a directory.
+func (e *Entry) IsDir() bool { return e.Kind == KindDirectory }
+
+// IsSymlink reports whether the entry is a symbolic link.
+func (e *Entry) IsSymlink() bool { return e.Kind == KindSymlink }
+
+// IsRegularFile reports whether the entry is a regular file.
+func (e *Entry) IsRegularFile() bool { return e.Kind == KindFile }
+
+// IsHardlink reports whether the entry is a hard link.
+func (e *Entry) IsHardlink() bool { return e.Kind == KindHardlink }
+
+// IsDevice reports whether the entry is a device node.
+func (e *Entry) IsDevice() bool { return e.Kind == KindDevice }
+
+// IsFIFO reports whether the entry is a named pipe.
+func (e *Entry) IsFIFO() bool { return e.Kind == KindFIFO }
+
+// IsSocket reports whether the entry is a socket.
+func (e *Entry) IsSocket() bool { return e.Kind == KindSocket }
+
+// FileName returns just the file name portion of the entry's path.
+// Uses cached name when available, avoiding allocation from filepath.Base.
+func (e *Entry) FileName() string {
+	if e.name != "" {
+		return e.name
+	}
+	return filepath.Base(e.Path)
+}
+
+// SetFileName caches the base name of the entry. Used internally by the
+// accessor and decoder to avoid filepath.Base allocations on repeated calls.
+func (e *Entry) SetFileName(name string) {
+	e.name = name
+}
+
+// PathBytes returns the entry's full path as a []byte without allocating.
+// The returned slice references the same memory as Path and must not be modified.
+func (e *Entry) PathBytes() []byte {
+	return unsafe.Slice(unsafe.StringData(e.Path), len(e.Path))
+}
+
+// FileNameBytes returns the entry's base name as a []byte without allocating.
+// Uses cached name when available.
+func (e *Entry) FileNameBytes() []byte {
+	n := e.FileName()
+	return unsafe.Slice(unsafe.StringData(n), len(n))
+}
+
+// Metadata holds file metadata found in pxar archives.
+type Metadata struct {
+	QuotaProjectID *uint64
+	ACL            ACL
+	XAttrs         []format.XAttr
+	FCaps          []byte
+	Stat           format.Stat
+}
+
+// FileType returns the file type portion of the mode.
+func (m Metadata) FileType() uint64 { return m.Stat.FileType() }
+
+// FileMode returns the permission bits of the mode.
+func (m Metadata) FileMode() uint64 { return m.Stat.FileMode() }
+
+// IsDir reports whether this metadata describes a directory.
+func (m Metadata) IsDir() bool { return m.Stat.IsDir() }
+
+// IsSymlink reports whether this metadata describes a symbolic link.
+func (m Metadata) IsSymlink() bool { return m.Stat.IsSymlink() }
+
+// IsRegularFile reports whether this metadata describes a regular file.
+func (m Metadata) IsRegularFile() bool { return m.Stat.IsRegularFile() }
+
+// IsDevice reports whether this metadata describes a device node.
+func (m Metadata) IsDevice() bool { return m.Stat.IsDevice() }
+
+// IsFIFO reports whether this metadata describes a FIFO.
+func (m Metadata) IsFIFO() bool { return m.Stat.IsFIFO() }
+
+// IsSocket reports whether this metadata describes a socket.
+func (m Metadata) IsSocket() bool { return m.Stat.IsSocket() }
+
+// ExtendedMetadataEqual reports whether two Metadata entries are equivalent for
+// metadata change detection. This compares stat fields, xattrs, ACLs,
+// FCaps, and QuotaProjectID. File size is compared separately since
+// it's not part of the pxar Stat format.
+func (m Metadata) ExtendedMetadataEqual(other Metadata) bool {
+	if !m.Stat.StatEqual(other.Stat) {
+		return false
+	}
+	if len(m.XAttrs) != len(other.XAttrs) {
+		return false
+	}
+	for i := range m.XAttrs {
+		if !xAttrEqual(m.XAttrs[i], other.XAttrs[i]) {
+			return false
+		}
+	}
+	if len(m.FCaps) != len(other.FCaps) {
+		return false
+	}
+	for i := range m.FCaps {
+		if m.FCaps[i] != other.FCaps[i] {
+			return false
+		}
+	}
+	if !aclEqual(m.ACL, other.ACL) {
+		return false
+	}
+	if m.QuotaProjectID != nil && other.QuotaProjectID != nil {
+		if *m.QuotaProjectID != *other.QuotaProjectID {
+			return false
+		}
+	} else if m.QuotaProjectID != nil || other.QuotaProjectID != nil {
+		return false
+	}
+	return true
+}
+
+// xAttrEqual mirrors the Rust reference's XAttr PartialEq, which compares
+// names only (self.name() == other.name()), ignoring the value. This feeds
+// into the derived PartialEq on Metadata, so two xattrs sharing a name but
+// differing in value are considered equal.
+func xAttrEqual(a, b format.XAttr) bool {
+	return a.NameLen == b.NameLen && string(a.Name()) == string(b.Name())
+}
+
+func aclEqual(a, b ACL) bool {
+	if len(a.Users) != len(b.Users) {
+		return false
+	}
+	if len(a.Groups) != len(b.Groups) {
+		return false
+	}
+	for i := range a.Users {
+		if a.Users[i] != b.Users[i] {
+			return false
+		}
+	}
+	for i := range a.Groups {
+		if a.Groups[i] != b.Groups[i] {
+			return false
+		}
+	}
+	if a.GroupObj != nil && b.GroupObj != nil {
+		if *a.GroupObj != *b.GroupObj {
+			return false
+		}
+	} else if a.GroupObj != nil || b.GroupObj != nil {
+		return false
+	}
+	if a.Default != nil && b.Default != nil {
+		if *a.Default != *b.Default {
+			return false
+		}
+	} else if a.Default != nil || b.Default != nil {
+		return false
+	}
+	if len(a.DefaultUsers) != len(b.DefaultUsers) {
+		return false
+	}
+	for i := range a.DefaultUsers {
+		if a.DefaultUsers[i] != b.DefaultUsers[i] {
+			return false
+		}
+	}
+	if len(a.DefaultGroups) != len(b.DefaultGroups) {
+		return false
+	}
+	for i := range a.DefaultGroups {
+		if a.DefaultGroups[i] != b.DefaultGroups[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// ACL holds access control list entries.
+type ACL struct {
+	Users         []format.ACLUser
+	Groups        []format.ACLGroup
+	GroupObj      *format.ACLGroupObject
+	Default       *format.ACLDefault
+	DefaultUsers  []format.ACLUser
+	DefaultGroups []format.ACLGroup
+}
+
+// IsEmpty reports whether the ACL has no entries.
+func (a ACL) IsEmpty() bool {
+	return len(a.Users) == 0 &&
+		len(a.Groups) == 0 &&
+		a.GroupObj == nil &&
+		a.Default == nil &&
+		len(a.DefaultUsers) == 0 &&
+		len(a.DefaultGroups) == 0
+}
+
+// MetadataBuilder constructs Metadata using a fluent API.
+type MetadataBuilder struct {
+	metadata Metadata
+}
+
+// NewMetadataBuilder creates a builder with the given type+mode.
+func NewMetadataBuilder(mode uint64) *MetadataBuilder {
+	return &MetadataBuilder{
+		metadata: Metadata{
+			Stat: format.Stat{Mode: mode},
+		},
+	}
+}
+
+func typeMetadata(mode, defaultType uint64) uint64 {
+	if mode&format.ModeIFMT != 0 {
+		return mode
+	}
+	return defaultType | mode
+}
+
+func FileMetadata(mode uint64) *MetadataBuilder {
+	return NewMetadataBuilder(typeMetadata(mode, format.ModeIFREG))
+}
+
+func DirMetadata(mode uint64) *MetadataBuilder {
+	return NewMetadataBuilder(typeMetadata(mode, format.ModeIFDIR))
+}
+
+func SymlinkMetadata(mode uint64) *MetadataBuilder {
+	return NewMetadataBuilder(typeMetadata(mode, format.ModeIFLNK))
+}
+
+func DeviceMetadata(mode uint64) *MetadataBuilder {
+	return NewMetadataBuilder(typeMetadata(mode, format.ModeIFCHR))
+}
+
+func FIFOMetadata(mode uint64) *MetadataBuilder {
+	return NewMetadataBuilder(typeMetadata(mode, format.ModeIFIFO))
+}
+
+func SocketMetadata(mode uint64) *MetadataBuilder {
+	return NewMetadataBuilder(typeMetadata(mode, format.ModeIFSOCK))
+}
+
+// StMode sets the complete mode (type + permissions).
+func (b *MetadataBuilder) StMode(mode uint64) *MetadataBuilder {
+	b.metadata.Stat.Mode = mode
+	return b
+}
+
+// FileMode sets just the permission bits.
+func (b *MetadataBuilder) FileMode(mode uint64) *MetadataBuilder {
+	b.metadata.Stat.Mode = (b.metadata.Stat.Mode & format.ModeIFMT) | (mode & ^format.ModeIFMT)
+	return b
+}
+
+// UID sets the user ID.
+func (b *MetadataBuilder) UID(uid uint32) *MetadataBuilder {
+	b.metadata.Stat.UID = uid
+	return b
+}
+
+// GID sets the group ID.
+func (b *MetadataBuilder) GID(gid uint32) *MetadataBuilder {
+	b.metadata.Stat.GID = gid
+	return b
+}
+
+// Owner sets both UID and GID.
+func (b *MetadataBuilder) Owner(uid, gid uint32) *MetadataBuilder {
+	b.metadata.Stat.UID = uid
+	b.metadata.Stat.GID = gid
+	return b
+}
+
+func (b *MetadataBuilder) Mtime(ts format.StatxTimestamp) *MetadataBuilder {
+	b.metadata.Stat.Mtime = ts
+	return b
+}
+
+func (b *MetadataBuilder) MtimeTime(t time.Time) *MetadataBuilder {
+	b.metadata.Stat.Mtime = format.NewStatxTimestampFromTime(t)
+	return b
+}
+
+func (b *MetadataBuilder) MtimeUnix(secs int64, nanos uint32) *MetadataBuilder {
+	b.metadata.Stat.Mtime = format.NewStatxTimestamp(secs, nanos)
+	return b
+}
+
+// XAttr adds an extended attribute.
+func (b *MetadataBuilder) XAttr(name, value []byte) *MetadataBuilder {
+	b.metadata.XAttrs = append(b.metadata.XAttrs, format.NewXAttr(name, value))
+	return b
+}
+
+// FCaps sets the file capabilities.
+func (b *MetadataBuilder) FCaps(data []byte) *MetadataBuilder {
+	b.metadata.FCaps = data
+	return b
+}
+
+// QuotaProjectID sets the quota project ID.
+func (b *MetadataBuilder) QuotaProjectID(id uint64) *MetadataBuilder {
+	b.metadata.QuotaProjectID = &id
+	return b
+}
+
+// Build returns the constructed Metadata.
+func (b *MetadataBuilder) Build() Metadata {
+	return b.metadata
+}
+
+// CheckPathComponent validates that a path consists of a single normal component.
+func CheckPathComponent(path string) bool {
+	path = filepath.Clean(path)
+	if path == "." || path == ".." || strings.Contains(path, "/") || strings.Contains(path, "\\") {
+		return false
+	}
+	return true
+}
+
+// SplitPath splits a rooted path like "/backup/etc" into components ["backup", "etc"].
+// The returned slice never contains empty strings.
+func SplitPath(p string) []string {
+	p = strings.TrimLeft(p, "/")
+	if p == "" {
+		return nil
+	}
+	return strings.Split(p, "/")
+}

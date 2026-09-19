@@ -512,6 +512,7 @@ async fn schedule_tasks() -> Result<(), Error> {
     schedule_datastore_prune_jobs().await;
     schedule_datastore_sync_jobs().await;
     schedule_datastore_verify_jobs().await;
+    schedule_host_backup_jobs().await;
     schedule_tape_backup_jobs().await;
     schedule_task_log_rotate().await;
     schedule_notification_threshold_counter_reset().await;
@@ -732,6 +733,50 @@ async fn schedule_datastore_verify_jobs() {
                 eprintln!("unable to start datastore verification job {job_id} - {err}");
             }
         };
+    }
+}
+
+async fn schedule_host_backup_jobs() {
+    let config = match pbs_config::host_backup::config() {
+        Err(err) => {
+            eprintln!("unable to read PBS-X host backup job config - {err}");
+            return;
+        }
+        Ok((config, _digest)) => config,
+    };
+
+    for (job_id, (_, value)) in config.sections {
+        let job: pbsx_api_types::HostBackupJobConfig = match serde_json::from_value(value) {
+            Ok(job) => job,
+            Err(err) => {
+                eprintln!("PBS-X host backup job config from_value failed - {err}");
+                continue;
+            }
+        };
+        if !job.enable {
+            continue;
+        }
+        let Some(schedule) = job.schedule.as_deref() else {
+            continue;
+        };
+        let worker_type = "hostbackup";
+        if !check_schedule(worker_type, schedule, &job_id) {
+            continue;
+        }
+        match proxmox_backup::server::host::queue_host_backup(&job) {
+            Ok(run) => {
+                if let Err(err) = jobstate::update_job_last_run_time(worker_type, &job_id) {
+                    eprintln!("unable to update PBS-X host backup schedule state for {job_id} - {err}");
+                }
+                tracing::info!(
+                    "queued PBS-X host backup job {} for host {} as run {}",
+                    job_id,
+                    job.host,
+                    run.run_id
+                );
+            }
+            Err(err) => eprintln!("unable to queue PBS-X host backup job {job_id} - {err:#}"),
+        }
     }
 }
 

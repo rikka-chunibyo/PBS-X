@@ -1,0 +1,182 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run unit tests
+        run: go test -v -timeout 60s ./...
+
+      - name: Watch workflow status
+        if: always()
+        run: |
+          echo "::notice::Unit tests completed with status: ${{ job.status }}"
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Start PBS container
+        run: |
+          docker run -d \
+            --name pbs \
+            --hostname pbs \
+            -e ROOT_PASSWORD=testpassword \
+            -p 8007:8007 \
+            --tmpfs /run/proxmox-backup:size=64M \
+            -v pbs-config:/etc/proxmox-backup \
+            -v pbs-data:/var/lib/proxmox-backup \
+            -v pbs-logs:/var/log/proxmox-backup \
+            ghcr.io/pbs-plus/proxmox-backup-docker
+
+      - name: Wait for PBS to be ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sk -X POST https://localhost:8007/api2/json/access/ticket \
+              -d "username=root@pam&password=testpassword" 2>/dev/null | grep -q ticket; then
+              echo "PBS is ready after ~$((i*2))s"
+              exit 0
+            fi
+            echo "Waiting for PBS... ($i/60)"
+            sleep 2
+          done
+          echo "PBS did not start in time"
+          docker logs pbs
+          exit 1
+
+      - name: Configure PBS
+        run: |
+          set -euo pipefail
+
+          # Create datastore
+          docker exec pbs proxmox-backup-manager datastore create test-store /var/lib/proxmox-backup/test-store
+
+          # Authenticate and extract ticket + CSRF token
+          AUTH_RESPONSE=$(curl -sk -X POST https://localhost:8007/api2/json/access/ticket \
+            -d "username=root@pam&password=testpassword")
+          TICKET=$(echo "$AUTH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['ticket'])")
+          CSRF=$(echo "$AUTH_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['CSRFPreventionToken'])")
+
+          # Create API token
+          TOKEN_RESPONSE=$(curl -sk -X POST \
+            https://localhost:8007/api2/json/access/users/root@pam/token/inttest \
+            -H "CSRFPreventionToken: $CSRF" \
+            -b "PBSAuthCookie=$TICKET")
+
+          # Extract token as "tokenid:secret" format
+          FULL_TOKEN=$(echo "$TOKEN_RESPONSE" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)['data']
+          print(f\"{d['tokenid']}:{d['value']}\")
+          ")
+
+          # Mask the token secret from logs
+          echo "::add-mask::${FULL_TOKEN}"
+
+          # Grant the token full permissions
+          docker exec pbs proxmox-backup-manager acl update / Admin --auth-id root@pam!inttest
+
+          # Verify the token works
+          VERIFY_CODE=$(curl -sk -o /dev/null -w "%{http_code}" \
+            -H "Authorization: PBSAPIToken ${FULL_TOKEN}" \
+            https://localhost:8007/api2/json/version)
+          if [ "$VERIFY_CODE" -ne 200 ]; then
+            echo "Token verification failed with HTTP $VERIFY_CODE"
+            exit 1
+          fi
+
+          # Set environment variables for integration tests
+          echo "PBS_URL=https://localhost:8007/api2/json" >> "$GITHUB_ENV"
+          echo "PBS_DATASTORE=test-store" >> "$GITHUB_ENV"
+          echo "PBS_TOKEN=${FULL_TOKEN}" >> "$GITHUB_ENV"
+
+      - name: Run integration tests
+        id: integration-tests
+        run: |
+          set -uo pipefail
+          echo "::notice::Starting integration tests against the PBS container..."
+          set +e
+          go test -tags=integration -v -timeout 240s \
+            ./backupproxy/ ./transfer/ \
+            -run 'TestIntegration_' 2>&1 | tee integration.log
+          TEST_EXIT=${PIPESTATUS[0]}
+          set -e
+
+          PASSED=$(grep -cE -- '--- PASS: TestIntegration_' integration.log || true)
+          FAILED=$(grep -cE -- '--- FAIL: TestIntegration_' integration.log || true)
+          CFG_SKIP=$(grep -c    'skipping integration test: set PBS_URL' integration.log || true)
+
+          echo "integration results: passed=$PASSED failed=$FAILED config_skips=$CFG_SKIP (go exit=$TEST_EXIT)"
+          echo "passed=$PASSED"            >> "$GITHUB_OUTPUT"
+          echo "failed=$FAILED"            >> "$GITHUB_OUTPUT"
+          echo "config_skips=$CFG_SKIP"    >> "$GITHUB_OUTPUT"
+          echo "test_exit_code=$TEST_EXIT" >> "$GITHUB_OUTPUT"
+
+          if [ "$CFG_SKIP" -ne 0 ]; then
+            echo "::error::Integration tests were skipped because the PBS env (PBS_URL/PBS_DATASTORE/PBS_TOKEN) was not effective — the PBS container did not come up correctly."
+            exit 1
+          fi
+          if [ "$PASSED" -lt 1 ]; then
+            echo "::error::No integration tests ran against PBS (0 passes)."
+            exit 1
+          fi
+          exit "$TEST_EXIT"
+
+      - name: Watch test results with gh CLI
+        if: always()
+        run: |
+          echo "::group::Test Run Summary"
+          echo "Workflow: ${{ github.workflow }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "::endgroup::"
+
+          # Display run information using gh CLI
+          if command -v gh &> /dev/null; then
+            echo "::group::GitHub Actions Run Details"
+            gh run view ${{ github.run_id }} --repo ${{ github.repository }} || true
+            echo "::endgroup::"
+          fi
+
+          if [ "${{ steps.integration-tests.outputs.test_exit_code }}" = "0" ]; then
+            echo "::notice title=Integration Tests Passed::${{ steps.integration-tests.outputs.passed }} PBS-backed tests passed (0 skipped). ✓"
+          else
+            echo "::error title=Integration Tests Failed::${{ steps.integration-tests.outputs.failed }} tests failed. Check logs above."
+          fi
+
+      - name: Dump PBS logs on failure
+        if: failure()
+        run: |
+          echo "::group::PBS Container Logs"
+          docker logs pbs
+          echo "::endgroup::"
+
+          echo "::group::PBS Container Status"
+          docker ps -a | grep pbs || true
+          docker inspect pbs --format='{{.State.Status}}' || true
+          echo "::endgroup::"

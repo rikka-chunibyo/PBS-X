@@ -1,19 +1,15 @@
 package agent
 
 import (
-	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
-	"encoding/base64"
-	"encoding/json"
+	"encoding/hex"
 	"fmt"
-	"net/http"
-	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
-	"github.com/pbs-x/pbsx-host-agent/internal/conf"
-	"github.com/pbs-x/pbsx-host-agent/internal/host"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 	"github.com/pbs-x/pbsx-host-agent/internal/mtls"
 )
@@ -25,70 +21,76 @@ var (
 	cacheTTL       = 30 * time.Minute
 )
 
+// GetTLSConfig returns the TLS configuration used by the PBS-X control plane.
+//
+// Agent identity is a self-signed client certificate whose exact fingerprint is
+// bound to the Host ID during enrollment. Server authentication is independent:
+// a configured PBS fingerprint pins the leaf certificate, otherwise normal
+// platform trust roots and hostname validation are used.
 func GetTLSConfig() (*tls.Config, error) {
 	tlsConfigMutex.RLock()
 	if tlsConfigCache != nil && time.Now().Before(cacheExpiry) {
-		defer tlsConfigMutex.RUnlock()
-		return tlsConfigCache, nil
+		cfg := tlsConfigCache
+		tlsConfigMutex.RUnlock()
+		return cfg, nil
 	}
 	tlsConfigMutex.RUnlock()
 
 	tlsConfigMutex.Lock()
 	defer tlsConfigMutex.Unlock()
-
 	if tlsConfigCache != nil && time.Now().Before(cacheExpiry) {
 		return tlsConfigCache, nil
 	}
 
-	serverCertReg, err := registry.GetEntry(registry.AUTH, "ServerCA", true)
-	if err != nil {
-		return nil, fmt.Errorf("GetTLSConfig: server cert not found -> %w", err)
-	}
-
-	var legacyCertPEM []byte
-	legacyServerCertReg, err := registry.GetEntry(registry.AUTH, "LegacyServerCA", true)
-	if err == nil {
-		legacyCertPEM = []byte(legacyServerCertReg.Value)
-	}
-
 	certReg, err := registry.GetEntry(registry.AUTH, "Cert", true)
 	if err != nil {
-		return nil, fmt.Errorf("GetTLSConfig: cert not found -> %w", err)
+		return nil, fmt.Errorf("GetTLSConfig: client certificate not found: %w", err)
 	}
-
 	keyReg, err := registry.GetEntry(registry.AUTH, "Priv", true)
 	if err != nil {
-		return nil, fmt.Errorf("GetTLSConfig: key not found -> %w", err)
+		return nil, fmt.Errorf("GetTLSConfig: client key not found: %w", err)
 	}
-
-	certPEM := []byte(certReg.Value)
-	keyPEM := []byte(keyReg.Value)
-
-	if len(certPEM) == 0 {
-		return nil, fmt.Errorf("GetTLSConfig: cert entry is empty after decryption")
-	}
-	if len(keyPEM) == 0 {
-		return nil, fmt.Errorf("GetTLSConfig: key entry is empty after decryption")
-	}
-
-	if !bytes.Contains(certPEM, []byte("-----BEGIN")) {
-		log.Error(nil, "GetTLSConfig: cert data missing PEM header",
-			"certLen", len(certPEM),
-			"certHex", fmt.Sprintf("%x", certPEM[:min(len(certPEM), 80)]),
-			"keyLen", len(keyPEM),
-			"keyHasBegin", bytes.Contains(keyPEM, []byte("-----BEGIN")))
-		return nil, fmt.Errorf("GetTLSConfig: cert data missing PEM header (len=%d, prefix=%q)", len(certPEM), certPEM[:min(len(certPEM), 40)])
-	}
-
-	tlsConfig, err := mtls.BuildClientTLS(certPEM, keyPEM, []byte(serverCertReg.Value), legacyCertPEM)
+	cert, err := tls.X509KeyPair([]byte(certReg.Value), []byte(keyReg.Value))
 	if err != nil {
-		return nil, fmt.Errorf("GetTLSConfig: buildclienttls error -> %w", err)
+		return nil, fmt.Errorf("GetTLSConfig: invalid client identity: %w", err)
 	}
 
-	tlsConfigCache = tlsConfig
-	cacheExpiry = time.Now().Add(cacheTTL)
+	serverURL, err := registry.GetEntry(registry.CONFIG, "ServerURL", false)
+	if err != nil {
+		return nil, fmt.Errorf("GetTLSConfig: server URL not found: %w", err)
+	}
+	_, serverName, err := pbsAPIEndpoint(serverURL.Value, "/")
+	if err != nil {
+		return nil, fmt.Errorf("GetTLSConfig: invalid server URL: %w", err)
+	}
 
-	return tlsConfig, nil
+	cfg := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		ServerName:   serverName,
+		Certificates: []tls.Certificate{cert},
+	}
+	pin, pinErr := registry.GetEntry(registry.CONFIG, "ServerCAFingerprint", false)
+	if pinErr == nil && pin != nil && strings.TrimSpace(pin.Value) != "" {
+		expected := normalizeFingerprint(pin.Value)
+		if len(expected) != 64 {
+			return nil, fmt.Errorf("GetTLSConfig: invalid ServerCAFingerprint")
+		}
+		cfg.InsecureSkipVerify = true // exact pinned-certificate verification below
+		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("PBS-X control server supplied no certificate")
+			}
+			digest := sha256.Sum256(cs.PeerCertificates[0].Raw)
+			if hex.EncodeToString(digest[:]) != expected {
+				return fmt.Errorf("PBS-X server certificate fingerprint mismatch")
+			}
+			return nil
+		}
+	}
+
+	tlsConfigCache = cfg
+	cacheExpiry = time.Now().Add(cacheTTL)
+	return cfg, nil
 }
 
 func InvalidateTLSConfigCache() {
@@ -98,156 +100,37 @@ func InvalidateTLSConfigCache() {
 	cacheExpiry = time.Time{}
 }
 
+// RenewCertificateIfExpiring currently reports when the self-owned identity needs
+// rotation. PBS-X does not silently replace the host's private key. A future
+// authenticated control-plane rotation endpoint can rotate it without another
+// administrator enrollment token.
 func RenewCertificateIfExpiring() error {
-	const renewalWindow = max(conf.TLSCARotationGraceDays-1, 1) * 24 * time.Hour
-
 	certReg, err := registry.GetEntry(registry.AUTH, "Cert", true)
 	if err != nil {
-		return fmt.Errorf("RenewCertificateIfExpiring: failed to retrieve certificate - %w", err)
+		return fmt.Errorf("RenewCertificateIfExpiring: failed to retrieve certificate: %w", err)
 	}
-
-	serverCAReg, err := registry.GetEntry(registry.AUTH, "ServerCA", true)
-	if err != nil {
-		return fmt.Errorf("RenewCertificateIfExpiring: failed to retrieve server CA - %w", err)
-	}
-
 	cert, err := mtls.ParseCertInfo([]byte(certReg.Value))
 	if err != nil {
-		log.Error(err, "RenewCertificateIfExpiring: corrupt certificate entry, clearing for re-bootstrap")
-		clearAuthEntries()
-		return fmt.Errorf("RenewCertificateIfExpiring: corrupt certificate entry, cleared for re-bootstrap - %w", err)
-	}
-
-	serverCA, err := mtls.ParseCertInfo([]byte(serverCAReg.Value))
-	if err != nil {
-		log.Error(err, "RenewCertificateIfExpiring: corrupt server CA entry, clearing for re-bootstrap")
-		clearAuthEntries()
-		return fmt.Errorf("RenewCertificateIfExpiring: corrupt server CA entry, cleared for re-bootstrap - %w", err)
+		return fmt.Errorf("RenewCertificateIfExpiring: invalid client certificate: %w", err)
 	}
 
 	now := time.Now()
-	timeUntilExpiry := time.Until(cert.NotAfter)
-	caTimeUntilExpiry := time.Until(serverCA.NotAfter)
-
-	switch {
-	case cert.NotAfter.Before(now) || serverCA.NotAfter.Before(now):
-		clearAuthEntries()
-		return fmt.Errorf("certificate has expired, agent needs to be bootstrapped again")
-	case timeUntilExpiry < renewalWindow || caTimeUntilExpiry < renewalWindow:
-		log.Info("certificate expires soon, renewing", "hours_left", timeUntilExpiry.Hours())
-		return renewCertificate()
-	default:
-		log.Info("certificate valid, no renewal needed", "days_left", timeUntilExpiry.Hours()/24)
-		return nil
+	if !cert.NotAfter.After(now) {
+		return fmt.Errorf("PBS-X client certificate expired at %s; host must be re-enrolled", cert.NotAfter)
 	}
+	remaining := time.Until(cert.NotAfter)
+	if remaining < 30*24*time.Hour {
+		return fmt.Errorf("PBS-X client certificate expires in %s; rotate or re-enroll the host", remaining.Round(time.Hour))
+	}
+	log.Debug("PBS-X client identity is valid", "expires", cert.NotAfter, "days_left", int(remaining.Hours()/24))
+	return nil
 }
+
 func clearAuthEntries() {
-	if err := registry.DeleteEntry(registry.AUTH, "Cert"); err != nil {
-		log.Error(err, "")
-	}
-	if err := registry.DeleteEntry(registry.AUTH, "Priv"); err != nil {
-		log.Error(err, "")
-	}
-	if err := registry.DeleteEntry(registry.AUTH, "ServerCA"); err != nil {
-		log.Error(err, "")
-	}
-	InvalidateTLSConfigCache()
-}
-
-func renewCertificate() error {
-	hostID, err := AgentHostID()
-	if err != nil {
-		return fmt.Errorf("renewCertificate: failed to get host id - %w", err)
-	}
-	hostname, err := host.AgentHostname()
-	if err != nil {
-		return fmt.Errorf("renewCertificate: failed to get hostname - %w", err)
-	}
-
-	csr, privKey, err := mtls.GenerateCSR(hostID, 2048)
-	if err != nil {
-		return fmt.Errorf("renewCertificate: generating csr failed -> %w", err)
-	}
-
-	encodedCSR := base64.StdEncoding.EncodeToString(csr)
-
-	drives, err := GetLocalDrives()
-	if err != nil {
-		return fmt.Errorf("renewCertificate: failed to get local drives list: %w", err)
-	}
-
-	reqBody, err := json.Marshal(&BootstrapRequest{
-		HostID:          hostID,
-		Hostname:        hostname,
-		Drives:          drives,
-		CSR:             encodedCSR,
-		OperatingSystem: runtime.GOOS,
-		Architecture:    runtime.GOARCH,
-		AgentVersion:    conf.Version,
-	})
-	if err != nil {
-		return fmt.Errorf("renewCertificate: failed to marshal bootstrap request: %w", err)
-	}
-
-	renewResp := &BootstrapResponse{}
-
-	_, err = AgentHTTPRequest(http.MethodPost, "/pbsx/agent/renew", bytes.NewBuffer(reqBody), renewResp)
-	if err != nil {
-		return fmt.Errorf("renewCertificate: failed to fetch renewed certificate: %w", err)
-	}
-
-	decodedCA, err := base64.StdEncoding.DecodeString(renewResp.CA)
-	if err != nil {
-		return fmt.Errorf("renewCertificate: error decoding ca content -> %w", err)
-	}
-
-	decodedCert, err := base64.StdEncoding.DecodeString(renewResp.Cert)
-	if err != nil {
-		return fmt.Errorf("renewCertificate: error decoding cert content -> %w", err)
-	}
-
-	caEntry := registry.RegistryEntry{
-		Key:      "ServerCA",
-		Value:    string(decodedCA),
-		Path:     registry.AUTH,
-		IsSecret: true,
-	}
-
-	certEntry := registry.RegistryEntry{
-		Key:      "Cert",
-		Value:    string(decodedCert),
-		Path:     registry.AUTH,
-		IsSecret: true,
-	}
-
-	privEntry := registry.RegistryEntry{
-		Key:      "Priv",
-		Value:    string(privKey),
-		Path:     registry.AUTH,
-		IsSecret: true,
-	}
-
-	legacyServerCA, err := registry.GetEntry(registry.AUTH, "ServerCA", true)
-	if err == nil {
-		legacyServerCA.Key = "LegacyServerCA"
-		if err = registry.UpsertEntry(legacyServerCA); err != nil {
-			return fmt.Errorf("renewCertificate: error storing legacy ca to registry -> %w", err)
+	for _, key := range []string{"Cert", "Priv", "BackupAuthID", "BackupSecret", "ServerCA", "LegacyServerCA"} {
+		if err := registry.DeleteEntry(registry.AUTH, key); err != nil {
+			log.Error(err, "failed to clear PBS-X auth entry", "key", key)
 		}
 	}
-
-	if err = registry.UpsertEntry(&caEntry); err != nil {
-		return fmt.Errorf("renewCertificate: error storing ca to registry -> %w", err)
-	}
-
-	if err = registry.UpsertEntry(&certEntry); err != nil {
-		return fmt.Errorf("renewCertificate: error storing cert to registry -> %w", err)
-	}
-
-	if err = registry.UpsertEntry(&privEntry); err != nil {
-		return fmt.Errorf("renewCertificate: error storing priv to registry -> %w", err)
-	}
-
 	InvalidateTLSConfigCache()
-
-	return nil
 }

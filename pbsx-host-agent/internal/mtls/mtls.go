@@ -81,6 +81,54 @@ func getCurrentServerTLSCerts(serverCertFile, serverKeyFile, caFile, prevCaFile 
 	return currentTLSCert.Load(), currentTLSCAs.Load()
 }
 
+// GenerateSelfSignedClientCertificate creates the long-lived PBS-X agent identity.
+// The private key is generated and retained on the protected host. PBS-X enrollment
+// binds the certificate fingerprint to the configured Host ID rather than having the
+// server mint or receive the private key.
+func GenerateSelfSignedClientCertificate(commonName string, keySize, validDays int) ([]byte, []byte, error) {
+	if commonName == "" {
+		return nil, nil, errors.New("client certificate common name is empty")
+	}
+	if keySize <= 0 {
+		keySize = 3072
+	}
+	if validDays <= 0 {
+		validDays = 3650
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, keySize)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate client key: %w", err)
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 126))
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate client certificate serial: %w", err)
+	}
+
+	now := time.Now()
+	tpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName:   commonName,
+			Organization: []string{"PBS-X Host Agent"},
+		},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.Add(time.Duration(validDays) * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create self-signed client certificate: %w", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	return certPEM, keyPEM, nil
+}
+
 func GenerateCSR(commonName string, keySize int) ([]byte, []byte, error) {
 	if keySize <= 0 {
 		keySize = 2048

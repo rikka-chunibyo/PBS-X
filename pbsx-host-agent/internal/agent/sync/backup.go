@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -12,6 +13,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/agentfs/fswire"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/cli"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativebackup"
 
 	"github.com/pbs-x/pbsx-host-agent/internal/arpc"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
@@ -20,11 +22,13 @@ import (
 )
 
 var (
-	activePids *safemap.Map[string, int]
+	activePids   *safemap.Map[string, int]
+	activeNative *safemap.Map[string, context.CancelFunc]
 )
 
 func init() {
 	activePids = safemap.New[string, int]()
+	activeNative = safemap.New[string, context.CancelFunc]()
 }
 
 func BackupStartHandler(req *arpc.Request, rpcSess *arpc.StreamPipe) (arpc.Response, error) {
@@ -34,7 +38,50 @@ func BackupStartHandler(req *arpc.Request, rpcSess *arpc.StreamPipe) (arpc.Respo
 		return arpc.Response{}, err
 	}
 	log.Info("received backup request for job", "id", reqData.BackupID)
-	log.Info("forking process for backup job", "id", reqData.BackupID)
+
+	if reqData.HostID != "" && reqData.Store != "" {
+		sources := append([]string(nil), reqData.Sources...)
+		if len(sources) == 0 && reqData.Drive != "" {
+			sources = []string{reqData.Drive}
+		}
+		if cancel, ok := activeNative.Get(reqData.BackupID); ok {
+			cancel()
+			activeNative.Del(reqData.BackupID)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		activeNative.Set(reqData.BackupID, cancel)
+		job := nativebackup.Job{
+			ID:                  reqData.BackupID,
+			HostID:              reqData.HostID,
+			Datastore:           reqData.Store,
+			Namespace:           reqData.Namespace,
+			Sources:             sources,
+			SnapshotMode:        reqData.SnapshotMode,
+			ChangeDetectionMode: reqData.ChangeDetectionMode,
+		}
+		go func() {
+			defer activeNative.Del(reqData.BackupID)
+			defer cancel()
+			result, err := nativebackup.Run(ctx, job)
+			if err != nil {
+				log.Error(err, "native backup failed", "id", reqData.BackupID)
+				return
+			}
+			log.Info("native backup completed",
+				"id", reqData.BackupID,
+				"backup_time", result.BackupTime,
+				"files", result.Files,
+				"directories", result.Directories,
+				"logical_bytes", result.LogicalBytes,
+				"duration", result.Duration.String())
+		}()
+		return arpc.Response{Status: 200, Message: "native"}, nil
+	}
+
+	// Compatibility path for older server-side FUSE-style callers. New PBS-X
+	// jobs never use this path; it can be removed after the native control API
+	// has shipped through one migration cycle.
+	log.Info("forking legacy filesystem-export process for backup job", "id", reqData.BackupID)
 	backupMode, pid, err := cli.ExecBackup(reqData.SourceMode, reqData.ReadMode, reqData.Drive, reqData.BackupID)
 	if err != nil {
 		log.Error(err, "forking process for backup job", "id", reqData.BackupID)
@@ -74,6 +121,11 @@ func BackupCloseHandler(req *arpc.Request) (arpc.Response, error) {
 		return arpc.Response{}, err
 	}
 	log.Info("received closure request for job", "id", reqData.BackupID)
+
+	if cancel, ok := activeNative.Get(reqData.BackupID); ok {
+		cancel()
+		activeNative.Del(reqData.BackupID)
+	}
 
 	pid, ok := activePids.Get(reqData.BackupID)
 	if ok {

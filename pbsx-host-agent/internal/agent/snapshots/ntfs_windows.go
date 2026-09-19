@@ -4,6 +4,8 @@ package snapshots
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -24,15 +26,29 @@ func (w *NtfsSnapshotHandler) CreateSnapshot(jobID string, sourcePath string) (S
 		return Snapshot{}, errors.New("empty source path")
 	}
 
-	driveLetter := sourcePath[:1]
-	volName := fmt.Sprintf("%s:", driveLetter)
+	absSource, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	volName := filepath.VolumeName(absSource)
+	if volName == "" {
+		return Snapshot{}, fmt.Errorf("source path %q has no Windows volume", sourcePath)
+	}
+	volumeRoot := volName + `\`
+	rel, err := filepath.Rel(volumeRoot, absSource)
+	if err != nil {
+		return Snapshot{}, err
+	}
 
 	vssFolder, err := getVSSFolder()
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("error getting VSS folder: %w", err)
 	}
 
-	snapshotPath := filepath.Join(vssFolder, jobID)
+	digest := sha256.Sum256([]byte(strings.ToLower(absSource)))
+	sourceKey := hex.EncodeToString(digest[:6])
+	snapshotName := fmt.Sprintf("%s-%s-%s", safeSnapshotComponent(jobID), safeSnapshotComponent(volName), sourceKey)
+	snapshotPath := filepath.Join(vssFolder, snapshotName)
 	timeStarted := time.Now()
 
 	cleanupExistingSnapshot(snapshotPath)
@@ -51,8 +67,13 @@ func (w *NtfsSnapshotHandler) CreateSnapshot(jobID string, sourcePath string) (S
 		return Snapshot{}, fmt.Errorf("snapshot validation failed: %w", err)
 	}
 
+	root := snapshotPath
+	if rel != "." && rel != "" {
+		root = filepath.Join(snapshotPath, rel)
+	}
 	return Snapshot{
-		Path:        snapshotPath,
+		Path:        root,
+		BackendPath: snapshotPath,
 		TimeStarted: timeStarted,
 		SourcePath:  sourcePath,
 		Handler:     w,
@@ -60,13 +81,17 @@ func (w *NtfsSnapshotHandler) CreateSnapshot(jobID string, sourcePath string) (S
 }
 
 func (w *NtfsSnapshotHandler) DeleteSnapshot(snapshot Snapshot) error {
-	if err := vss.Remove(snapshot.Path); err != nil {
+	backend := snapshot.BackendPath
+	if backend == "" {
+		backend = snapshot.Path
+	}
+	if err := vss.Remove(backend); err != nil {
 		return fmt.Errorf("failed to delete VSS snapshot: %w", err)
 	}
 
 	if vssFolder, err := getVSSFolder(); err == nil {
-		if strings.HasPrefix(snapshot.Path, vssFolder) {
-			_ = os.Remove(snapshot.Path)
+		if strings.HasPrefix(backend, vssFolder) {
+			_ = os.Remove(backend)
 		}
 	}
 

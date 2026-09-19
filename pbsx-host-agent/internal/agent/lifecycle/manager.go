@@ -76,43 +76,17 @@ func UpdateDrives() error {
 	if err != nil {
 		return err
 	}
-	hostname, err := host.AgentHostname()
+	heartbeat, err := agent.CurrentHeartbeat()
 	if err != nil {
 		return err
 	}
-	drives, err := agent.GetLocalDrives()
-	if err != nil {
-		return err
-	}
-	reqBody, err := json.Marshal(map[string]any{
-		"host-id":       hostID,
-		"hostname":      hostname,
-		"drives":        drives,
-		"os":            runtime.GOOS,
-		"architecture":  runtime.GOARCH,
-		"agent-version": conf.Version,
-	})
-	if err != nil {
-		return err
-	}
-	log.Debug("updating target", "body", reqBody)
-
-	resp, err := agent.AgentHTTPRequest(
-		http.MethodPost,
-		"/pbsx/agent/status",
-		bytes.NewBuffer(reqBody),
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(io.Discard, resp); err != nil {
-		log.Error(err, "")
-	}
-	if err := resp.Close(); err != nil {
-		log.Error(err, "")
-	}
-	return nil
+	payload := struct {
+		HostID string `json:"host-id"`
+		agent.AgentHeartbeat
+	}{HostID: hostID, AgentHeartbeat: heartbeat}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return agent.PBSAPIRequest(ctx, http.MethodPost, "/pbsx/agent/status", payload, nil)
 }
 
 func WaitForServerURL(ctx context.Context) error {
@@ -135,19 +109,25 @@ func WaitForBootstrap(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
-		serverCA, errCA := registry.GetEntry(registry.AUTH, "ServerCA", true)
 		cert, errCert := registry.GetEntry(registry.AUTH, "Cert", true)
 		priv, errPriv := registry.GetEntry(registry.AUTH, "Priv", true)
+		backupAuthID, errAuthID := registry.GetEntry(registry.AUTH, "BackupAuthID", false)
+		backupSecret, errSecret := registry.GetEntry(registry.AUTH, "BackupSecret", true)
 
-		if errCA == nil && errCert == nil && errPriv == nil && serverCA != nil && cert != nil && priv != nil {
+		if errCert == nil && errPriv == nil && errAuthID == nil && errSecret == nil &&
+			cert != nil && priv != nil && backupAuthID != nil && backupSecret != nil {
 			if err := agent.RenewCertificateIfExpiring(); err == nil {
-				close(bootstrapDone)
+				select {
+				case <-bootstrapDone:
+				default:
+					close(bootstrapDone)
+				}
 				return nil
 			}
-		} else {
-			if err := agent.Bootstrap(); err != nil {
-				log.Error(err, "")
-			}
+		}
+
+		if err := agent.Bootstrap(); err != nil {
+			log.Error(err, "")
 		}
 		select {
 		case <-ctx.Done():

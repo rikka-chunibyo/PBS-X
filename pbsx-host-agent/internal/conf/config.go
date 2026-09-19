@@ -23,6 +23,7 @@ type EnvConfig struct {
 	StdoutOnly         bool
 	ClientNofile       string
 	EnableAutoUpdate   bool
+	EnableLegacyARPC   bool
 	InsideContainer    bool
 	UpdateIntervalMin  string
 	ForceDisableIRM    bool
@@ -42,7 +43,11 @@ func loadEnvConfig() EnvConfig {
 		StdoutOnly:   envTrue("PBSX_STDOUT_ONLY", "PBS_PLUS_STDOUT_ONLY"),
 		ClientNofile: env("PBSX_CLIENT_NOFILE", "PBS_PLUS_CLIENT_NOFILE"),
 		// PBS-X owns its update channel. Keep automatic updates off until that API exists.
-		EnableAutoUpdate:   envTrue("PBSX_ENABLE_AUTO_UPDATE", ""),
+		EnableAutoUpdate: envTrue("PBSX_ENABLE_AUTO_UPDATE", ""),
+		// Native backup dispatch and data transfer use PBS itself. The old PBS Plus aRPC
+		// channel is optional compatibility plumbing for restore/control while those paths
+		// are being ported.
+		EnableLegacyARPC:   envTrue("PBSX_ENABLE_LEGACY_ARPC", ""),
 		InsideContainer:    envTrue("PBSX_AGENT_CONTAINER", ""),
 		UpdateIntervalMin:  env("PBSX_UPDATE_INTERVAL_MINUTES", "PBS_PLUS_UPDATE_INTERVAL_MINUTES"),
 		ForceDisableIRM:    envTrue("PBSX_FORCE_DISABLE_IRM_GENERATE", "PBS_PLUS_FORCE_DISABLE_IRM_GENERATE"),

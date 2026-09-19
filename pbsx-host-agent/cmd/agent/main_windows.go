@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	stdlog "log"
 	"os"
@@ -17,6 +16,7 @@ import (
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/binswap"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/cli"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/lifecycle"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativebackup"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/updater"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
@@ -78,134 +78,58 @@ func (p *pbsService) run() {
 	if err := lifecycle.WaitForServerURL(p.ctx); err != nil {
 		return
 	}
+	log.Info("waiting for PBS-X enrollment")
+	if err := lifecycle.WaitForBootstrap(p.ctx); err != nil {
+		return
+	}
+	log.Info("PBS-X enrollment complete; native backup service active")
 
-	for {
-		log.Info("waiting for bootstrap")
+	if store, err := agent.NewBackupStore(); err == nil {
+		_ = store.ClearAll()
+	}
 
-		if err := lifecycle.WaitForBootstrap(p.ctx); err != nil {
-			return
+	innerCtx, innerCancel := context.WithCancel(p.ctx)
+	var innerWg sync.WaitGroup
+
+	innerWg.Go(func() {
+		nativebackup.Poll(innerCtx, 15*time.Second)
+	})
+
+	innerWg.Go(func() {
+		for {
+			if err := lifecycle.UpdateDrives(); err != nil && innerCtx.Err() == nil {
+				log.Warn("PBS-X heartbeat failed", "error", err.Error())
+			}
+			timer := time.NewTimer(agent.ComputeDelay())
+			select {
+			case <-innerCtx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
 		}
-		log.Info("bootstrap complete, starting session")
+	})
 
-		if store, err := agent.NewBackupStore(); err == nil {
-			_ = store.ClearAll()
-		}
-
-		innerCtx, innerCancel := context.WithCancel(p.ctx)
-
-		var innerWg sync.WaitGroup
-
-		innerWg.Go(func() {
-			ticker := time.NewTicker(time.Hour)
-			defer ticker.Stop()
-			for {
+	if conf.Env.EnableLegacyARPC {
+		if certErrCh, err := lifecycle.ConnectARPC(innerCtx, Version); err != nil {
+			log.Warn("legacy aRPC control channel could not start", "error", err.Error())
+		} else {
+			innerWg.Go(func() {
 				select {
 				case <-innerCtx.Done():
 					return
-				case <-ticker.C:
-					_ = agent.RenewCertificateIfExpiring()
-				}
-			}
-		})
-
-		driveErrCh := make(chan error, 1)
-		innerWg.Go(func() {
-			defer close(driveErrCh)
-			if err := lifecycle.UpdateDrives(); err != nil {
-				if lifecycle.IsHostNotExpected(err) {
-					select {
-					case driveErrCh <- err:
-					default:
+				case err, ok := <-certErrCh:
+					if ok && err != nil {
+						log.Warn("legacy aRPC control channel stopped", "error", err.Error())
 					}
-					return
 				}
-			}
-			ticker := time.NewTicker(agent.ComputeDelay())
-			defer ticker.Stop()
-			for {
-				select {
-				case <-innerCtx.Done():
-					return
-				case <-ticker.C:
-					if err := lifecycle.UpdateDrives(); err != nil {
-						if lifecycle.IsHostNotExpected(err) {
-							select {
-							case driveErrCh <- err:
-							default:
-							}
-							return
-						}
-					}
-					ticker.Reset(agent.ComputeDelay())
-				}
-			}
-		})
-
-		certErrCh, err := lifecycle.ConnectARPC(innerCtx, Version)
-		if err != nil {
-			log.Error(err,
-				"failed to start arpc connection")
-
-			innerCancel()
-			innerWg.Wait()
-
-			select {
-			case <-p.ctx.Done():
-				return
-			case <-time.After(10 * time.Second):
-				continue
-			}
-		}
-
-		select {
-		case <-p.ctx.Done():
-			innerCancel()
-			innerWg.Wait()
-			return
-
-		case err := <-driveErrCh:
-			innerCancel()
-			innerWg.Wait()
-			log.Error(err,
-				"host not expected by server (detected via HTTP), waiting for re-bootstrap")
-
-			select {
-			case <-p.ctx.Done():
-				return
-			case <-time.After(5 * time.Minute):
-			}
-
-		case certErr, ok := <-certErrCh:
-			innerCancel()
-			innerWg.Wait()
-
-			if !ok {
-				return
-			}
-
-			if errors.Is(certErr, lifecycle.ErrHostNotExpected) {
-				log.Error(certErr,
-					"host not expected by server, waiting for re-bootstrap")
-
-				select {
-				case <-p.ctx.Done():
-					return
-				case <-time.After(5 * time.Minute):
-				}
-			} else {
-				log.Error(certErr,
-					"clearing certificates and re-bootstrapping")
-
-				lifecycle.ClearCertificates()
-
-				select {
-				case <-p.ctx.Done():
-					return
-				case <-time.After(5 * time.Second):
-				}
-			}
+			})
 		}
 	}
+
+	<-p.ctx.Done()
+	innerCancel()
+	innerWg.Wait()
 }
 
 func (p *pbsService) Stop(s service.Service) error {
