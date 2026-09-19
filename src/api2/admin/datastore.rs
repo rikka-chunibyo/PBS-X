@@ -543,7 +543,7 @@ fn get_group_owner(
 }
 
 /// This must not run in a main worker thread as it potentially does tons of I/O.
-unsafe fn list_snapshots_blocking(
+pub(crate) unsafe fn list_snapshots_blocking(
     store: String,
     ns: Option<BackupNamespace>,
     backup_type: Option<BackupType>,

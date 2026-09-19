@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use proxmox_router::{Permission, Router};
 use proxmox_schema::api;
 
-use pbs_api_types::{PRIVILEGES, Role, SINGLE_LINE_COMMENT_SCHEMA};
+use pbs_api_types::{PRIVILEGES, SINGLE_LINE_COMMENT_SCHEMA};
+use pbsx_api_types::HOST_PRIVILEGES;
 use pbs_config::acl::ROLE_NAMES;
 
 #[api(
@@ -19,7 +20,8 @@ use pbs_config::acl::ROLE_NAMES;
             description: "Role with description and privileges.",
             properties: {
                 roleid: {
-                    type: Role,
+                    type: String,
+                    description: "Role identifier.",
                 },
                 privs: {
                     type: Array,
@@ -47,6 +49,11 @@ fn list_roles() -> Result<Value, Error> {
     for (role, (privs, comment)) in ROLE_NAMES.iter() {
         let mut priv_list = Vec::new();
         for (name, privilege) in PRIVILEGES.iter() {
+            if privs & privilege > 0 {
+                priv_list.push(name);
+            }
+        }
+        for &(name, privilege) in HOST_PRIVILEGES {
             if privs & privilege > 0 {
                 priv_list.push(name);
             }

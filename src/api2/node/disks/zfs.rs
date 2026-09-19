@@ -8,8 +8,10 @@ use proxmox_schema::api;
 use pbs_api_types::{
     DATASTORE_SCHEMA, DISK_ARRAY_SCHEMA, DISK_LIST_SCHEMA, DataStoreConfig, NODE_SCHEMA,
     PRIV_SYS_AUDIT, PRIV_SYS_MODIFY, UPID_SCHEMA, ZFS_ASHIFT_SCHEMA, ZPOOL_NAME_SCHEMA,
-    ZfsCompressionType, ZfsRaidLevel, ZpoolListItem,
+    ZfsCompressionType, ZpoolListItem,
 };
+
+use pbsx_api_types::PbsxZfsRaidLevel;
 
 use crate::tools::disks::{
     DiskUsageType, parse_zpool_status_config_tree, vdev_list_to_tree, zpool_list, zpool_status,
@@ -123,7 +125,7 @@ pub fn zpool_details(name: String) -> Result<Value, Error> {
                 schema: DISK_LIST_SCHEMA,
             },
             raidlevel: {
-                type: ZfsRaidLevel,
+                type: PbsxZfsRaidLevel,
             },
             ashift: {
                 schema: ZFS_ASHIFT_SCHEMA,
@@ -151,7 +153,7 @@ pub fn zpool_details(name: String) -> Result<Value, Error> {
 pub fn create_zpool(
     name: String,
     devices: String,
-    raidlevel: ZfsRaidLevel,
+    raidlevel: PbsxZfsRaidLevel,
     compression: Option<String>,
     ashift: Option<usize>,
     add_datastore: Option<bool>,
@@ -189,20 +191,21 @@ pub fn create_zpool(
     }
 
     let min_disks = match raidlevel {
-        ZfsRaidLevel::Single => 1,
-        ZfsRaidLevel::Mirror => 2,
-        ZfsRaidLevel::Raid10 => 4,
-        ZfsRaidLevel::RaidZ => 3,
-        ZfsRaidLevel::RaidZ2 => 4,
-        ZfsRaidLevel::RaidZ3 => 5,
+        PbsxZfsRaidLevel::Single => 1,
+        PbsxZfsRaidLevel::Raid0 => 2,
+        PbsxZfsRaidLevel::Mirror => 2,
+        PbsxZfsRaidLevel::Raid10 => 4,
+        PbsxZfsRaidLevel::RaidZ => 3,
+        PbsxZfsRaidLevel::RaidZ2 => 4,
+        PbsxZfsRaidLevel::RaidZ3 => 5,
     };
 
     // Sanity checks
-    if raidlevel == ZfsRaidLevel::Raid10 && !devices.len().is_multiple_of(2) {
+    if raidlevel == PbsxZfsRaidLevel::Raid10 && !devices.len().is_multiple_of(2) {
         bail!("Raid10 needs an even number of disks.");
     }
 
-    if raidlevel == ZfsRaidLevel::Single && devices.len() > 1 {
+    if raidlevel == PbsxZfsRaidLevel::Single && devices.len() > 1 {
         bail!("Please give only one disk for single disk mode.");
     }
 
@@ -242,28 +245,33 @@ pub fn create_zpool(
             ]);
 
             match raidlevel {
-                ZfsRaidLevel::Single => {
+                PbsxZfsRaidLevel::Single => {
                     command.arg(&devices[0]);
                 }
-                ZfsRaidLevel::Mirror => {
+                PbsxZfsRaidLevel::Raid0 => {
+                    // A ZFS stripe is created by adding multiple top-level disks
+                    // without a mirror/raidz vdev keyword.
+                    command.args(devices);
+                }
+                PbsxZfsRaidLevel::Mirror => {
                     command.arg("mirror");
                     command.args(devices);
                 }
-                ZfsRaidLevel::Raid10 => {
+                PbsxZfsRaidLevel::Raid10 => {
                     devices.chunks(2).for_each(|pair| {
                         command.arg("mirror");
                         command.args(pair);
                     });
                 }
-                ZfsRaidLevel::RaidZ => {
+                PbsxZfsRaidLevel::RaidZ => {
                     command.arg("raidz");
                     command.args(devices);
                 }
-                ZfsRaidLevel::RaidZ2 => {
+                PbsxZfsRaidLevel::RaidZ2 => {
                     command.arg("raidz2");
                     command.args(devices);
                 }
-                ZfsRaidLevel::RaidZ3 => {
+                PbsxZfsRaidLevel::RaidZ3 => {
                     command.arg("raidz3");
                     command.args(devices);
                 }

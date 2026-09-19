@@ -62,6 +62,13 @@ JSSRC=							\
 	config/UserView.js				\
 	config/TokenView.js				\
 	config/RemoteView.js				\
+	config/HostView.js				\
+	host/Summary.js				\
+	host/Backups.js				\
+	host/Inventory.js				\
+	host/Jobs.js					\
+	host/Agent.js					\
+	host/Panel.js					\
 	config/TrafficControlView.js			\
 	config/ACLView.js				\
 	config/S3ClientView.js				\
@@ -88,6 +95,8 @@ JSSRC=							\
 	window/NotesEdit.js				\
 	window/NotificationThresholds.js		\
 	window/RemoteEdit.js				\
+	window/HostEdit.js				\
+	window/HostBackupJobEdit.js			\
 	window/TrafficControlEdit.js			\
 	window/ThresholdResetScheduleEdit.js		\
 	window/NotifyOptions.js				\

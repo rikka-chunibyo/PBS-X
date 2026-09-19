@@ -1,0 +1,221 @@
+package pxar
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/klauspost/compress/zip"
+	pxar "github.com/pbs-plus/pxar"
+
+	"github.com/pbs-x/pbsx-host-agent/internal/log"
+)
+
+func restoreAsZips(ctx context.Context, client *Client, sources []string, opts RestoreOptions) error {
+	errCh := make(chan error, 100)
+	var errWg sync.WaitGroup
+	errWg.Go(func() {
+		for err := range errCh {
+			if err := client.SendError(ctx, err); err != nil {
+				log.Error(err, "")
+			}
+		}
+	})
+
+	var sourcesWg sync.WaitGroup
+	for _, source := range sources {
+		if ctx.Err() != nil {
+			break
+		}
+
+		sourcesWg.Add(1)
+		go func(src string) {
+			defer sourcesWg.Done()
+
+			if err := createZipForSource(ctx, client, src, opts, errCh); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+			}
+		}(source)
+	}
+
+	sourcesWg.Wait()
+	close(errCh)
+	errWg.Wait()
+
+	return ctx.Err()
+}
+
+func createZipForSource(ctx context.Context, client *Client, source string, opts RestoreOptions, errCh chan<- error) error {
+	sourceAttr, err := client.LookupByPath(ctx, source)
+	if err != nil {
+		return fmt.Errorf("lookup source %q: %w", source, err)
+	}
+
+	baseName := sourceAttr.Name()
+	if strings.TrimSpace(baseName) == "" {
+		baseName = client.name
+	}
+
+	zipPath := filepath.Join(opts.DestDir, baseName+".zip")
+	zipFile, err := os.Create(zipPath)
+	if err != nil {
+		return fmt.Errorf("create zip %q: %w", zipPath, err)
+	}
+	defer func() {
+		if err := zipFile.Close(); err != nil {
+			log.Error(err, "")
+		}
+	}()
+
+	bufferedWriter := bufio.NewWriterSize(zipFile, 16*1024*1024)
+	zipWriter := zip.NewWriter(bufferedWriter)
+
+	zc := &zipContext{
+		ctx:    ctx,
+		client: client,
+		writer: zipWriter,
+		base:   sourceAttr.Name(),
+		errCh:  errCh,
+	}
+
+	switch sourceAttr.FileType {
+	case pxar.FileTypeDirectory:
+		zc.addDirectory("", sourceAttr)
+	case pxar.FileTypeFile, pxar.FileTypeHardlink:
+		zc.addFile("", sourceAttr)
+	case pxar.FileTypeSymlink:
+		zc.addSymlink("", sourceAttr)
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return err
+	}
+
+	return bufferedWriter.Flush()
+}
+
+type zipContext struct {
+	ctx    context.Context
+	client *Client
+	writer *zip.Writer
+	base   string
+	errCh  chan<- error
+}
+
+func (zc *zipContext) addDirectory(relPath string, dirEntry pxar.FileInfo) {
+	dirPath := path.Join(relPath, dirEntry.Name()) + "/"
+
+	header := &zip.FileHeader{
+		Name:     dirPath,
+		Method:   zip.Deflate,
+		Modified: dirEntry.ModTime(),
+	}
+	header.SetMode(os.FileMode(dirEntry.RawMode) | os.ModeDir)
+
+	if _, err := zc.writer.CreateHeader(header); err != nil {
+		zc.sendError(fmt.Errorf("create dir header %q: %w", dirPath, err))
+		return
+	}
+
+	entries, err := zc.client.ReadDir(zc.ctx, dirEntry.EntryRangeEnd)
+	if err != nil {
+		zc.sendError(fmt.Errorf("read dir %q: %w", dirPath, err))
+		return
+	}
+
+	for _, e := range entries {
+		if zc.ctx.Err() != nil {
+			return
+		}
+
+		currentPath := dirPath[:len(dirPath)-1]
+
+		switch e.FileType {
+		case pxar.FileTypeDirectory:
+			zc.addDirectory(currentPath, e)
+		case pxar.FileTypeFile, pxar.FileTypeHardlink:
+			zc.addFile(currentPath, e)
+		case pxar.FileTypeSymlink:
+			zc.addSymlink(currentPath, e)
+		}
+	}
+}
+
+func (zc *zipContext) addFile(relPath string, fileEntry pxar.FileInfo) {
+	filePath := path.Join(relPath, fileEntry.Name())
+
+	header := &zip.FileHeader{
+		Name:     filePath,
+		Method:   zip.Deflate,
+		Modified: fileEntry.ModTime(),
+	}
+	header.SetMode(os.FileMode(fileEntry.RawMode))
+
+	writer, err := zc.writer.CreateHeader(header)
+	if err != nil {
+		zc.sendError(fmt.Errorf("create file header %q: %w", filePath, err))
+		return
+	}
+
+	if fileEntry.RawSize > 0 && fileEntry.ContentRange != nil {
+		rc, err := zc.client.ReadFileContentReader(zc.ctx, fileEntry.ContentRange[0], fileEntry.ContentRange[1], fileEntry.RawSize)
+		if err != nil {
+			zc.sendError(fmt.Errorf("open content reader %q: %w", filePath, err))
+			return
+		}
+		defer func() {
+			if err := rc.Close(); err != nil {
+				log.Error(err, "")
+			}
+		}()
+
+		if _, err := io.Copy(writer, rc); err != nil {
+			zc.sendError(fmt.Errorf("copy file data %q: %w", filePath, err))
+			return
+		}
+	}
+}
+
+func (zc *zipContext) addSymlink(relPath string, symlinkEntry pxar.FileInfo) {
+	linkPath := path.Join(relPath, symlinkEntry.Name())
+
+	target, err := zc.client.ReadLink(zc.ctx, symlinkEntry.EntryRangeStart, symlinkEntry.EntryRangeEnd)
+	if err != nil {
+		zc.sendError(fmt.Errorf("read symlink %q: %w", linkPath, err))
+		return
+	}
+
+	header := &zip.FileHeader{
+		Name:     linkPath,
+		Method:   zip.Deflate,
+		Modified: symlinkEntry.ModTime(),
+	}
+	header.SetMode(os.FileMode(symlinkEntry.RawMode) | os.ModeSymlink)
+
+	writer, err := zc.writer.CreateHeader(header)
+	if err != nil {
+		zc.sendError(fmt.Errorf("create symlink header %q: %w", linkPath, err))
+		return
+	}
+
+	if _, err := writer.Write(target); err != nil {
+		zc.sendError(fmt.Errorf("write symlink target %q: %w", linkPath, err))
+		return
+	}
+}
+
+func (zc *zipContext) sendError(err error) {
+	select {
+	case zc.errCh <- err:
+	default:
+	}
+}

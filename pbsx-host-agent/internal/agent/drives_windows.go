@@ -1,0 +1,276 @@
+//go:build windows
+
+package agent
+
+import (
+	"errors"
+	"fmt"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/agentfs/fswire"
+	"strings"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
+const _IOCTL_STORAGE_QUERY_PROPERTY = uint32(0x2D1400)
+
+type _STORAGE_PROPERTY_ID int32
+
+const (
+	_StorageDeviceProperty           _STORAGE_PROPERTY_ID = 0
+	_StorageAdapterProperty          _STORAGE_PROPERTY_ID = 1
+	_StorageDeviceIdProperty         _STORAGE_PROPERTY_ID = 2
+	_StorageDeviceUniqueIdProperty   _STORAGE_PROPERTY_ID = 3
+	_StorageDeviceWriteCacheProperty _STORAGE_PROPERTY_ID = 4
+	_StorageMiniportProperty         _STORAGE_PROPERTY_ID = 5
+	_StorageAccessAlignmentProperty  _STORAGE_PROPERTY_ID = 6
+)
+
+type _STORAGE_QUERY_TYPE int32
+
+const (
+	_PropertyStandardQuery   _STORAGE_QUERY_TYPE = 0
+	_PropertyExistsQuery     _STORAGE_QUERY_TYPE = 1
+	_PropertyMaskQuery       _STORAGE_QUERY_TYPE = 2
+	_PropertyQueryMaxDefined _STORAGE_QUERY_TYPE = 3
+)
+
+type _STORAGE_BUS_TYPE uint32
+
+const (
+	_BusTypeUnknown _STORAGE_BUS_TYPE = 0x00
+	_BusTypeScsi    _STORAGE_BUS_TYPE = 0x01
+	_BusTypeAtapi   _STORAGE_BUS_TYPE = 0x02
+	_BusTypeAta     _STORAGE_BUS_TYPE = 0x03
+	_BusType1394    _STORAGE_BUS_TYPE = 0x04
+	_BusTypeSsa     _STORAGE_BUS_TYPE = 0x05
+	_BusTypeFibre   _STORAGE_BUS_TYPE = 0x06
+	_BusTypeUsb     _STORAGE_BUS_TYPE = 0x07
+	_BusTypeRAID    _STORAGE_BUS_TYPE = 0x08
+	_BusTypeiScsi   _STORAGE_BUS_TYPE = 0x09
+	_BusTypeSas     _STORAGE_BUS_TYPE = 0x0A
+	_BusTypeSata    _STORAGE_BUS_TYPE = 0x0B
+	_BusTypeSd      _STORAGE_BUS_TYPE = 0x0C
+	_BusTypeMmc     _STORAGE_BUS_TYPE = 0x0D
+	_BusTypeNvme    _STORAGE_BUS_TYPE = 0x11
+)
+
+// STORAGE_PROPERTY_QUERY structure (matches C struct layout)
+type _STORAGE_PROPERTY_QUERY struct {
+	PropertyId           _STORAGE_PROPERTY_ID
+	QueryType            _STORAGE_QUERY_TYPE
+	AdditionalParameters [1]byte // Can be larger if needed for specific queries
+}
+
+// STORAGE_DEVICE_DESCRIPTOR structure (matches C struct layout)
+type _STORAGE_DEVICE_DESCRIPTOR struct {
+	Version               uint32
+	Size                  uint32
+	DeviceType            byte
+	DeviceTypeModifier    byte
+	RemovableMedia        byte
+	CommandQueueing       byte
+	VendorIdOffset        uint32
+	ProductIdOffset       uint32
+	ProductRevisionOffset uint32
+	SerialNumberOffset    uint32
+	BusType               _STORAGE_BUS_TYPE
+	RawPropertiesLength   uint32
+	RawDeviceProperties   [1]byte
+}
+
+func getDriveTypeString(dt uint32) string {
+	switch dt {
+	case windows.DRIVE_UNKNOWN:
+		return "Unknown"
+	case windows.DRIVE_NO_ROOT_DIR:
+		return "No Root Directory"
+	case windows.DRIVE_REMOVABLE:
+		return "Removable"
+	case windows.DRIVE_FIXED:
+		return "Fixed"
+	case windows.DRIVE_REMOTE:
+		return "Network"
+	case windows.DRIVE_CDROM:
+		return "CD-ROM"
+	case windows.DRIVE_RAMDISK:
+		return "RAM Disk"
+	default:
+		return "Unknown"
+	}
+}
+
+func getBusType(driveLetter string) (_STORAGE_BUS_TYPE, error) {
+	volumePath := fmt.Sprintf("\\\\.\\%s:", driveLetter)
+	volumePathUtf16, err := windows.UTF16PtrFromString(volumePath)
+	if err != nil {
+		return _BusTypeUnknown, fmt.Errorf("failed to create UTF16 pointer for %s: %w", volumePath, err)
+	}
+
+	handle, err := windows.CreateFile(
+		volumePathUtf16,
+		0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_ATTRIBUTE_NORMAL,
+		0,
+	)
+	if err != nil {
+		if errno, ok := err.(windows.Errno); ok {
+			if errno == windows.ERROR_NOT_READY || errno == windows.ERROR_ACCESS_DENIED || errno == windows.ERROR_SHARING_VIOLATION {
+				return _BusTypeUnknown, fmt.Errorf("drive %s not ready, access denied, or sharing violation: %w", driveLetter, err)
+			}
+		}
+		return _BusTypeUnknown, fmt.Errorf("CreateFile failed for %s: %w", volumePath, err)
+	}
+	defer windows.CloseHandle(handle)
+
+	var propertyQuery _STORAGE_PROPERTY_QUERY
+	propertyQuery.PropertyId = _StorageDeviceProperty
+	propertyQuery.QueryType = _PropertyStandardQuery
+
+	bufferSize := uint32(1024)
+	outBuffer := make([]byte, bufferSize)
+	var bytesReturned uint32
+
+	err = windows.DeviceIoControl(
+		handle,
+		_IOCTL_STORAGE_QUERY_PROPERTY,
+		(*byte)(unsafe.Pointer(&propertyQuery)),
+		uint32(unsafe.Sizeof(propertyQuery)),
+		&outBuffer[0],
+		bufferSize,
+		&bytesReturned,
+		nil,
+	)
+
+	if err != nil {
+		if errno, ok := err.(windows.Errno); ok && errno == windows.ERROR_INVALID_FUNCTION {
+			return _BusTypeUnknown, fmt.Errorf("DeviceIoControl returned ERROR_INVALID_FUNCTION for %s (unsupported device?): %w", volumePath, err)
+		}
+		return _BusTypeUnknown, fmt.Errorf("DeviceIoControl failed for %s: %w", volumePath, err)
+	}
+
+	if bytesReturned < uint32(unsafe.Sizeof(_STORAGE_DEVICE_DESCRIPTOR{})) {
+		return _BusTypeUnknown, fmt.Errorf("DeviceIoControl returned insufficient data (%d bytes) for %s", bytesReturned, volumePath)
+	}
+
+	descriptor := (*_STORAGE_DEVICE_DESCRIPTOR)(unsafe.Pointer(&outBuffer[0]))
+
+	return descriptor.BusType, nil
+}
+
+// GetLocalDrives returns a slice of DriveInfo containing detailed information about each local drive
+func GetLocalDrives() ([]fswire.DriveInfo, error) {
+	var drives []fswire.DriveInfo
+
+	for _, drive := range "ABCDEFGHIJKLMNOPQRSTUVWXYZ" {
+		driveLetter := string(drive)
+		path := fmt.Sprintf("%s:\\", driveLetter)
+		pathUtf16, err := windows.UTF16PtrFromString(path)
+		if err != nil {
+			continue
+		}
+
+		driveType := windows.GetDriveType(pathUtf16)
+		if driveType == windows.DRIVE_NO_ROOT_DIR || driveType == windows.DRIVE_UNKNOWN {
+			continue
+		}
+
+		var (
+			volumeNameStr string
+			fileSystemStr string
+			totalBytes    uint64
+			freeBytes     uint64
+		)
+
+		var volumeName [windows.MAX_PATH + 1]uint16
+		var fileSystemName [windows.MAX_PATH + 1]uint16
+		err = windows.GetVolumeInformation(
+			pathUtf16, &volumeName[0], uint32(len(volumeName)),
+			nil, nil, nil, &fileSystemName[0], uint32(len(fileSystemName)),
+		)
+		if err == nil {
+			volumeNameStr = windows.UTF16ToString(volumeName[:])
+			fileSystemStr = windows.UTF16ToString(fileSystemName[:])
+		} else if errno, ok := err.(windows.Errno); ok && (errno == windows.ERROR_NOT_READY || errno == windows.ERROR_GEN_FAILURE || errno == windows.ERROR_ACCESS_DENIED) {
+		}
+
+		var totalFreeBytes uint64
+		err = windows.GetDiskFreeSpaceEx(pathUtf16, nil, &totalBytes, &totalFreeBytes)
+		if err == nil {
+			freeBytes = totalFreeBytes
+		} else if errno, ok := err.(windows.Errno); ok && (errno == windows.ERROR_NOT_READY || errno == windows.ERROR_GEN_FAILURE || errno == windows.ERROR_ACCESS_DENIED) {
+		}
+
+		usedBytes := uint64(0)
+		if totalBytes > freeBytes {
+			usedBytes = totalBytes - freeBytes
+		}
+
+		totalHuman := fswire.HumanizeBytes(totalBytes)
+		usedHuman := fswire.HumanizeBytes(usedBytes)
+		freeHuman := fswire.HumanizeBytes(freeBytes)
+
+		driveTypeStr := getDriveTypeString(driveType)
+
+		if driveType == windows.DRIVE_FIXED {
+			busType, busErr := getBusType(driveLetter)
+
+			if busErr != nil {
+				var errno windows.Errno
+				isErrno := errors.As(busErr, &errno)
+
+				if isErrno && (errno == windows.ERROR_NOT_READY || errno == windows.ERROR_SHARING_VIOLATION) {
+					driveTypeStr = "Fixed (Error)"
+				} else {
+					// Treat ERROR_INVALID_FUNCTION, ACCESS_DENIED, GEN_FAILURE,
+					driveTypeStr = "Virtual"
+					// fmt.Printf("Debug: Classifying as 'Virtual' for %s due to error: %v\n", driveLetter, busErr)
+				}
+			} else {
+				switch busType {
+				case _BusTypeUsb:
+					driveTypeStr = "External (USB)"
+				case _BusTypeSata, _BusTypeNvme, _BusTypeSas, _BusTypeAta, _BusTypeScsi, _BusTypeRAID:
+					driveTypeStr = "Internal (Fixed)"
+				case _BusTypeUnknown:
+					driveTypeStr = "Virtual"
+				default:
+					driveTypeStr = "Virtual"
+				}
+			}
+		} else if driveType == windows.DRIVE_REMOVABLE {
+			busType, busErr := getBusType(driveLetter)
+			if busErr == nil {
+				switch busType {
+				case _BusTypeUsb:
+					driveTypeStr = "Removable (USB)"
+				case _BusTypeSd:
+					driveTypeStr = "Removable (SD)"
+				case _BusTypeMmc:
+					driveTypeStr = "Removable (MMC)"
+				}
+			}
+		}
+
+		volumeNameStr = strings.TrimRight(volumeNameStr, "\x00")
+		fileSystemStr = strings.TrimRight(fileSystemStr, "\x00")
+
+		drives = append(drives, fswire.DriveInfo{
+			Letter:     driveLetter,
+			Type:       driveTypeStr,
+			VolumeName: volumeNameStr,
+			FileSystem: fileSystemStr,
+			TotalBytes: totalBytes,
+			UsedBytes:  usedBytes,
+			FreeBytes:  freeBytes,
+			Total:      totalHuman,
+			Used:       usedHuman,
+			Free:       freeHuman,
+		})
+	}
+
+	return drives, nil
+}

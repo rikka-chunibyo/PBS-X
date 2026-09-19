@@ -10,6 +10,7 @@ use proxmox_product_config::replace_privileged_config;
 use proxmox_schema::{ApiStringFormat, ApiType, Schema, StringSchema};
 
 use pbs_api_types::{Authid, ROLE_NAME_NO_ACCESS, Role, Userid};
+use pbsx_api_types::{HOST_ROLES, PRIV_HOST_AUDIT};
 
 use crate::{BackupLockGuard, ConfigVersionCache, open_backup_lockfile};
 
@@ -29,6 +30,16 @@ pub static ROLE_NAMES: LazyLock<HashMap<&'static str, (u64, &'static str)>> = La
     for entry in list.iter() {
         let privs: u64 = Role::from_str(entry.value).unwrap() as u64;
         map.insert(entry.value, (privs, entry.description));
+    }
+
+    // The general Auditor role should also be able to inspect PBS-X hosts. Administrator already
+    // maps to u64::MAX and therefore automatically contains the PBS-X high-bit privileges.
+    if let Some((privs, _)) = map.get_mut("Audit") {
+        *privs |= PRIV_HOST_AUDIT;
+    }
+
+    for &(name, privs, description) in HOST_ROLES {
+        map.insert(name, (privs, description));
     }
 
     map
@@ -89,6 +100,12 @@ pub fn check_acl_path(path: &str) -> Result<(), Error> {
         "remote" => {
             // /remote/{remote}/{store}/{namespace}
             if components_len <= 3 + pbs_api_types::MAX_NAMESPACE_DEPTH {
+                return Ok(());
+            }
+        }
+        "host" => {
+            // /host/{host}
+            if components_len <= 2 {
                 return Ok(());
             }
         }

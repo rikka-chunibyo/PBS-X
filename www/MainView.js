@@ -23,6 +23,9 @@ Ext.define('PBS.MainView', {
             if (PBS.Utils.isDataStorePath(path)) {
                 config.datastore = PBS.Utils.getDataStoreFromPath(path);
                 xtype = 'pbsDataStorePanel';
+            } else if (path.indexOf('Host-') === 0) {
+                config.host = decodeURIComponent(path.slice('Host-'.length));
+                xtype = 'pbsHostPanel';
             } else if (path.indexOf('Changer-') === 0) {
                 config.changer = path.slice('Changer-'.length);
                 xtype = 'pbsChangerStatus';
@@ -122,7 +125,7 @@ Ext.define('PBS.MainView', {
 
             var treelist = me.lookupReference('navtree');
 
-            treelist.select(path, true);
+            treelist.select(path.indexOf('Host-') === 0 ? 'pbsHostView' : path, true);
 
             contentpanel.setActiveItem(obj);
 

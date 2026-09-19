@@ -40,8 +40,17 @@ Ext.define('PBS.window.CreateZFS', {
                     fieldLabel: gettext('RAID Level'),
                     name: 'raidlevel',
                     value: 'single',
+                    listeners: {
+                        change: function (field, value) {
+                            let warning = field.up('inputpanel').down('#raid0Warning');
+                            if (warning) {
+                                warning.setHidden(value !== 'raid0');
+                            }
+                        },
+                    },
                     comboItems: [
                         ['single', gettext('Single Disk')],
+                        ['raid0', 'RAID0 (' + gettext('Stripe') + ')'],
                         ['mirror', 'Mirror'],
                         ['raid10', 'RAID10'],
                         ['raidz', 'RAIDZ'],
@@ -82,6 +91,15 @@ Ext.define('PBS.window.CreateZFS', {
                     valueField: 'name',
                     height: 200,
                     emptyText: gettext('No Disks unused'),
+                },
+                {
+                    xtype: 'displayfield',
+                    itemId: 'raid0Warning',
+                    hidden: true,
+                    userCls: 'pmx-hint',
+                    value: gettext(
+                        'RAID0 has no redundancy. Failure of any member disk can make the entire pool unavailable.',
+                    ),
                 },
             ],
         },

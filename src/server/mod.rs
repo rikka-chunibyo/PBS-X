@@ -12,6 +12,8 @@ use proxmox_sys::fs::{CreateOptions, create_path};
 use pbs_buildcfg;
 
 pub mod jobstate;
+pub mod host;
+pub mod host_backup;
 
 mod verify_job;
 pub use verify_job::*;

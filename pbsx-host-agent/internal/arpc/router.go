@@ -1,0 +1,86 @@
+package arpc
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+
+	"github.com/fxamacker/cbor/v2"
+	"github.com/pbs-x/pbsx-host-agent/internal/safemap"
+)
+
+var (
+	errMissingMethod = errors.New("missing method field")
+	ackSignal        = []byte{0xAA}
+)
+
+type HandlerFunc func(req *Request) (Response, error)
+
+type Router struct {
+	handlers *safemap.Map[string, HandlerFunc]
+}
+
+func NewRouter() Router {
+	return Router{handlers: safemap.New[string, HandlerFunc]()}
+}
+
+func (r *Router) Handle(method string, handler HandlerFunc) {
+	r.handlers.Set(method, handler)
+}
+
+func (r *Router) CloseHandle(method string) {
+	r.handlers.Del(method)
+}
+
+func (r *Router) serveStream(stream ARPCStream) {
+	dec := cbor.NewDecoder(stream)
+	enc := cbor.NewEncoder(stream)
+
+	var req Request
+	if err := dec.Decode(&req); err != nil {
+		writeErrorResponse(stream, http.StatusBadRequest, err)
+		return
+	}
+
+	if req.Method == "" {
+		writeErrorResponse(stream, http.StatusBadRequest, errMissingMethod)
+		return
+	}
+
+	handler, ok := r.handlers.Get(req.Method)
+	if !ok {
+		writeErrorResponse(stream, http.StatusNotFound, fmt.Errorf("method not found: %s", req.Method))
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req.Context = ctx
+	resp, err := handler(&req)
+	if err != nil {
+		writeErrorResponse(stream, http.StatusInternalServerError, err)
+		return
+	}
+
+	if err = enc.Encode(resp); err != nil {
+		return
+	}
+
+	if resp.Status == 213 && resp.RawStream != nil {
+		var readyByte [1]byte
+		if _, err := stream.Read(readyByte[:]); err != nil {
+			return
+		}
+		if readyByte[0] != 0xFF {
+			return
+		}
+
+		if _, err := stream.Write(ackSignal); err != nil {
+			return
+		}
+
+		resp.RawStream(stream)
+	}
+}

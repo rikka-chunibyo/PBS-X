@@ -40,6 +40,7 @@ fn files() -> Vec<(&'static str, Vec<&'static str>)> {
             ],
         ),
         ("Remotes", vec!["/etc/proxmox-backup/remote.cfg"]),
+        ("PBS-X Hosts", vec!["/etc/proxmox-backup/host.cfg"]),
         (
             "Jobs",
             vec![

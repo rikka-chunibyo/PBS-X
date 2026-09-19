@@ -25,6 +25,7 @@ use pbs_api_types::{
     ACL_PATH_SCHEMA, Authid, PASSWORD_FORMAT, PBS_PASSWORD_SCHEMA, PRIV_PERMISSIONS_MODIFY,
     PRIV_SYS_AUDIT, PRIVILEGES, User, Userid,
 };
+use pbsx_api_types::HOST_PRIVILEGES;
 use pbs_config::CachedUserInfo;
 use pbs_config::acl::AclTreeNode;
 
@@ -230,6 +231,7 @@ pub fn list_permissions(
             paths.insert("/".to_string());
             paths.insert("/access".to_string());
             paths.insert("/datastore".to_string());
+            paths.insert("/host".to_string());
             paths.insert("/remote".to_string());
             paths.insert("/system".to_string());
 
@@ -246,7 +248,7 @@ pub fn list_permissions(
             match privs {
                 0 => map, // Don't leak ACL paths where we don't have any privileges
                 _ => {
-                    let priv_map =
+                    let mut priv_map =
                         PRIVILEGES
                             .iter()
                             .fold(HashMap::new(), |mut priv_map, (name, value)| {
@@ -256,6 +258,11 @@ pub fn list_permissions(
                                 }
                                 priv_map
                             });
+                    for &(name, value) in HOST_PRIVILEGES {
+                        if value & privs != 0 {
+                            priv_map.insert(name.to_string(), value & propagated_privs != 0);
+                        }
+                    }
 
                     map.insert(path, priv_map);
                     map

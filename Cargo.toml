@@ -38,6 +38,7 @@ members = [
     "pbs-pxar-fuse",
     "pbs-tape",
     "pbs-tools",
+    "pbsx-api-types",
 
     "proxmox-backup-banner",
     "proxmox-backup-client",
@@ -118,6 +119,7 @@ pbs-key-config = { path = "pbs-key-config" }
 pbs-pxar-fuse = { path = "pbs-pxar-fuse" }
 pbs-tape = { path = "pbs-tape" }
 pbs-tools = { path = "pbs-tools" }
+pbsx-api-types = { path = "pbsx-api-types" }
 
 # regular crates
 anyhow = "1.0"
@@ -273,6 +275,7 @@ pbs-datastore.workspace = true
 pbs-key-config.workspace = true
 pbs-tape.workspace = true
 pbs-tools.workspace = true
+pbsx-api-types.workspace = true
 proxmox-rrd.workspace = true
 proxmox-rrd-api-types.workspace = true
 

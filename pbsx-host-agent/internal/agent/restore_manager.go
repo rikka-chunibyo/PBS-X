@@ -1,0 +1,122 @@
+package agent
+
+import (
+	"encoding/json"
+	"os"
+	"time"
+
+	"github.com/gofrs/flock"
+
+	"github.com/pbs-x/pbsx-host-agent/internal/log"
+)
+
+type RestoreSessionData struct {
+	JobID     string    `json:"job_id"`
+	StartTime time.Time `json:"start_time"`
+}
+
+type RestoreStore struct {
+	filePath string
+	fileLock *flock.Flock
+}
+
+func (bs *RestoreStore) updateSessions(fn func(map[string]*RestoreSessionData)) error {
+	if err := bs.fileLock.Lock(); err != nil {
+		return err
+	}
+	defer func() {
+		if err := bs.fileLock.Unlock(); err != nil {
+			log.Error(err, "")
+		}
+	}()
+
+	sessions := make(map[string]*RestoreSessionData)
+	data, err := os.ReadFile(bs.filePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal(data, &sessions); err != nil {
+			sessions = make(map[string]*RestoreSessionData)
+		}
+	}
+
+	fn(sessions)
+
+	newData, err := json.MarshalIndent(sessions, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(bs.filePath, newData, 0644)
+}
+
+func (bs *RestoreStore) StartRestore(jobID string) error {
+	enableWakeLockSystem()
+
+	return bs.updateSessions(func(sessions map[string]*RestoreSessionData) {
+		sessions[jobID] = &RestoreSessionData{
+			JobID:     jobID,
+			StartTime: time.Now(),
+		}
+	})
+}
+
+func (bs *RestoreStore) EndRestore(jobID string) error {
+	hasActive, err := bs.HasActiveRestores()
+	if err == nil && !hasActive {
+		disableWakeLock()
+	}
+
+	return bs.updateSessions(func(sessions map[string]*RestoreSessionData) {
+		delete(sessions, jobID)
+	})
+}
+
+func (bs *RestoreStore) HasActiveRestoreForJob(job string) (bool, error) {
+	if err := bs.fileLock.Lock(); err != nil {
+		return false, err
+	}
+	defer func() {
+		if err := bs.fileLock.Unlock(); err != nil {
+			log.Error(err, "")
+		}
+	}()
+
+	sessions := make(map[string]*RestoreSessionData)
+	data, err := os.ReadFile(bs.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := json.Unmarshal(data, &sessions); err != nil {
+		return false, err
+	}
+
+	_, exists := sessions[job]
+	return exists, nil
+}
+func (bs *RestoreStore) HasActiveRestores() (bool, error) {
+	if err := bs.fileLock.Lock(); err != nil {
+		return false, err
+	}
+	defer func() {
+		if err := bs.fileLock.Unlock(); err != nil {
+			log.Error(err, "")
+		}
+	}()
+
+	sessions := make(map[string]*RestoreSessionData)
+	data, err := os.ReadFile(bs.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := json.Unmarshal(data, &sessions); err != nil {
+		return false, err
+	}
+	return len(sessions) > 0, nil
+}

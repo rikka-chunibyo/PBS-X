@@ -1,0 +1,219 @@
+package arpc
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+
+	"github.com/fxamacker/cbor/v2"
+)
+
+const (
+	maxHeaderSize       = 8192
+	maxHeaderCount      = 50
+	maxRejectionSize    = 4096
+	maxSingleHeaderSize = 2048
+)
+
+var (
+	rejectionMarker = []byte{0x00}
+	successMarker   = []byte{0x01}
+)
+
+type RejectionFrame struct {
+	Message string `cbor:"message"`
+	Code    int    `cbor:"code"`
+}
+
+func (r RejectionFrame) Error() string {
+	return fmt.Sprintf("connection rejected: %s (code %d)", r.Message, r.Code)
+}
+
+func writeRejectionFrame(s ARPCStream, rejection RejectionFrame) error {
+	if _, err := s.Write(rejectionMarker); err != nil {
+		return err
+	}
+
+	data, err := cbor.Marshal(rejection)
+	if err != nil {
+		return err
+	}
+
+	if len(data) > maxRejectionSize {
+		return fmt.Errorf("rejection frame too large: %d > %d", len(data), maxRejectionSize)
+	}
+
+	if err := writeVarint(s, uint64(len(data))); err != nil {
+		return err
+	}
+
+	_, err = s.Write(data)
+	return err
+}
+
+func writeHeadersSuccess(s ARPCStream) error {
+	_, err := s.Write(successMarker)
+	return err
+}
+
+func readHandshakeResponse(s ARPCStream) error {
+	var marker [1]byte
+	if _, err := io.ReadFull(s, marker[:]); err != nil {
+		return fmt.Errorf("failed to read handshake response: %w", err)
+	}
+
+	switch marker[0] {
+	case 0x00:
+		rejection, err := readRejectionFrame(s)
+		if err != nil {
+			return fmt.Errorf("connection rejected (failed to parse rejection: %w)", err)
+		}
+		return rejection
+	case 0x01:
+		return nil
+	default:
+		return fmt.Errorf("invalid handshake response marker: 0x%02X", marker[0])
+	}
+}
+
+func writeHeadersFrame(s ARPCStream, hdr http.Header) error {
+	if err := validateHeaders(hdr); err != nil {
+		return err
+	}
+
+	if err := writeVarint(s, uint64(len(hdr))); err != nil {
+		return err
+	}
+	for k, vals := range hdr {
+		kb := []byte(http.CanonicalHeaderKey(k))
+		if err := writeVarint(s, uint64(len(kb))); err != nil {
+			return err
+		}
+		if _, err := s.Write(kb); err != nil {
+			return err
+		}
+		if err := writeVarint(s, uint64(len(vals))); err != nil {
+			return err
+		}
+		for _, v := range vals {
+			vb := []byte(v)
+			if err := writeVarint(s, uint64(len(vb))); err != nil {
+				return err
+			}
+			if _, err := s.Write(vb); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func readHeadersFrame(s ARPCStream) (http.Header, error) {
+	h := http.Header{}
+	n, err := readVarint(s)
+	if err != nil {
+		return nil, err
+	}
+
+	if n > maxHeaderCount {
+		return nil, fmt.Errorf("too many headers: %d > %d", n, maxHeaderCount)
+	}
+
+	totalSize := 0
+
+	for range n {
+		kl, err := readVarint(s)
+		if err != nil {
+			return nil, err
+		}
+
+		if kl > maxSingleHeaderSize {
+			return nil, fmt.Errorf("header key too large: %d > %d", kl, maxSingleHeaderSize)
+		}
+
+		keyLen := int(kl)
+		kb := make([]byte, keyLen)
+		if _, err := io.ReadFull(s, kb); err != nil {
+			return nil, err
+		}
+
+		totalSize += keyLen
+		if totalSize > maxHeaderSize {
+			return nil, errors.New("headers exceed size limit")
+		}
+
+		vn, err := readVarint(s)
+		if err != nil {
+			return nil, err
+		}
+
+		if vn > maxHeaderCount {
+			return nil, fmt.Errorf("too many values for header: %d > %d", vn, maxHeaderCount)
+		}
+
+		for range vn {
+			vl, err := readVarint(s)
+			if err != nil {
+				return nil, err
+			}
+
+			if vl > maxSingleHeaderSize {
+				return nil, fmt.Errorf("header value too large: %d > %d", vl, maxSingleHeaderSize)
+			}
+
+			valLen := int(vl)
+			vb := make([]byte, valLen)
+			if _, err := io.ReadFull(s, vb); err != nil {
+				return nil, err
+			}
+
+			totalSize += valLen
+			if totalSize > maxHeaderSize {
+				return nil, errors.New("headers exceed size limit")
+			}
+
+			h.Add(string(kb), string(vb))
+		}
+	}
+	return h, nil
+}
+func readRejectionFrame(s ARPCStream) (RejectionFrame, error) {
+	var rejection RejectionFrame
+
+	length, err := readVarint(s)
+	if err != nil {
+		return rejection, err
+	}
+
+	if length > maxRejectionSize {
+		return rejection, fmt.Errorf("rejection frame too large: %d > %d", length, maxRejectionSize)
+	}
+
+	dataLen := int(length)
+	data := make([]byte, dataLen)
+	if _, err := io.ReadFull(s, data); err != nil {
+		return rejection, err
+	}
+
+	err = cbor.Unmarshal(data, &rejection)
+	return rejection, err
+}
+
+func validateHeaders(headers http.Header) error {
+	if len(headers) > maxHeaderCount {
+		return fmt.Errorf("too many headers: %d > %d", len(headers), maxHeaderCount)
+	}
+
+	totalSize := 0
+	for k, vals := range headers {
+		totalSize += len(k)
+		for _, v := range vals {
+			totalSize += len(v)
+		}
+		if totalSize > maxHeaderSize {
+			return errors.New("headers exceed size limit")
+		}
+	}
+	return nil
+}

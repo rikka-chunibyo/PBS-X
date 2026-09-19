@@ -35,3 +35,4 @@ proxmox-uuid.workspace = true
 pbs-api-types.workspace = true
 pbs-buildcfg.workspace = true
 pbs-key-config.workspace = true
+pbsx-api-types.workspace = true

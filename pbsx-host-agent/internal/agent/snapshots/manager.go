@@ -1,0 +1,38 @@
+package snapshots
+
+import (
+	"fmt"
+)
+
+type SnapshotManager struct {
+	handlerMap map[string]SnapshotHandler
+}
+
+var Manager = &SnapshotManager{
+	handlerMap: map[string]SnapshotHandler{
+		"btrfs": &BtrfsSnapshotHandler{},
+		"zfs":   &ZFSSnapshotHandler{},
+		"lvm":   &LVMSnapshotHandler{},
+		"ext4":  &EXT4XFSHandler{},
+		"xfs":   &EXT4XFSHandler{},
+		"ntfs":  &NtfsSnapshotHandler{},
+		"refs":  &NtfsSnapshotHandler{},
+		"fat32": nil, // FAT32 does not support snapshots
+		"exfat": nil, // exFAT does not support snapshots
+		"hfs+":  nil,
+	},
+}
+
+func (m *SnapshotManager) CreateSnapshot(jobID string, sourcePath string) (Snapshot, error) {
+	fsType, err := detectFilesystem(sourcePath)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("failed to detect filesystem: %w", err)
+	}
+
+	handler, exists := m.handlerMap[fsType]
+	if !exists || handler == nil {
+		return Snapshot{}, fmt.Errorf("no snapshot handler available for filesystem type: %s", fsType)
+	}
+
+	return handler.CreateSnapshot(jobID, sourcePath)
+}

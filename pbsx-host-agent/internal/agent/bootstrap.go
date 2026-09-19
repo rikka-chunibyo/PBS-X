@@ -1,0 +1,217 @@
+package agent
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/agentfs/fswire"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
+	"github.com/pbs-x/pbsx-host-agent/internal/conf"
+	"github.com/pbs-x/pbsx-host-agent/internal/host"
+	"github.com/pbs-x/pbsx-host-agent/internal/log"
+	"github.com/pbs-x/pbsx-host-agent/internal/mtls"
+)
+
+type BootstrapRequest struct {
+	Hostname        string             `json:"hostname"`
+	CSR             string             `json:"csr"`
+	Drives          []fswire.DriveInfo `json:"drives"`
+	OperatingSystem string             `json:"os"`
+}
+
+type BootstrapResponse struct {
+	Cert string `json:"cert"`
+	CA   string `json:"ca"`
+}
+
+func Bootstrap() error {
+	token, err := registry.GetEntry(registry.CONFIG, "BootstrapToken", false)
+	if err != nil || token == nil {
+		return fmt.Errorf("Bootstrap: token not found -> %w", err)
+	}
+
+	serverUrl, err := registry.GetEntry(registry.CONFIG, "ServerURL", false)
+	if err != nil || serverUrl == nil {
+		return fmt.Errorf("Bootstrap: server url not found -> %w", err)
+	}
+
+	hostname, err := host.AgentHostname()
+	if err != nil {
+		return fmt.Errorf("Bootstrap: failed to get hostname -> %w", err)
+	}
+
+	csr, privKey, err := mtls.GenerateCSR(hostname, 2048)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: generating csr failed -> %w", err)
+	}
+
+	encodedCSR := base64.StdEncoding.EncodeToString(csr)
+
+	drives, err := GetLocalDrives()
+	if err != nil {
+		return fmt.Errorf("Bootstrap: failed to get local drives list: %w", err)
+	}
+
+	reqBody, err := json.Marshal(&BootstrapRequest{
+		Hostname:        hostname,
+		Drives:          drives,
+		CSR:             encodedCSR,
+		OperatingSystem: runtime.GOOS,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal bootstrap request: %w", err)
+	}
+
+	parsedServerUrl, err := ParseURI(serverUrl.Value)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: server url is invalid -> %w", err)
+	}
+
+	req, err := http.NewRequest(
+		http.MethodPost,
+		fmt.Sprintf(
+			"https://%s%s%s",
+			strings.TrimSuffix(parsedServerUrl.Hostname(), ":"),
+			conf.AgentAPIPort,
+			"/plus/agent/bootstrap",
+		),
+		bytes.NewBuffer(reqBody),
+	)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: error creating http request -> %w", err)
+	}
+
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", strings.TrimSpace(token.Value)))
+
+	if httpClient == nil {
+		httpClient = &http.Client{
+			Timeout: time.Second * 30,
+			Transport: &http.Transport{
+				TLSClientConfig: bootstrapTLSConfig(),
+			},
+		}
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: error executing http request -> %w", err)
+	}
+
+	defer func() {
+		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+			log.Error(err, "")
+		}
+		if err := resp.Body.Close(); err != nil {
+			log.Error(err, "")
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		rawBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Error(err, "")
+		}
+		return fmt.Errorf("Bootstrap: server returned status %d: %s", resp.StatusCode, string(rawBody))
+	}
+
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: error getting body content -> %w", err)
+	}
+
+	bootstrapResp := &BootstrapResponse{}
+	err = json.Unmarshal(rawBody, bootstrapResp)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: error json unmarshal body content (%s) -> %w", string(rawBody), err)
+	}
+
+	decodedCA, err := base64.StdEncoding.DecodeString(bootstrapResp.CA)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: error decoding ca content (%s) -> %w", bootstrapResp.CA, err)
+	}
+
+	decodedCert, err := base64.StdEncoding.DecodeString(bootstrapResp.Cert)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: error decoding cert content (%s) -> %w", bootstrapResp.Cert, err)
+	}
+
+	caEntry := registry.RegistryEntry{
+		Key:      "ServerCA",
+		Value:    string(decodedCA),
+		Path:     registry.AUTH,
+		IsSecret: true,
+	}
+
+	certEntry := registry.RegistryEntry{
+		Key:      "Cert",
+		Value:    string(decodedCert),
+		Path:     registry.AUTH,
+		IsSecret: true,
+	}
+
+	privEntry := registry.RegistryEntry{
+		Key:      "Priv",
+		Value:    string(privKey),
+		Path:     registry.AUTH,
+		IsSecret: true,
+	}
+
+	err = registry.CreateEntry(&caEntry)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: error storing ca to registry -> %w", err)
+	}
+
+	err = registry.CreateEntry(&certEntry)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: error storing cert to registry -> %w", err)
+	}
+
+	err = registry.CreateEntry(&privEntry)
+	if err != nil {
+		return fmt.Errorf("Bootstrap: error storing priv to registry -> %w", err)
+	}
+
+	InvalidateTLSConfigCache()
+
+	return nil
+}
+func bootstrapTLSConfig() *tls.Config {
+	pin, err := registry.GetEntry(registry.CONFIG, "ServerCAFingerprint", false)
+	if err != nil {
+		log.Error(err, "bootstrap: failed to read ServerCAFingerprint")
+	}
+
+	if pin != nil && pin.Value != "" {
+		expectedFingerprint := strings.ToLower(strings.TrimSpace(pin.Value))
+
+		return &tls.Config{
+			InsecureSkipVerify: true, // required: allows VerifyConnection to run without a known CA
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				for _, cert := range cs.PeerCertificates {
+					fingerprint := sha256.Sum256(cert.Raw)
+					hexFP := hex.EncodeToString(fingerprint[:])
+					if strings.EqualFold(hexFP, expectedFingerprint) {
+						return nil
+					}
+				}
+				return fmt.Errorf("bootstrap: server certificate fingerprint does not match pinned fingerprint")
+			},
+		}
+	}
+	log.Warn("bootstrap: no CA fingerprint pinned, TLS verification disabled (set ServerCAFingerprint to secure bootstrap)")
+
+	return &tls.Config{
+		InsecureSkipVerify: true,
+	}
+}

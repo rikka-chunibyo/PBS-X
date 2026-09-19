@@ -1,0 +1,216 @@
+//go:build linux
+
+package proxmox
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync/atomic"
+)
+
+func NormalizeHostname(hostname string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(hostname, ".", "-"), " ", "-")
+}
+
+func ParseUPID(upid string) (Task, error) {
+	pattern := `^UPID:(?P<node>[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?):(?P<pid>[0-9A-Fa-f]{8}):(?P<pstart>[0-9A-Fa-f]{8,9}):(?P<task_id>[0-9A-Fa-f]{8,16}):(?P<starttime>[0-9A-Fa-f]{8}):(?P<wtype>[^:\s]+):(?P<wid>[^:\s]*):(?P<authid>[^:\s]+):$`
+
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return Task{}, fmt.Errorf("failed to compile regex: %w", err)
+	}
+
+	matches := re.FindStringSubmatch(upid)
+	if matches == nil {
+		return Task{}, fmt.Errorf("invalid UPID format")
+	}
+
+	task := Task{UPID: upid}
+	for i, name := range re.SubexpNames() {
+		if name == "" || i >= len(matches) {
+			continue
+		}
+		switch name {
+		case "node":
+			task.Node = matches[i]
+		case "pid":
+			pid, err := strconv.ParseInt(matches[i], 16, 32)
+			if err != nil {
+				return Task{}, fmt.Errorf("failed to parse PID: %w", err)
+			}
+			task.PID = int(pid)
+		case "pstart":
+			pstart, err := strconv.ParseInt(matches[i], 16, 32)
+			if err != nil {
+				return Task{}, fmt.Errorf("failed to parse PStart: %w", err)
+			}
+			task.PStart = uint64(pstart)
+		case "starttime":
+			startTime, err := strconv.ParseInt(matches[i], 16, 64)
+			if err != nil {
+				return Task{}, fmt.Errorf("failed to parse StartTime: %w", err)
+			}
+			task.StartTime = startTime
+		case "wtype":
+			task.WorkerType = matches[i]
+		case "task_id":
+			task.TaskId = matches[i]
+		case "wid":
+			task.WID = matches[i]
+		case "authid":
+			task.User = matches[i]
+		}
+	}
+
+	return task, nil
+}
+
+func (task *Task) GenerateUPID() string {
+	upid := fmt.Sprintf(
+		"UPID:%s:%08X:%08X:%s:%08X:%s:%s:%s:",
+		task.Node,
+		task.PID,
+		task.PStart,
+		task.TaskId,
+		task.StartTime,
+		task.WorkerType,
+		task.WID,
+		task.User,
+	)
+	return upid
+}
+
+var pstart = atomic.Int32{}
+
+func GetPStart() uint64 {
+	data, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		return uint64(pstart.Add(1))
+	}
+
+	stat := string(data)
+	cmdend := strings.LastIndexByte(stat, ')')
+	if cmdend < 0 || cmdend+1 >= len(stat) {
+		return uint64(pstart.Add(1))
+	}
+	fields := strings.Fields(stat[cmdend+1:])
+	if len(fields) < 20 {
+		return uint64(pstart.Add(1))
+	}
+
+	pstartA, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil {
+		return uint64(pstart.Add(1))
+	}
+	return pstartA
+}
+
+// '/' becomes '-', a leading '.' is escaped, [A-Za-z0-9_.] stay literal,
+// everything else becomes lowercase \xNN. Used inside UPID worker IDs so
+// pbs-plus UPIDs round-trip with the real daemon's parser.
+func EncodeToHexEscapes(input string) string {
+	var encoded strings.Builder
+	for i := 0; i < len(input); i++ {
+		c := input[i]
+		switch {
+		case c == '/':
+			encoded.WriteByte('-')
+		case i == 0 && c == '.':
+			fmt.Fprintf(&encoded, `\x%02x`, c)
+		case c == '_' || c == '.' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
+			encoded.WriteByte(c)
+		default:
+			fmt.Fprintf(&encoded, `\x%02x`, c)
+		}
+	}
+	return encoded.String()
+}
+
+func buildGroupPath(ns, backupType, backupID, backupTime string) string {
+	var parts []string
+
+	if ns != "" {
+		nsParts := strings.SplitSeq(ns, "/")
+		for nsPart := range nsParts {
+			if nsPart != "" {
+				parts = append(parts, "ns", nsPart)
+			}
+		}
+	}
+
+	parts = append(parts, backupType, backupID, backupTime)
+
+	return filepath.Join(parts...)
+}
+
+// BuildPxarPaths returns filesystem paths for pxar/mpxar/ppxar files.
+// For split pxar both paths are populated; for non-split, ppxarPath is empty.
+func BuildPxarPaths(pbsStoreRoot, ns, backupType, backupID, backupTime, fileName string) (mpxarPath, ppxarPath string, isMetadataSplit bool, err error) {
+	groupPath := buildGroupPath(ns, backupType, backupID, backupTime)
+	groupDir := filepath.Join(pbsStoreRoot, groupPath)
+
+	if fileName == "" {
+		entries, err := os.ReadDir(groupDir)
+		if err != nil {
+			return "", "", false, fmt.Errorf("failed to read backup directory: %w", err)
+		}
+
+		// Prefer split archives (.mpxar.didx), then .pxar.didx.
+		var foundMpxar, foundPxar string
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if strings.HasSuffix(name, ".mpxar.didx") && foundMpxar == "" {
+				foundMpxar = name
+			} else if strings.HasSuffix(name, ".pxar.didx") && foundPxar == "" {
+				foundPxar = name
+			}
+		}
+
+		if foundMpxar != "" {
+			fileName = foundMpxar
+		} else if foundPxar != "" {
+			fileName = foundPxar
+		} else {
+			return "", "", false, fmt.Errorf("no .pxar.didx or .mpxar.didx file found in %s", groupDir)
+		}
+	}
+
+	if !strings.HasSuffix(fileName, ".mpxar.didx") &&
+		!strings.HasSuffix(fileName, ".pxar.didx") &&
+		!strings.HasSuffix(fileName, ".ppxar.didx") {
+		return "", "", false, fmt.Errorf("file-name must end with .pxar.didx, .mpxar.didx, or .ppxar.didx")
+	}
+
+	switch {
+	case strings.HasSuffix(fileName, ".pxar.didx"):
+		mpxarPath = filepath.Join(groupDir, fileName)
+		return mpxarPath, "", false, nil
+
+	case strings.HasSuffix(fileName, ".mpxar.didx"):
+		mpxarPath = filepath.Join(groupDir, fileName)
+		ppxarName := strings.TrimSuffix(fileName, ".mpxar.didx") + ".ppxar.didx"
+		ppxarPath = filepath.Join(groupDir, ppxarName)
+		if _, err := os.Stat(ppxarPath); err != nil {
+			return "", "", false, fmt.Errorf("payload index not found: %s", ppxarPath)
+		}
+		return mpxarPath, ppxarPath, true, nil
+
+	case strings.HasSuffix(fileName, ".ppxar.didx"):
+		ppxarPath = filepath.Join(groupDir, fileName)
+		mpxarName := strings.TrimSuffix(fileName, ".ppxar.didx") + ".mpxar.didx"
+		mpxarPath = filepath.Join(groupDir, mpxarName)
+		if _, err := os.Stat(mpxarPath); err != nil {
+			return "", "", false, fmt.Errorf("metadata index not found: %s", mpxarPath)
+		}
+		return mpxarPath, ppxarPath, true, nil
+	}
+
+	return "", "", false, fmt.Errorf("unexpected file-name format")
+}

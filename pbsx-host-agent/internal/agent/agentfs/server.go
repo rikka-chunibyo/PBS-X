@@ -1,0 +1,97 @@
+package agentfs
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/agentfs/fswire"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/snapshots"
+	"github.com/pbs-x/pbsx-host-agent/internal/arpc"
+	"github.com/pbs-x/pbsx-host-agent/internal/log"
+	"github.com/pbs-x/pbsx-host-agent/internal/safemap"
+)
+
+type Server struct {
+	ctx              context.Context
+	ctxCancel        context.CancelFunc
+	jobID            string
+	snapshot         snapshots.Snapshot
+	handleIdGen      *IDGenerator
+	handles          *safemap.Map[uint64, *FileHandle]
+	arpcRouter       *arpc.Router
+	statFs           fswire.StatFS
+	allocGranularity uint32
+	readMode         string
+	idBuf            []byte
+}
+
+func NewServer(jobID string, readMode string, snapshot snapshots.Snapshot) *Server {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	allocGranularity := getAllocGranularity()
+	if allocGranularity == 0 {
+		allocGranularity = 65536
+	}
+
+	s := &Server{
+		snapshot:         snapshot,
+		jobID:            jobID,
+		handles:          safemap.New[uint64, *FileHandle](),
+		ctx:              ctx,
+		ctxCancel:        cancel,
+		handleIdGen:      NewIDGenerator(),
+		allocGranularity: uint32(allocGranularity),
+		readMode:         readMode,
+		idBuf:            make([]byte, 0, 16),
+	}
+
+	if err := s.initializeStatFS(); err != nil && log.L != nil {
+		log.Error(err, "failed to initialize statfs")
+	}
+
+	return s
+}
+
+func (s *Server) RegisterHandlers(r *arpc.Router) {
+	r.Handle("OpenFile", safeHandler(s.handleOpenFile))
+	r.Handle("Attr", safeHandler(s.handleAttr))
+	r.Handle("Xattr", safeHandler(s.handleXattr))
+	r.Handle("ReadDir", safeHandler(s.handleReadDir))
+	r.Handle("ReadAt", safeHandler(s.handleReadAt))
+	r.Handle("Lseek", safeHandler(s.handleLseek))
+	r.Handle("Close", safeHandler(s.handleClose))
+	r.Handle("StatFS", safeHandler(s.handleStatFS))
+
+	s.arpcRouter = r
+}
+
+func (s *Server) Close() {
+	if s.arpcRouter != nil {
+		r := s.arpcRouter
+		r.CloseHandle("OpenFile")
+		r.CloseHandle("Attr")
+		r.CloseHandle("Xattr")
+		r.CloseHandle("ReadDir")
+		r.CloseHandle("ReadAt")
+		r.CloseHandle("Lseek")
+		r.CloseHandle("Close")
+		r.CloseHandle("StatFS")
+	}
+
+	s.ctxCancel()
+}
+func safeHandler(fn func(req *arpc.Request) (arpc.Response, error)) func(req *arpc.Request) (arpc.Response, error) {
+	return func(req *arpc.Request) (res arpc.Response, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error(fmt.Errorf("panic in handler: %v", r),
+					fmt.Sprintf("panic in handler: %v", r),
+					"payload", req.Payload)
+
+				err = os.ErrInvalid
+			}
+		}()
+		return fn(req)
+	}
+}

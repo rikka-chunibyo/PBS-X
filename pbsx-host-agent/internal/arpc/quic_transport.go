@@ -1,0 +1,549 @@
+package arpc
+
+import (
+	"context"
+	"crypto/hkdf"
+	"crypto/sha256"
+	"crypto/tls"
+	"fmt"
+	"maps"
+	"math"
+	"net"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/fxamacker/cbor/v2"
+	"github.com/pbs-x/pbsx-host-agent/internal/log"
+	"github.com/quic-go/quic-go"
+)
+
+var quicNextProtos = []string{"pbsarpc-quic"}
+
+// A keepalive restarts the idle clock, so shedding a dead session costs
+// KeepAlivePeriod + MaxIdleTimeout; stateless resets never cover the idle case.
+const (
+	quicKeepAlivePeriod = 15 * time.Second
+	quicMaxIdleTimeout  = 60 * time.Second
+)
+
+// quicStreamDoneCode tells the peer a finished stream needs no more data.
+const quicStreamDoneCode quic.StreamErrorCode = 0
+
+func quicConfig() *quic.Config {
+	return &quic.Config{
+		MaxIdleTimeout:             quicMaxIdleTimeout,
+		KeepAlivePeriod:            quicKeepAlivePeriod,
+		HandshakeIdleTimeout:       10 * time.Second,
+		MaxIncomingStreams:         64,
+		MaxStreamReceiveWindow:     1 * 1024 * 1024,
+		MaxConnectionReceiveWindow: 4 * 1024 * 1024,
+	}
+}
+
+// QuicPipe is the QUIC-based transport for the ARPC control plane.
+// Binary data streams use TCP via the data Pipe.
+type QuicPipe struct {
+	mu     sync.RWMutex
+	conn   *quic.Conn
+	router *Router
+
+	serverAddr string
+	tlsConfig  *tls.Config
+	headers    http.Header
+	version    string
+
+	cborEnc cbor.EncMode
+	cborDec cbor.DecMode
+
+	ctx        context.Context
+	cancelFunc context.CancelFunc
+}
+
+func NewQuicServerPipe(ctx context.Context, conn *quic.Conn) *QuicPipe {
+	ctx, cancel := context.WithCancel(ctx)
+	enc, err := cbor.EncOptions{}.EncMode()
+	if err != nil {
+		log.Error(err, "arpc: init cbor encoder")
+	}
+	dec, err := cbor.DecOptions{MaxArrayElements: math.MaxInt32}.DecMode()
+	if err != nil {
+		dec, err = cbor.DecOptions{}.DecMode()
+		if err != nil {
+			log.Error(err, "arpc: init cbor decoder")
+		}
+	}
+	return &QuicPipe{
+		ctx:        ctx,
+		cancelFunc: cancel,
+		conn:       conn,
+		cborEnc:    enc,
+		cborDec:    dec,
+	}
+}
+
+func DialQuic(ctx context.Context, serverAddr string, tlsConfig *tls.Config, headers http.Header) (*QuicPipe, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if tlsConfig == nil || len(tlsConfig.Certificates) == 0 {
+		return nil, fmt.Errorf("TLS configuration must include client certificate")
+	}
+
+	quicTLS := tlsConfig.Clone()
+	quicTLS.NextProtos = quicNextProtos
+
+	conn, err := quic.DialAddr(ctx, serverAddr, quicTLS, quicConfig())
+	if err != nil {
+		return nil, fmt.Errorf("QUIC dial failed (%s): %w", serverAddr, err)
+	}
+	log.Info("quic: connection established", "quic_version", conn.ConnectionState().Version)
+
+	// Copy headers to avoid mutating the caller's map (agent reuses it across
+	// reconnects, so Add would accumulate duplicate values).
+	hdrCopy := make(http.Header, len(headers)+1)
+	maps.Copy(hdrCopy, headers)
+	hdrCopy.Set("ARPCVersion", "2")
+
+	pipeCtx, pipeCancel := context.WithCancel(ctx)
+	enc, err := cbor.EncOptions{}.EncMode()
+	if err != nil {
+		log.Error(err, "arpc: init cbor encoder")
+	}
+	dec, err := cbor.DecOptions{MaxArrayElements: math.MaxInt32}.DecMode()
+	if err != nil {
+		dec, err = cbor.DecOptions{}.DecMode()
+		if err != nil {
+			log.Error(err, "arpc: init cbor decoder")
+		}
+	}
+
+	pipe := &QuicPipe{
+		ctx:        pipeCtx,
+		cancelFunc: pipeCancel,
+		conn:       conn,
+		serverAddr: serverAddr,
+		tlsConfig:  quicTLS,
+		version:    headers.Get("X-PBS-Plus-Version"),
+		headers:    hdrCopy,
+		cborEnc:    enc,
+		cborDec:    dec,
+	}
+
+	stream, err := pipe.OpenStream()
+	if err != nil {
+		pipe.Close()
+		return nil, fmt.Errorf("failed to initialize header stream: %w", err)
+	}
+	defer releaseStream(stream)
+
+	if werr := writeHeadersFrame(stream, hdrCopy); werr != nil {
+		pipe.Close()
+		return nil, fmt.Errorf("failed to write headers: %w", werr)
+	}
+
+	if err := readHandshakeResponse(stream); err != nil {
+		pipe.Close()
+		return nil, err
+	}
+
+	return pipe, nil
+}
+
+func (q *QuicPipe) SetRouter(router Router) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.router = &router
+}
+
+func (q *QuicPipe) GetRouter() *Router {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	return q.router
+}
+
+func (q *QuicPipe) GetVersion() string {
+	return q.version
+}
+
+func (q *QuicPipe) SetHeaders(headers http.Header) {
+	q.headers = headers
+}
+
+func (q *QuicPipe) OpenStream() (ARPCStream, error) {
+	return q.conn.OpenStreamSync(q.ctx)
+}
+
+func (q *QuicPipe) Close() {
+	q.cancelFunc()
+	if q.conn != nil {
+		_ = q.conn.CloseWithError(0, "pipe closed")
+	}
+}
+
+func (q *QuicPipe) Serve() error {
+	for {
+		stream, err := q.conn.AcceptStream(q.ctx)
+		if err != nil {
+			return err
+		}
+
+		q.mu.RLock()
+		router := q.GetRouter()
+		q.mu.RUnlock()
+
+		if router == nil {
+			_ = stream.Close()
+			continue
+		}
+
+		go func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Debug("recovered from panic in quic handler", "panic", fmt.Sprintf("%v", rec))
+
+				}
+				releaseStream(stream)
+			}()
+			router.serveStream(stream)
+		}()
+	}
+}
+
+func (q *QuicPipe) call(ctx context.Context, method string, payload any) (ARPCStream, *Response, error) {
+	stream, err := q.conn.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	enc := q.cborEnc.NewEncoder(stream)
+	dec := q.cborDec.NewDecoder(stream)
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := stream.SetDeadline(deadline); err != nil {
+			log.Error(err, "arpc: failed to set stream deadline")
+		}
+	}
+
+	var payloadBytes []byte
+	if payload != nil {
+		switch p := payload.(type) {
+		case []byte:
+			payloadBytes = p
+		default:
+			payloadBytes, err = q.cborEnc.Marshal(p)
+			if err != nil {
+				releaseStream(stream)
+				return nil, nil, fmt.Errorf("marshal payload: %w", err)
+			}
+		}
+	}
+
+	req := Request{Method: method, Payload: payloadBytes}
+	if err := enc.Encode(req); err != nil {
+		releaseStream(stream)
+		return nil, nil, fmt.Errorf("write request: %w", err)
+	}
+
+	var resp Response
+	if err := dec.Decode(&resp); err != nil {
+		releaseStream(stream)
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return nil, nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	return stream, &resp, nil
+}
+
+func (q *QuicPipe) checkRPCError(resp *Response) error {
+	if resp.Status != http.StatusOK {
+		if len(resp.Data) > 0 {
+			var serErr SerializableError
+			if err := q.cborDec.Unmarshal(resp.Data, &serErr); err == nil {
+				return UnwrapError(serErr)
+			}
+		}
+		return fmt.Errorf("RPC error: %s (status %d)", resp.Message, resp.Status)
+	}
+	return nil
+}
+
+func (q *QuicPipe) Call(ctx context.Context, method string, payload any, out any) error {
+	stream, resp, err := q.call(ctx, method, payload)
+	if err != nil {
+		return err
+	}
+	defer releaseStream(stream)
+
+	if resp.Status == StatusRawStream {
+		handler, ok := out.(RawStreamHandler)
+		if !ok || handler == nil {
+			return fmt.Errorf("invalid out handler while in raw stream mode")
+		}
+
+		if err := performHandshake(stream); err != nil {
+			return err
+		}
+
+		return handler(stream)
+	}
+
+	if err := q.checkRPCError(resp); err != nil {
+		return err
+	}
+
+	if out == nil || len(resp.Data) == 0 {
+		return nil
+	}
+	switch dst := out.(type) {
+	case *[]byte:
+		*dst = append((*dst)[:0], resp.Data...)
+		return nil
+	default:
+		return q.cborDec.Unmarshal(resp.Data, out)
+	}
+}
+
+func (q *QuicPipe) CallData(ctx context.Context, method string, payload any) ([]byte, error) {
+	var out []byte
+	if err := q.Call(ctx, method, payload, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (q *QuicPipe) CallMessage(ctx context.Context, method string, payload any) (string, error) {
+	stream, resp, err := q.call(ctx, method, payload)
+	if err != nil {
+		return "", err
+	}
+	defer releaseStream(stream)
+
+	if resp.Status == StatusRawStream {
+		return "", fmt.Errorf("RPC error: raw stream not supported by CallMessage (status %d)", StatusRawStream)
+	}
+
+	if err := q.checkRPCError(resp); err != nil {
+		return "", err
+	}
+
+	return resp.Message, nil
+}
+
+func (q *QuicPipe) GetState() ConnectionState {
+	if q.conn == nil {
+		return StateDisconnected
+	}
+	select {
+	case <-q.conn.Context().Done():
+		return StateDisconnected
+	default:
+	}
+	if q.ctx.Err() != nil {
+		return StateDisconnected
+	}
+	return StateConnected
+}
+
+// statelessResetKey derives the QUIC stateless reset key from a long-lived
+// server secret. The key must be identical across restarts: it is what lets a
+// restarted server tell an agent holding a dead connection to give up now
+// instead of waiting out MaxIdleTimeout.
+func statelessResetKey(secret []byte) (*quic.StatelessResetKey, error) {
+	out, err := hkdf.Key(
+		sha256.New, secret, nil, "pbs-x quic stateless reset v1", 32,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var key quic.StatelessResetKey
+	copy(key[:], out)
+	return &key, nil
+}
+
+// NewQuicTransport binds the UDP socket for the ARPC QUIC endpoint. The caller
+// owns the returned transport and must Close it; closing a Listener derived
+// from it does not release the socket.
+func NewQuicTransport(addr string, resetSecret []byte) (*quic.Transport, error) {
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve quic address %q: %w", addr, err)
+	}
+
+	udpConn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return nil, fmt.Errorf("QUIC listen on %s: %w", addr, err)
+	}
+
+	transport := &quic.Transport{Conn: udpConn}
+
+	if len(resetSecret) == 0 {
+		log.Warn("arpc: quic stateless reset disabled, no server secret available; " +
+			"agents may need up to the idle timeout to notice a server restart")
+		return transport, nil
+	}
+
+	key, err := statelessResetKey(resetSecret)
+	if err != nil {
+		_ = CloseQuicTransport(transport)
+		return nil, fmt.Errorf("derive quic stateless reset key: %w", err)
+	}
+	transport.StatelessResetKey = key
+	log.Info("arpc: quic stateless reset enabled", "addr", addr)
+
+	return transport, nil
+}
+
+// quic.Transport.Close only closes a socket it opened itself, so a
+// caller-supplied Conn stays bound unless it is closed explicitly.
+func CloseQuicTransport(transport *quic.Transport) error {
+	if transport == nil {
+		return nil
+	}
+
+	err := transport.Close()
+	if transport.Conn != nil {
+		if cerr := transport.Conn.Close(); err == nil {
+			err = cerr
+		}
+	}
+	return err
+}
+
+func ListenQuic(transport *quic.Transport, tlsConfig *tls.Config) (*quic.Listener, error) {
+	if transport == nil {
+		return nil, fmt.Errorf("missing quic transport")
+	}
+	if tlsConfig == nil {
+		return nil, fmt.Errorf("missing tls config")
+	}
+
+	quicTLS := tlsConfig.Clone()
+	quicTLS.NextProtos = quicNextProtos
+
+	if quicTLS.GetConfigForClient != nil {
+		origGetConfig := quicTLS.GetConfigForClient
+		quicTLS.GetConfigForClient = func(info *tls.ClientHelloInfo) (*tls.Config, error) {
+			cfg, err := origGetConfig(info)
+			if err != nil {
+				return nil, err
+			}
+			cfg.NextProtos = quicNextProtos
+			return cfg, nil
+		}
+	}
+
+	listener, err := transport.Listen(quicTLS, quicConfig())
+	if err != nil {
+		return nil, fmt.Errorf("QUIC listen: %w", err)
+	}
+
+	return listener, nil
+}
+
+func ServeQuic(ctx context.Context, agentsManager *AgentsManager, listener *quic.Listener, router Router) error {
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		conn, err := listener.Accept(ctx)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				return err
+			}
+		}
+
+		wg.Add(1)
+		go func(c *quic.Conn) {
+			defer wg.Done()
+			defer func() { _ = c.CloseWithError(0, "done") }()
+
+			tlsState := c.ConnectionState().TLS
+
+			reqHeaders, err := readHeadersFromFirstStream(ctx, c)
+			if err != nil {
+				log.Error(err,
+					"QUIC: failed to read headers")
+
+				return
+			}
+
+			pCtx, pCan := context.WithCancel(ctx)
+			defer pCan()
+
+			qPipe, sessionID, err := agentsManager.registerQuicPipe(pCtx, c, &tlsState, reqHeaders)
+			if err != nil {
+				log.Error(err,
+					"QUIC: registration failed")
+
+				return
+			}
+
+			defer func() {
+				qPipe.Close()
+				agentsManager.unregisterQuicIfCurrent(sessionID, qPipe)
+			}()
+
+			qPipe.SetRouter(router)
+			if err := qPipe.Serve(); err != nil {
+				log.Error(err, "arpc: quic pipe serve failed")
+			}
+		}(conn)
+	}
+}
+
+func ListenAndServeQuic(ctx context.Context, addr string, agentsManager *AgentsManager, tlsConfig *tls.Config, router Router, resetSecret []byte) error {
+	transport, err := NewQuicTransport(addr, resetSecret)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = CloseQuicTransport(transport) }()
+
+	listener, err := ListenQuic(transport, tlsConfig)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = listener.Close() }()
+
+	return ServeQuic(ctx, agentsManager, listener, router)
+}
+
+func readHeadersFromFirstStream(ctx context.Context, conn *quic.Conn) (http.Header, error) {
+	headerCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	stream, err := conn.AcceptStream(headerCtx)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseStream(stream)
+
+	hdrs, rerr := readHeadersFrame(stream)
+	if rerr != nil {
+		if rerr := writeRejectionFrame(stream, RejectionFrame{
+			Message: "failed to parse headers",
+			Code:    400,
+		}); rerr != nil {
+			log.Debug("failed to write rejection frame")
+		}
+		return nil, rerr
+	}
+
+	if err := writeHeadersSuccess(stream); err != nil {
+		return nil, err
+	}
+
+	return hdrs, nil
+}

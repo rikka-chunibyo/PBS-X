@@ -39,6 +39,12 @@ Ext.define('PBS.store.NavigationStore', {
                 leaf: true,
             },
             {
+                text: gettext('Hosts'),
+                iconCls: 'fa fa-desktop',
+                path: 'pbsHostView',
+                leaf: true,
+            },
+            {
                 text: gettext('Configuration'),
                 iconCls: 'fa fa-gears',
                 path: 'pbsSystemConfiguration',

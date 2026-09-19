@@ -11,6 +11,7 @@ Ext.define('PBS.data.PermissionPathsStore', {
         { value: '/access/domains' },
         { value: '/access/openid' },
         { value: '/datastore' },
+        { value: '/host' },
         { value: '/remote' },
         { value: '/system' },
         { value: '/system/certificates' },
@@ -135,5 +136,5 @@ Ext.define('PBS.form.PermissionPathSelector', {
         type: 'pbsPermissionPaths',
     },
     regexText: gettext('Invalid permission path.'),
-    regex: /\/((access|datastore|remote|system)\/.*)?/,
+    regex: /\/((access|datastore|host|remote|system)\/.*)?/,
 });

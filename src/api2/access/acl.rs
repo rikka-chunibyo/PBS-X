@@ -7,10 +7,10 @@ use proxmox_schema::api;
 
 use pbs_api_types::{
     ACL_PATH_SCHEMA, ACL_PROPAGATE_SCHEMA, AclListItem, Authid, PRIV_PERMISSIONS_MODIFY,
-    PRIV_SYS_AUDIT, PROXMOX_CONFIG_DIGEST_SCHEMA, PROXMOX_GROUP_ID_SCHEMA, Role,
+    PRIV_SYS_AUDIT, PROXMOX_CONFIG_DIGEST_SCHEMA, PROXMOX_GROUP_ID_SCHEMA,
 };
 
-use pbs_config::acl::AclTreeNode;
+use pbs_config::acl::{AclTreeNode, ROLE_NAMES};
 
 use pbs_config::CachedUserInfo;
 
@@ -145,7 +145,8 @@ pub fn read_acl(
                 schema: ACL_PATH_SCHEMA,
             },
 	    role: {
-                type: Role,
+                type: String,
+                description: "Role identifier.",
             },
             propagate: {
                 optional: true,
@@ -222,6 +223,10 @@ pub fn update_acl(
     let propagate = propagate.unwrap_or(true);
 
     let delete = delete.unwrap_or(false);
+
+    if !delete && !ROLE_NAMES.contains_key(role.as_str()) {
+        bail!("unknown role '{}'", role);
+    }
 
     if let Some(ref _group) = group {
         bail!("parameter 'group' - groups are currently not supported.");

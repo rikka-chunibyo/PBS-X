@@ -1,0 +1,16 @@
+[package]
+name = "pbsx-api-types"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+description = "PBS-X specific API types layered on Proxmox Backup Server"
+
+[dependencies]
+serde.workspace = true
+proxmox-schema = { workspace = true, features = [ "api-macro" ] }
+proxmox-time.workspace = true
+pbs-api-types.workspace = true
