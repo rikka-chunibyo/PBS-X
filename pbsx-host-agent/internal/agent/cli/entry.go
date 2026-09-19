@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/pbs-x/pbsx-host-agent/internal/conf"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
 
@@ -40,7 +41,7 @@ func Entry() {
 
 		"destPath", *destPath, "srcPath", *srcPath, "id", *id, "drive", *drive, "restoreMode", *restoreMode, "readMode", *readMode, "sourceMode", *sourceMode, "cmdMode", *cmdMode)
 
-	tokenFile := filepath.Join(os.TempDir(), fmt.Sprintf(".pbs-plus-token-%s-%s", *cmdMode, *id))
+	tokenFile := filepath.Join(os.TempDir(), fmt.Sprintf(".pbsx-token-%s-%s", *cmdMode, *id))
 	expectedToken, err := os.ReadFile(tokenFile)
 	if err := os.Remove(tokenFile); err != nil && !os.IsNotExist(err) {
 		log.Error(err, "")
@@ -55,7 +56,7 @@ func Entry() {
 		os.Exit(1)
 	}
 
-	if os.Getenv("PBS_PLUS_PPROF") == "true" {
+	if conf.Env.PprofEnabled {
 		go func() {
 			port := 6060
 			maxAttempts := 10

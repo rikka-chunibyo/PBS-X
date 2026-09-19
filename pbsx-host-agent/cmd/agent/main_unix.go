@@ -8,6 +8,7 @@ import (
 	"fmt"
 	stdlog "log"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -36,7 +37,7 @@ type pbsService struct {
 }
 
 func (p *pbsService) Start(s service.Service) error {
-	if os.Getenv("PBS_PLUS_DISABLE_AUTO_UPDATE") != "true" && os.Getenv("PBSX_AGENT_CONTAINER") != "true" {
+	if conf.Env.EnableAutoUpdate && !conf.Env.InsideContainer {
 		_, _ = updater.New(updater.Config{
 			MinConstraint:  ">= 0.52.0",
 			PollInterval:   2 * time.Minute,
@@ -77,9 +78,17 @@ func (p *pbsService) Start(s service.Service) error {
 
 func (p *pbsService) run() {
 	_ = log.L.SetServiceLogger()
-	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "ServerURL", Value: os.Getenv("PBS_PLUS_INIT_SERVER_URL")})
-	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "BootstrapToken", Value: os.Getenv("PBS_PLUS_INIT_BOOTSTRAP_TOKEN")})
-	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "ServerCAFingerprint", Value: os.Getenv("PBS_PLUS_INIT_SERVER_CA_FINGERPRINT")})
+	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "ServerURL", Value: conf.Env.InitServerURL})
+	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "BootstrapToken", Value: conf.Env.InitBootstrapToken})
+	if _, err := agent.InitializeHostID(); err != nil {
+		log.Error(err, "failed to initialize PBS-X host identity")
+		return
+	}
+	fingerprint := os.Getenv("PBSX_INIT_SERVER_CA_FINGERPRINT")
+	if fingerprint == "" {
+		fingerprint = os.Getenv("PBS_PLUS_INIT_SERVER_CA_FINGERPRINT")
+	}
+	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "ServerCAFingerprint", Value: fingerprint})
 
 	if err := lifecycle.WaitForServerURL(p.ctx); err != nil {
 		return
@@ -255,6 +264,7 @@ func main() {
 	// This is best-effort; if it fails due to permissions, the agent will fall back
 	// to using the legacy paths automatically via initPaths() in conf package.
 	_ = migration.TryMigrate()
+	crypto.SetSealKeyPath(filepath.Join(conf.StatePrefix, ".seal.key"))
 
 	cli.Entry()
 
@@ -262,7 +272,7 @@ func main() {
 		Name:        "pbsx-agent",
 		DisplayName: "PBS-X Agent",
 		Description: "PBS-X host backup agent",
-		UserName:    "pbsx",
+		UserName:    "root",
 		Option: service.KeyValue{
 			"SystemdScript": lifecycle.SYSTEMD_SCRIPT,
 			"OpenRCScript":  lifecycle.OPENRC_SCRIPT,

@@ -94,7 +94,7 @@ func ConnectToServer(ctx context.Context, serverAddr string, headers http.Header
 
 	headers.Add("ARPCVersion", "2")
 	pipe.headers = headers
-	pipe.version = headers.Get("X-PBS-Plus-Version")
+	pipe.version = headers.Get("X-PBSX-Version")
 
 	stream, err := pipe.OpenStream()
 	if err != nil {

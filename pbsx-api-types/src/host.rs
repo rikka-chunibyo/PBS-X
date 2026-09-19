@@ -252,6 +252,27 @@ pub struct HostListItem {
     pub status: Option<HostAgentStatus>,
 }
 
+
+#[api(
+    properties: {
+        token: {
+            type: String,
+            description: "One-time PBS-X host enrollment token.",
+        },
+        expires: {
+            type: i64,
+            description: "Unix timestamp at which the enrollment token expires.",
+        },
+    },
+)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// One-time credential used to enroll a PBS-X host agent.
+pub struct HostEnrollmentToken {
+    pub token: String,
+    pub expires: i64,
+}
+
 pub const HOST_BACKUP_SCHEDULE_SCHEMA: Schema = StringSchema::new("Run host backup job at specified schedule.")
     .format(&proxmox_schema::ApiStringFormat::VerifyFn(
         proxmox_time::verify_calendar_event,

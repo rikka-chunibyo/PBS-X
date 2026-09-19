@@ -2,16 +2,16 @@ package agent
 
 import (
 	"hash/fnv"
-	"os"
 	"strconv"
 	"time"
 
+	"github.com/pbs-x/pbsx-host-agent/internal/conf"
 	"github.com/pbs-x/pbsx-host-agent/internal/crypto"
 	"github.com/pbs-x/pbsx-host-agent/internal/host"
 )
 
 func ComputeDelay() time.Duration {
-	fixedDelayEnv := os.Getenv("PBS_PLUS_UPDATE_INTERVAL_MINUTES")
+	fixedDelayEnv := conf.Env.UpdateIntervalMin
 	fixedDelay := -1
 
 	if fixedDelayEnv != "" {

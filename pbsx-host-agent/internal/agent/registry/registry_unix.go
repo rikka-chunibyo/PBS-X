@@ -26,8 +26,11 @@ const (
 
 	legacyRegistryBasePath = "/etc/pbsx-agent/registry"
 	legacyKeyFile          = "/etc/pbsx-agent/registry/.key"
-	valueFileSuffix        = ".value"
-	metaFileName           = ".index.json"
+
+	pbsPlusRegistryFile = "/etc/pbs-plus-agent/registry.toml"
+	pbsPlusRegistryKey  = "/etc/pbs-plus-agent/.registry.key"
+	valueFileSuffix     = ".value"
+	metaFileName        = ".index.json"
 )
 
 var (
@@ -52,9 +55,36 @@ func init() {
 	if err := os.MkdirAll(registryDir, 0o755); err != nil {
 		log.Error(err, "")
 	}
+	if err := migratePBSPlusRegistry(); err != nil {
+		log.Error(err, "")
+	}
 	if err := migrateLegacy(); err != nil {
 		log.Error(err, "")
 	}
+}
+
+func migratePBSPlusRegistry() error {
+	if _, err := os.Stat(registryFilePath); err == nil {
+		return nil
+	}
+	if _, err := os.Stat(pbsPlusRegistryFile); err != nil {
+		return nil
+	}
+
+	data, err := os.ReadFile(pbsPlusRegistryFile)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(registryFilePath, data, 0o600); err != nil {
+		return err
+	}
+
+	if key, err := os.ReadFile(pbsPlusRegistryKey); err == nil && len(key) == 32 {
+		if err := writeFileAtomic(keyFile, key, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var registryKeyMgr = crypto.NewKeyManager(keyFile)

@@ -20,7 +20,7 @@ Implemented in the current PBS-X source checkpoint:
 Not wired yet:
 
 - PBS-X-native agent enrollment/mTLS certificate issuance;
-- the server-side aRPC/FUSE data-plane service;
+- the native agent-side PXAR/chunk upload path and PBS-X control service;
 - scheduled/on-demand host job execution;
 - restore and file browsing from the Host UI;
 - image backups and bare-metal recovery.
@@ -96,7 +96,7 @@ The most valuable pieces are:
 - agent update/reconnect logic;
 - file browsing and restore primitives.
 
-PBS Plus currently uses this data path:
+PBS Plus currently uses a remote-filesystem/FUSE path:
 
 ```text
 agent snapshot
@@ -106,7 +106,7 @@ agent snapshot
     -> ordinary PBS host snapshot
 ```
 
-That is a good first-generation PBS-X data path because it gives us normal PBS snapshots quickly and lets us reuse mature Windows/Linux agent work.
+PBS-X deliberately does **not** adopt that as its primary backup path. There is no need to optimize for a disposable first generation when the project can be designed around the long-term data path now. PBS Plus remains valuable for snapshot providers, filesystem metadata, control transport, restore primitives and certificate handling, but FUSE should only be added later if a concrete compatibility problem makes it useful.
 
 PBS-X should not copy the PBS Plus sidecar-product architecture wholesale. PBS-X owns the PBS server, API, ACL model and ExtJS UI directly. The Go data-plane service can remain a separate process where that makes sense, but it should act as an internal PBS-X component rather than exposing a second competing management product.
 
@@ -124,9 +124,9 @@ PBS-X should not copy the PBS Plus sidecar-product architecture wholesale. PBS-X
 
    PBS Plus snapshot code is a starting point, not an unquestioned import. In particular, LVM snapshot sizing, ZFS/Btrfs source assumptions and fallback behavior need review.
 
-4. **Long-term agent-side backup protocol**
+4. **Agent-side native PBS backup protocol from the start**
 
-   FUSE is transitional. The later target is to run PXAR creation, chunking and PBS backup-protocol upload on the agent so the server does not need to remotely walk every host filesystem.
+   PXAR creation, chunking and PBS backup-protocol upload belong on the agent. The server should orchestrate jobs and receive ordinary PBS backup streams rather than remotely walking the host filesystem through FUSE.
 
 ## Windows backups
 
@@ -134,7 +134,7 @@ The target is more than copying `C:\Users` into an archive. PBS-X should support
 
 ### File backups
 
-The first implementation should use VSS to obtain a consistent filesystem view and expose that snapshot through the agent data plane. The PBS-X server can initially run `proxmox-backup-client` against the mounted remote filesystem and write a normal `host/<host-id>` snapshot.
+The first implementation should use VSS to obtain a consistent filesystem view, then build the PXAR/chunk stream on the agent and upload it through the native PBS backup protocol into a normal `host/<host-id>` snapshot.
 
 Windows metadata support should include, where possible:
 
@@ -156,7 +156,7 @@ A recovery environment should eventually boot a machine, authenticate to PBS-X, 
 
 Linux uses the same Host, Job and datastore model as Windows.
 
-For first-generation file backup, the agent should pick an appropriate consistent snapshot provider before exposing the filesystem to the PBS-X server:
+For file backup, the agent should pick an appropriate consistent snapshot provider before scanning and uploading the filesystem:
 
 - ZFS snapshot;
 - Btrfs snapshot;
@@ -167,9 +167,9 @@ The PBS Plus implementations are references and should be hardened before being 
 
 Linux system/image backup can later stream snapshot block devices into PBS fixed-index images.
 
-## Architecture generations
+## Backup architecture
 
-### Generation 1: native PBS UI, PBS Plus-derived data plane
+PBS-X is designed around the native agent-side data path from the start:
 
 ```text
 Windows/Linux Host
@@ -177,40 +177,36 @@ Windows/Linux Host
         | PBS-X agent
         | VSS / ZFS / Btrfs / LVM
         v
-remote snapshot filesystem
+consistent filesystem snapshot
         |
-        | aRPC + mTLS
+        | local scan + metadata capture
+        | PXAR writer
+        | chunking / hashing / dedup negotiation
         v
-PBS-X host data-plane service
-        |
-        | FUSE
-        v
-proxmox-backup-client
+PBS backup protocol
         |
         | --backup-type host
-        | --backup-id <host-id>
+        | backup-id = <host-id>
         v
-PBS datastore
+PBS-X datastore
 ```
 
-This already produces ordinary PBS snapshots and therefore reuses normal deduplication, chunk storage, verification, pruning, sync, tape and namespace behavior.
+The server owns policy, ACLs, schedules, task history, datastore selection and orchestration. The agent owns the filesystem snapshot, scan and data production. This keeps filesystem latency local to the protected machine and avoids building a FUSE transport that would later need to be replaced.
 
-### Generation 2: agent-side PXAR/chunking
+PBS Plus aRPC remains useful for control operations, inventory, restore/file-browsing requests and snapshot-provider plumbing where appropriate. It is not required to sit in the bulk backup data path.
+
+### Image/system backup
+
+Image backup is a second producer using the same host identity and snapshot model:
 
 ```text
-snapshot
-   -> agent filesystem scan
-   -> PXAR writer
-   -> chunk/hash/dedup negotiation
-   -> PBS backup protocol
-   -> datastore
+VSS/raw volume or Linux snapshot block device
+        -> block reader
+        -> PBS chunking/fixed-index image stream
+        -> host/<host-id>/<snapshot>
 ```
 
-This removes the remote-FUSE filesystem walk from the hot path while keeping the stored snapshots compatible with PBS.
-
-### Generation 3: image backup and bare-metal recovery
-
-File backup remains available, but hosts can also protect selected volumes/disks as image archives with enough layout metadata for full-machine recovery.
+A single host snapshot may eventually contain PXAR file archives, one or more image archives and disk-layout metadata. File-level backup and bare-metal protection therefore stay inside the same PBS datastore model rather than becoming separate products.
 
 ## Development phases
 
@@ -226,25 +222,27 @@ File backup remains available, but hosts can also protect selected volumes/disks
    - Native host backup-job configuration.
    - Stable `host/<host-id>` snapshot identity.
 
-3. **PBS Plus-derived data plane**
-   - Import/adapt aRPC, mTLS, agent filesystem and snapshot-provider pieces.
+3. **PBS Plus-derived agent/control foundation**
+   - Import/adapt aRPC, mTLS, agent filesystem metadata and snapshot-provider pieces.
    - Preserve PBS Plus MIT attribution.
    - Connect agent identity to PBS-X Host identity.
-   - Replace PBS Plus job-ID backup grouping with Host ID grouping.
+   - Keep bulk backup data off the FUSE path.
 
-4. **Linux file backup**
-   - Agent snapshot -> remote filesystem -> server-side `proxmox-backup-client`.
+4. **Native agent-side file backup protocol**
+   - Reuse/port the PBS client, PXAR writer and chunk-upload logic for the cross-platform agent.
+   - Preserve `host/<host-id>` grouping and normal PBS manifests/indexes.
+   - Make the implementation usable by both Linux and Windows providers.
+
+5. **Linux file backup**
+   - ZFS/Btrfs/LVM/direct snapshot modes.
+   - Agent-side filesystem scan and PXAR/chunk upload.
    - Restore to the registered host.
-   - ZFS/Btrfs/LVM/direct modes.
 
-5. **Windows file backup**
+6. **Windows file backup**
    - Windows service integration.
    - VSS-backed filesystem backup.
+   - Agent-side PXAR/chunk upload.
    - Windows metadata and restore behavior.
-
-6. **Agent-side PXAR/chunk upload**
-   - Move filesystem walk/chunking off the PBS server.
-   - Keep snapshot format and datastore behavior native to PBS.
 
 7. **Linux image/system backup**
    - Snapshot block-device backup and restore.
@@ -266,7 +264,7 @@ The current implementation pass should establish:
 - per-host detail navigation;
 - host backup-job configuration tied to datastore/namespace;
 - PBS Plus-derived agent/data-plane source imported under explicit MIT attribution;
-- the interfaces needed for a job to eventually request an agent snapshot and invoke `proxmox-backup-client` with `--backup-type host --backup-id <host-id>`.
+- the interfaces needed for a job to request an agent snapshot and drive native agent-side PXAR/chunk upload into `host/<host-id>`.
 
 It is acceptable for build cleanup to follow once the source is in a proper PBS/Rust/Go build environment. The data model and storage identity should be correct before spending time polishing packaging.
 

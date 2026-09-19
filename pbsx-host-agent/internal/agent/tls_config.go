@@ -155,12 +155,16 @@ func clearAuthEntries() {
 }
 
 func renewCertificate() error {
+	hostID, err := AgentHostID()
+	if err != nil {
+		return fmt.Errorf("renewCertificate: failed to get host id - %w", err)
+	}
 	hostname, err := host.AgentHostname()
 	if err != nil {
 		return fmt.Errorf("renewCertificate: failed to get hostname - %w", err)
 	}
 
-	csr, privKey, err := mtls.GenerateCSR(hostname, 2048)
+	csr, privKey, err := mtls.GenerateCSR(hostID, 2048)
 	if err != nil {
 		return fmt.Errorf("renewCertificate: generating csr failed -> %w", err)
 	}
@@ -173,10 +177,13 @@ func renewCertificate() error {
 	}
 
 	reqBody, err := json.Marshal(&BootstrapRequest{
+		HostID:          hostID,
 		Hostname:        hostname,
 		Drives:          drives,
 		CSR:             encodedCSR,
 		OperatingSystem: runtime.GOOS,
+		Architecture:    runtime.GOARCH,
+		AgentVersion:    conf.Version,
 	})
 	if err != nil {
 		return fmt.Errorf("renewCertificate: failed to marshal bootstrap request: %w", err)
@@ -184,7 +191,7 @@ func renewCertificate() error {
 
 	renewResp := &BootstrapResponse{}
 
-	_, err = AgentHTTPRequest(http.MethodPost, "/plus/agent/renew", bytes.NewBuffer(reqBody), renewResp)
+	_, err = AgentHTTPRequest(http.MethodPost, "/pbsx/agent/renew", bytes.NewBuffer(reqBody), renewResp)
 	if err != nil {
 		return fmt.Errorf("renewCertificate: failed to fetch renewed certificate: %w", err)
 	}

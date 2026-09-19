@@ -63,7 +63,7 @@ func cmdVerify(verifyID *string) {
 
 	address := fmt.Sprintf("%s%s", strings.TrimSuffix(uri.Hostname(), ":"), conf.ARPCServerPort)
 	headers := http.Header{}
-	headers.Add("X-PBS-Plus-VerifyID", *verifyID)
+	headers.Add("X-PBSX-VerifyID", *verifyID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -156,7 +156,7 @@ func ExecVerification(verifyID string) (*exec.Cmd, error) {
 	}
 	token := base64.StdEncoding.EncodeToString(tokenBytes)
 
-	tokenFile := filepath.Join(os.TempDir(), fmt.Sprintf(".pbs-plus-token-verify-%s", verifyID))
+	tokenFile := filepath.Join(os.TempDir(), fmt.Sprintf(".pbsx-token-verify-%s", verifyID))
 	if err := os.WriteFile(tokenFile, []byte(token), 0600); err != nil {
 		return nil, err
 	}

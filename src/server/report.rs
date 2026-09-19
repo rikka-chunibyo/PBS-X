@@ -47,6 +47,7 @@ fn files() -> Vec<(&'static str, Vec<&'static str>)> {
                 "/etc/proxmox-backup/sync.cfg",
                 "/etc/proxmox-backup/prune.cfg",
                 "/etc/proxmox-backup/verification.cfg",
+                "/etc/proxmox-backup/host-backup.cfg",
             ],
         ),
         (

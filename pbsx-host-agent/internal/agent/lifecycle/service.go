@@ -9,8 +9,8 @@ StartLimitBurst=20
 
 [Service]
 Type=simple
-User=pbsplus
-Group=pbsplus
+User=root
+Group=root
 WorkingDirectory=/var/lib/pbsx-agent
 ExecStart={{Path}}
 Restart=always
@@ -40,7 +40,7 @@ name="{{DisplayName}}"
 description="{{Description}}"
 
 command="{{Path}}"
-command_user="pbsplus:pbsplus"
+command_user="root:root"
 directory="/var/lib/pbsx-agent"
 agent_env="/etc/pbsx-agent/agent.env"
 
@@ -57,9 +57,9 @@ depend() {
 }
 
 start_pre() {
-    checkpath --directory --owner pbsplus:pbsplus --mode 0755 /run/pbsx-agent
-    checkpath --directory --owner pbsplus:pbsplus --mode 0750 /var/log/pbsx-agent
-    checkpath --directory --owner pbsplus:pbsplus --mode 0750 /var/lib/pbsx-agent
+    checkpath --directory --owner root:root --mode 0755 /run/pbsx-agent
+    checkpath --directory --owner root:root --mode 0750 /var/log/pbsx-agent
+    checkpath --directory --owner root:root --mode 0750 /var/lib/pbsx-agent
     
     if [ -f "$agent_env" ]; then
         while IFS= read -r line || [ -n "$line" ]; do

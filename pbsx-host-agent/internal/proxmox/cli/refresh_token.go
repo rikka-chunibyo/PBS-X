@@ -260,7 +260,7 @@ func (token *APIToken) saveToFile() error {
 	if err != nil {
 		return err
 	}
-	file, err := os.OpenFile(filepath.Join(conf.DbBasePath, "pbs-plus-token.json"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	file, err := os.OpenFile(filepath.Join(conf.DbBasePath, "pbsx-token.json"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
 	}
@@ -279,7 +279,7 @@ func (token *APIToken) saveToFile() error {
 }
 
 func getAPITokenFromFile() (*APIToken, error) {
-	jsonFile, err := os.Open(filepath.Join(conf.DbBasePath, "pbs-plus-token.json"))
+	jsonFile, err := os.Open(filepath.Join(conf.DbBasePath, "pbsx-token.json"))
 	if err != nil {
 		return nil, err
 	}

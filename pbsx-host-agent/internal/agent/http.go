@@ -10,7 +10,6 @@ import (
 
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
-	"github.com/pbs-x/pbsx-host-agent/internal/host"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
 
@@ -63,14 +62,14 @@ func AgentHTTPRequestAttempt(method, url string, body io.Reader, respBody any) (
 		return nil, fmt.Errorf("AgentHTTPRequestAttempt: error creating http request -> %w", err)
 	}
 
-	hostname, err := host.AgentHostname()
+	hostID, err := AgentHostID()
 	if err != nil {
-		return nil, fmt.Errorf("AgentHTTPRequestAttempt: failed to get hostname -> %w", err)
+		return nil, fmt.Errorf("AgentHTTPRequestAttempt: failed to get host id -> %w", err)
 	}
 
 	req.Header.Add("Content-Type", "application/json")
-	req.Header.Add("X-PBS-Agent", hostname)
-	req.Header.Add("X-PBS-Plus-Version", conf.Version)
+	req.Header.Add("X-PBS-Agent", hostID)
+	req.Header.Add("X-PBSX-Version", conf.Version)
 
 	tlsConfig, err := GetTLSConfig()
 	if err != nil {

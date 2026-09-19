@@ -45,7 +45,7 @@ func isCertError(err error) bool {
 }
 
 // IsHostNotExpected checks if an error indicates the agent host was
-// because ConnectARPC uses plain hostname without X-PBS-Plus-BackupID
+// because ConnectARPC uses plain hostname without X-PBSX-BackupID
 func IsHostNotExpected(err error) bool {
 	if errors.Is(err, ErrHostNotExpected) {
 		return true
@@ -72,6 +72,10 @@ func ClearCertificates() {
 }
 
 func UpdateDrives() error {
+	hostID, err := agent.AgentHostID()
+	if err != nil {
+		return err
+	}
 	hostname, err := host.AgentHostname()
 	if err != nil {
 		return err
@@ -81,9 +85,12 @@ func UpdateDrives() error {
 		return err
 	}
 	reqBody, err := json.Marshal(map[string]any{
-		"hostname": hostname,
-		"drives":   drives,
-		"os":       runtime.GOOS,
+		"host-id":       hostID,
+		"hostname":      hostname,
+		"drives":        drives,
+		"os":            runtime.GOOS,
+		"architecture":  runtime.GOARCH,
+		"agent-version": conf.Version,
 	})
 	if err != nil {
 		return err
@@ -92,7 +99,7 @@ func UpdateDrives() error {
 
 	resp, err := agent.AgentHTTPRequest(
 		http.MethodPost,
-		"/api2/json/d2d/target/agent",
+		"/pbsx/agent/status",
 		bytes.NewBuffer(reqBody),
 		nil,
 	)
@@ -166,7 +173,7 @@ func ConnectARPC(
 	if err != nil {
 		return nil, err
 	}
-	clientId, err := host.AgentHostname()
+	clientId, err := agent.AgentHostID()
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +185,7 @@ func ConnectARPC(
 	)
 	headers := http.Header{}
 	headers.Add("X-PBS-Agent", clientId)
-	headers.Add("X-PBS-Plus-Version", version)
+	headers.Add("X-PBSX-Version", version)
 
 	certErrCh := make(chan error, 1)
 

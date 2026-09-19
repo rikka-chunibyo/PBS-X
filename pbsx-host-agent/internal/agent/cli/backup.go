@@ -50,7 +50,7 @@ type backupSession struct {
 	once     sync.Once
 }
 
-const BACKUP_MODE_PREFIX = "pbs-plus--child-backup-mode:"
+const BACKUP_MODE_PREFIX = "pbsx--child-backup-mode:"
 
 func (s *backupSession) Close() {
 	log.Info("session: closing")
@@ -116,7 +116,7 @@ func cmdBackup(sourceMode, readMode, drive, backupID *string) {
 
 	address := fmt.Sprintf("%s%s", strings.TrimSuffix(uri.Hostname(), ":"), conf.ARPCServerPort)
 	headers := http.Header{}
-	headers.Add("X-PBS-Plus-BackupID", *backupID)
+	headers.Add("X-PBSX-BackupID", *backupID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -252,7 +252,7 @@ func ExecBackup(sourceMode string, readMode string, drive string, backupID strin
 	}
 	token := base64.StdEncoding.EncodeToString(tokenBytes)
 
-	tokenFile := filepath.Join(os.TempDir(), fmt.Sprintf(".pbs-plus-token-backup-%s", backupID))
+	tokenFile := filepath.Join(os.TempDir(), fmt.Sprintf(".pbsx-token-backup-%s", backupID))
 	if err := os.WriteFile(tokenFile, []byte(token), 0600); err != nil {
 		return "", -1, err
 	}

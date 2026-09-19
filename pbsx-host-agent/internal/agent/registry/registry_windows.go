@@ -41,9 +41,53 @@ func ensureInitialized() error {
 		legacySecretFilePath = filepath.Join(serviceDataDir, "secrets.json")
 		legacyKeyFilePath = filepath.Join(serviceDataDir, "master.key")
 
+		if err := migrateLegacyRegistryPath(legacyConfig, CONFIG); err != nil {
+			initErr = err
+			return
+		}
+		if err := migrateLegacyRegistryPath(legacyAuth, AUTH); err != nil {
+			initErr = err
+			return
+		}
 		_ = migrateFromFileSecretsToRegistry()
 	})
 	return initErr
+}
+
+func migrateLegacyRegistryPath(oldPath, newPath string) error {
+	oldKey, err := registry.OpenKey(registry.LOCAL_MACHINE, oldPath, registry.QUERY_VALUE)
+	if err != nil {
+		return nil
+	}
+	defer oldKey.Close()
+
+	names, err := oldKey.ReadValueNames(0)
+	if err != nil {
+		return fmt.Errorf("read legacy registry values %s: %w", oldPath, err)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+
+	newKey, _, err := registry.CreateKey(registry.LOCAL_MACHINE, newPath, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return fmt.Errorf("create PBS-X registry path %s: %w", newPath, err)
+	}
+	defer newKey.Close()
+
+	for _, name := range names {
+		if _, _, err := newKey.GetStringValue(name); err == nil {
+			continue
+		}
+		value, _, err := oldKey.GetStringValue(name)
+		if err != nil {
+			continue
+		}
+		if err := newKey.SetStringValue(name, value); err != nil {
+			return fmt.Errorf("migrate registry value %s/%s: %w", oldPath, name, err)
+		}
+	}
+	return nil
 }
 
 func migrateFromFileSecretsToRegistry() error {

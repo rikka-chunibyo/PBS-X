@@ -17,6 +17,7 @@ import (
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/binswap"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/cli"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/lifecycle"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/updater"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
 	"github.com/pbs-x/pbsx-host-agent/internal/crypto"
@@ -35,7 +36,7 @@ type pbsService struct {
 }
 
 func (p *pbsService) Start(s service.Service) error {
-	if os.Getenv("PBS_PLUS_DISABLE_AUTO_UPDATE") != "true" {
+	if conf.Env.EnableAutoUpdate {
 		_, _ = updater.New(updater.Config{
 			MinConstraint: ">= 0.52.0", PollInterval: 2 * time.Minute, FetchOnStart: true,
 			UpgradeConfirm: func(v string) bool { return true },
@@ -62,6 +63,17 @@ func (p *pbsService) Start(s service.Service) error {
 func (p *pbsService) run() {
 	_ = log.L.SetServiceLogger()
 	_ = windows.SetPriorityClass(windows.CurrentProcess(), 0x00000040)
+	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "ServerURL", Value: conf.Env.InitServerURL})
+	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "BootstrapToken", Value: conf.Env.InitBootstrapToken})
+	if _, err := agent.InitializeHostID(); err != nil {
+		log.Error(err, "failed to initialize PBS-X host identity")
+		return
+	}
+	fingerprint := os.Getenv("PBSX_INIT_SERVER_CA_FINGERPRINT")
+	if fingerprint == "" {
+		fingerprint = os.Getenv("PBS_PLUS_INIT_SERVER_CA_FINGERPRINT")
+	}
+	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "ServerCAFingerprint", Value: fingerprint})
 
 	if err := lifecycle.WaitForServerURL(p.ctx); err != nil {
 		return

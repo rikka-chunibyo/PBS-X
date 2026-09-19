@@ -112,7 +112,7 @@ func TestStreamPipeCarriesAgentVersion(t *testing.T) {
 
 	headers := http.Header{}
 	headers.Set("X-PBS-Agent", "client")
-	headers.Set("X-PBS-Plus-Version", "9.9.9")
+	headers.Set("X-PBSX-Version", "9.9.9")
 
 	if _, err := ConnectToServer(t.Context(), addr, headers, newTestClientTLS(t)); err != nil {
 		t.Fatalf("connect: %v", err)
@@ -124,7 +124,7 @@ func TestStreamPipeCarriesAgentVersion(t *testing.T) {
 		t.Fatal("stream pipe not registered")
 	}
 	if got := pipe.GetVersion(); got != "9.9.9" {
-		t.Fatalf("server pipe version = %q, want the agent-reported X-PBS-Plus-Version", got)
+		t.Fatalf("server pipe version = %q, want the agent-reported X-PBSX-Version", got)
 	}
 }
 
@@ -156,7 +156,7 @@ func TestQuicPipeCarriesAgentVersion(t *testing.T) {
 
 	headers := http.Header{}
 	headers.Set("X-PBS-Agent", "client")
-	headers.Set("X-PBS-Plus-Version", "9.9.9")
+	headers.Set("X-PBSX-Version", "9.9.9")
 
 	if _, err := DialQuic(t.Context(), listener.Addr().String(), newTestClientTLS(t), headers); err != nil {
 		t.Fatalf("dial: %v", err)
@@ -168,6 +168,6 @@ func TestQuicPipeCarriesAgentVersion(t *testing.T) {
 		t.Fatal("quic pipe not registered")
 	}
 	if got := qPipe.GetVersion(); got != "9.9.9" {
-		t.Fatalf("server pipe version = %q, want the agent-reported X-PBS-Plus-Version", got)
+		t.Fatalf("server pipe version = %q, want the agent-reported X-PBSX-Version", got)
 	}
 }

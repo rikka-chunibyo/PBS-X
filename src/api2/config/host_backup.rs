@@ -1,5 +1,4 @@
 use anyhow::{bail, Error};
-use hex::FromHex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -206,10 +205,7 @@ pub fn update_host_backup_job(
     let _lock = pbs_config::host_backup::lock_config()?;
     let (mut config, expected_digest) = pbs_config::host_backup::config()?;
 
-    if let Some(ref digest) = digest {
-        let digest = <[u8; 32]>::from_hex(digest)?;
-        crate::tools::detect_modified_configuration_file(&digest, &expected_digest)?;
-    }
+    pbs_config::detect_modified_configuration_file(digest.as_deref(), &expected_digest)?;
 
     let mut data: HostBackupJobConfig = config.lookup("host-backup", &id)?;
     if !check_modify_access(&user_info, &auth_id, &data) {
@@ -296,10 +292,7 @@ pub fn delete_host_backup_job(
     let _lock = pbs_config::host_backup::lock_config()?;
     let (mut config, expected_digest) = pbs_config::host_backup::config()?;
 
-    if let Some(ref digest) = digest {
-        let digest = <[u8; 32]>::from_hex(digest)?;
-        crate::tools::detect_modified_configuration_file(&digest, &expected_digest)?;
-    }
+    pbs_config::detect_modified_configuration_file(digest.as_deref(), &expected_digest)?;
 
     let job: HostBackupJobConfig = config.lookup("host-backup", &id)?;
     if !check_modify_access(&user_info, &auth_id, &job) {

@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/pbs-x/pbsx-host-agent/internal/conf"
 )
 
 // OldStatePath is the legacy path used before v0.79.0.
@@ -35,7 +37,16 @@ func TryMigrate() bool {
 	if err == nil && newInfo.IsDir() {
 		entries, err := os.ReadDir(newPath)
 		if err == nil && len(entries) > 0 {
-			fmt.Printf("[pbs-x] migration: new path already exists with content, skipping\n")
+			// On the first migration run conf may deliberately keep using the legacy
+			// directory until restart. Once the process has selected the PBS-X path,
+			// the old directory can safely be moved aside.
+			if conf.StatePrefix != OldStatePath {
+				backupPath := OldStatePath + ".backup.legacy"
+				if _, statErr := os.Stat(backupPath); os.IsNotExist(statErr) {
+					_ = os.Rename(OldStatePath, backupPath)
+				}
+			}
+			fmt.Printf("[pbs-x] migration: new path already exists with content, using it on next/current start\n")
 			return true
 		}
 	}
@@ -70,9 +81,17 @@ func TryMigrate() bool {
 		return false
 	}
 
+	if conf.StatePrefix == OldStatePath {
+		// conf selected the legacy path during package initialization. Keep it in
+		// place for this process so we do not recreate a fresh legacy tree after
+		// migrating. On the next start, the populated PBS-X path wins and the old
+		// tree is moved aside.
+		fmt.Printf("[pbs-x] migration: copied state; restart will switch to %s\n", newPath)
+		return true
+	}
+
 	if err := os.Rename(OldStatePath, backupPath); err != nil {
 		fmt.Printf("[pbs-x] migration: data migrated but failed to backup old directory: %v\n", err)
-		// Don't return false - data is migrated, just backup failed
 	} else {
 		fmt.Printf("[pbs-x] migration: complete, backed up old directory to %s\n", backupPath)
 	}

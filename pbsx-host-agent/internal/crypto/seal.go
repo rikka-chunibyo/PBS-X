@@ -34,7 +34,7 @@ func getSealKeyPath() string {
 	if sealKeyFile != "" {
 		return sealKeyFile
 	}
-	return "/var/lib/pbs-plus/.seal.key"
+	return "/var/lib/pbsx-agent/.seal.key"
 }
 
 func naclKeyPath() string {

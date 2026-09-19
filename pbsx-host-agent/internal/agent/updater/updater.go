@@ -324,7 +324,7 @@ func (u *Updater) applyUpdate(version string, embedded bool) error {
 }
 
 func (u *Updater) fetchLatestVersion() (string, bool, error) {
-	resp, err := agent.AgentHTTPRequest(http.MethodGet, "/api2/json/plus/version", nil, nil)
+	resp, err := agent.AgentHTTPRequest(http.MethodGet, "/api2/json/pbsx/version", nil, nil)
 	if err != nil {
 		return "", false, err
 	}
@@ -350,7 +350,7 @@ func (u *Updater) fetchLatestVersion() (string, bool, error) {
 	return vr.Version, vr.Embedded, nil
 }
 func (u *Updater) fetchECDSASignature(params string) ([]byte, error) {
-	url := fmt.Sprintf("/api2/json/plus/binary/ecdsa-sig?%s", params)
+	url := fmt.Sprintf("/api2/json/pbsx/binary/ecdsa-sig?%s", params)
 	rc, err := agent.AgentHTTPRequest(http.MethodGet, url, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("fetch ECDSA signature: %w", err)
@@ -372,7 +372,7 @@ func (u *Updater) fetchECDSASignature(params string) ([]byte, error) {
 }
 
 func (u *Updater) fetchBinary(params string) ([]byte, error) {
-	url := fmt.Sprintf("/api2/json/plus/binary?%s", params)
+	url := fmt.Sprintf("/api2/json/pbsx/binary?%s", params)
 	rc, err := agent.AgentHTTPRequest(http.MethodGet, url, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("fetch binary: %w", err)
@@ -433,7 +433,7 @@ func verifyWithEd25519(binary, sigData []byte) error {
 }
 
 func (u *Updater) fetchEd25519Signature(params string) ([]byte, error) {
-	url := fmt.Sprintf("/api2/json/plus/binary/sig?%s", params)
+	url := fmt.Sprintf("/api2/json/pbsx/binary/sig?%s", params)
 	rc, err := agent.AgentHTTPRequest(http.MethodGet, url, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("fetch Ed25519 signature: %w", err)

@@ -117,7 +117,7 @@ func cmdRestore(restoreID *string, srcPath *string, destPath *string, restoreMod
 
 	address := fmt.Sprintf("%s%s", strings.TrimSuffix(uri.Hostname(), ":"), conf.ARPCServerPort)
 	headers := http.Header{}
-	headers.Add("X-PBS-Plus-RestoreID", *restoreID)
+	headers.Add("X-PBSX-RestoreID", *restoreID)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -233,7 +233,7 @@ func ExecRestore(id, srcPath, destPath string, mode int) (*exec.Cmd, error) {
 	}
 	token := base64.StdEncoding.EncodeToString(tokenBytes)
 
-	tokenFile := filepath.Join(os.TempDir(), fmt.Sprintf(".pbs-plus-token-restore-%s", id))
+	tokenFile := filepath.Join(os.TempDir(), fmt.Sprintf(".pbsx-token-restore-%s", id))
 	if err := os.WriteFile(tokenFile, []byte(token), 0600); err != nil {
 		return nil, err
 	}

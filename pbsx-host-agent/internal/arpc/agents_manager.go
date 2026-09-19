@@ -81,17 +81,17 @@ func (sm *AgentsManager) getClientId(state tls.ConnectionState, headers http.Hea
 		clientID = clientCertificate.Subject.CommonName
 	}
 
-	jobIdHeader := headers.Get("X-PBS-Plus-BackupID")
+	jobIdHeader := headers.Get("X-PBSX-BackupID")
 	if jobIdHeader != "" {
 		clientID = clientID + "|" + jobIdHeader
 	}
 
-	restoreIdHeader := headers.Get("X-PBS-Plus-RestoreID")
+	restoreIdHeader := headers.Get("X-PBSX-RestoreID")
 	if restoreIdHeader != "" {
 		clientID = clientID + "|" + restoreIdHeader + "|restore"
 	}
 
-	verifyIdHeader := headers.Get("X-PBS-Plus-VerifyID")
+	verifyIdHeader := headers.Get("X-PBSX-VerifyID")
 	if verifyIdHeader != "" {
 		clientID = clientID + "|" + verifyIdHeader + "|verify"
 	}
@@ -158,7 +158,7 @@ func (sm *AgentsManager) registerStreamPipe(ctx context.Context, smuxTun *smux.S
 	if err != nil {
 		return nil, "", err
 	}
-	pipe.version = headers.Get("X-PBS-Plus-Version")
+	pipe.version = headers.Get("X-PBSX-Version")
 
 	sm.regMu.Lock()
 	if existingSession, exists := sm.sessions.Get(clientID); exists {
@@ -229,7 +229,7 @@ func (sm *AgentsManager) registerQuicPipe(ctx context.Context, conn *quic.Conn, 
 	}
 
 	qPipe := NewQuicServerPipe(ctx, conn)
-	qPipe.version = headers.Get("X-PBS-Plus-Version")
+	qPipe.version = headers.Get("X-PBSX-Version")
 
 	sm.regMu.Lock()
 	if existingSession, exists := sm.sessions.Get(clientID); exists {

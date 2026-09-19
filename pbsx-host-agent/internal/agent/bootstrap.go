@@ -23,10 +23,13 @@ import (
 )
 
 type BootstrapRequest struct {
+	HostID          string             `json:"host-id"`
 	Hostname        string             `json:"hostname"`
 	CSR             string             `json:"csr"`
 	Drives          []fswire.DriveInfo `json:"drives"`
 	OperatingSystem string             `json:"os"`
+	Architecture    string             `json:"architecture"`
+	AgentVersion    string             `json:"agent-version"`
 }
 
 type BootstrapResponse struct {
@@ -45,12 +48,17 @@ func Bootstrap() error {
 		return fmt.Errorf("Bootstrap: server url not found -> %w", err)
 	}
 
+	hostID, err := AgentHostID()
+	if err != nil {
+		return fmt.Errorf("Bootstrap: failed to get host id -> %w", err)
+	}
+
 	hostname, err := host.AgentHostname()
 	if err != nil {
 		return fmt.Errorf("Bootstrap: failed to get hostname -> %w", err)
 	}
 
-	csr, privKey, err := mtls.GenerateCSR(hostname, 2048)
+	csr, privKey, err := mtls.GenerateCSR(hostID, 2048)
 	if err != nil {
 		return fmt.Errorf("Bootstrap: generating csr failed -> %w", err)
 	}
@@ -63,10 +71,13 @@ func Bootstrap() error {
 	}
 
 	reqBody, err := json.Marshal(&BootstrapRequest{
+		HostID:          hostID,
 		Hostname:        hostname,
 		Drives:          drives,
 		CSR:             encodedCSR,
 		OperatingSystem: runtime.GOOS,
+		Architecture:    runtime.GOARCH,
+		AgentVersion:    conf.Version,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to marshal bootstrap request: %w", err)
@@ -83,7 +94,7 @@ func Bootstrap() error {
 			"https://%s%s%s",
 			strings.TrimSuffix(parsedServerUrl.Hostname(), ":"),
 			conf.AgentAPIPort,
-			"/plus/agent/bootstrap",
+			"/pbsx/agent/bootstrap",
 		),
 		bytes.NewBuffer(reqBody),
 	)

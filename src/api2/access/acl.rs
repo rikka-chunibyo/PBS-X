@@ -6,18 +6,19 @@ use proxmox_router::{Permission, Router, RpcEnvironment};
 use proxmox_schema::api;
 
 use pbs_api_types::{
-    ACL_PATH_SCHEMA, ACL_PROPAGATE_SCHEMA, AclListItem, Authid, PRIV_PERMISSIONS_MODIFY,
-    PRIV_SYS_AUDIT, PROXMOX_CONFIG_DIGEST_SCHEMA, PROXMOX_GROUP_ID_SCHEMA,
+    ACL_PATH_SCHEMA, ACL_PROPAGATE_SCHEMA, Authid, PRIV_PERMISSIONS_MODIFY, PRIV_SYS_AUDIT,
+    PROXMOX_CONFIG_DIGEST_SCHEMA, PROXMOX_GROUP_ID_SCHEMA,
 };
 
 use pbs_config::acl::{AclTreeNode, ROLE_NAMES};
+use pbsx_api_types::PbsxAclListItem;
 
 use pbs_config::CachedUserInfo;
 
 fn extract_acl_node_data(
     node: &AclTreeNode,
     path: &str,
-    list: &mut Vec<AclListItem>,
+    list: &mut Vec<PbsxAclListItem>,
     exact: bool,
     auth_id_filter: &Option<Authid>,
 ) {
@@ -36,7 +37,7 @@ fn extract_acl_node_data(
         }
 
         for (role, propagate) in roles {
-            list.push(AclListItem {
+            list.push(PbsxAclListItem {
                 path: if path.is_empty() {
                     String::from("/")
                 } else {
@@ -55,7 +56,7 @@ fn extract_acl_node_data(
         }
 
         for (role, propagate) in roles {
-            list.push(AclListItem {
+            list.push(PbsxAclListItem {
                 path: if path.is_empty() {
                     String::from("/")
                 } else {
@@ -96,7 +97,7 @@ fn extract_acl_node_data(
         description: "ACL entry list.",
         type: Array,
         items: {
-            type: AclListItem,
+            type: PbsxAclListItem,
         }
     },
     access: {
@@ -109,7 +110,7 @@ pub fn read_acl(
     path: Option<String>,
     exact: bool,
     rpcenv: &mut dyn RpcEnvironment,
-) -> Result<Vec<AclListItem>, Error> {
+) -> Result<Vec<PbsxAclListItem>, Error> {
     let auth_id = rpcenv.get_auth_id().unwrap().parse()?;
 
     let user_info = CachedUserInfo::new()?;
@@ -123,7 +124,7 @@ pub fn read_acl(
 
     let (mut tree, digest) = pbs_config::acl::config()?;
 
-    let mut list: Vec<AclListItem> = Vec::new();
+    let mut list: Vec<PbsxAclListItem> = Vec::new();
     if let Some(path) = &path {
         if let Some(node) = &tree.find_node(path) {
             extract_acl_node_data(node, path, &mut list, exact, &auth_id_filter);

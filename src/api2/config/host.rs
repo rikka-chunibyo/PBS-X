@@ -1,5 +1,4 @@
 use anyhow::{bail, Error};
-use hex::FromHex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -8,7 +7,8 @@ use proxmox_schema::api;
 
 use pbs_api_types::{Authid, PROXMOX_CONFIG_DIGEST_SCHEMA};
 use pbsx_api_types::{
-    HostConfig, HostConfigUpdater, HOST_ID_SCHEMA, PRIV_HOST_AUDIT, PRIV_HOST_MODIFY,
+    HostConfig, HostConfigUpdater, HostEnrollmentToken, HOST_ID_SCHEMA, PRIV_HOST_AUDIT,
+    PRIV_HOST_MODIFY,
 };
 use pbs_config::CachedUserInfo;
 
@@ -152,10 +152,7 @@ pub fn update_host(
     let _lock = pbs_config::host::lock_config()?;
     let (mut config, expected_digest) = pbs_config::host::config()?;
 
-    if let Some(ref digest) = digest {
-        let digest = <[u8; 32]>::from_hex(digest)?;
-        crate::tools::detect_modified_configuration_file(&digest, &expected_digest)?;
-    }
+    pbs_config::detect_modified_configuration_file(digest.as_deref(), &expected_digest)?;
 
     let mut data: HostConfig = config.lookup("host", &name)?;
 
@@ -208,10 +205,7 @@ pub fn delete_host(name: String, digest: Option<String>) -> Result<(), Error> {
     let _lock = pbs_config::host::lock_config()?;
     let (mut config, expected_digest) = pbs_config::host::config()?;
 
-    if let Some(ref digest) = digest {
-        let digest = <[u8; 32]>::from_hex(digest)?;
-        crate::tools::detect_modified_configuration_file(&digest, &expected_digest)?;
-    }
+    pbs_config::detect_modified_configuration_file(digest.as_deref(), &expected_digest)?;
 
     let (job_config, _job_digest) = pbs_config::host_backup::config()?;
     let jobs: Vec<pbsx_api_types::HostBackupJobConfig> =
@@ -236,10 +230,41 @@ pub fn delete_host(name: String, digest: Option<String>) -> Result<(), Error> {
     Ok(())
 }
 
+
+#[api(
+    protected: true,
+    input: {
+        properties: {
+            name: { schema: HOST_ID_SCHEMA },
+        },
+    },
+    returns: { type: HostEnrollmentToken },
+    access: {
+        permission: &Permission::Privilege(&["host", "{name}"], PRIV_HOST_MODIFY, false),
+    },
+)]
+/// Generate a short-lived one-time enrollment token for a host.
+pub fn generate_enrollment_token(name: String) -> Result<HostEnrollmentToken, Error> {
+    let (config, _digest) = pbs_config::host::config()?;
+    let host: HostConfig = config.lookup("host", &name)?;
+    if !host.enable {
+        bail!("host '{}' is disabled", name);
+    }
+    crate::server::host::create_enrollment_token(&name)
+}
+
+const ENROLLMENT_TOKEN_ROUTER: Router =
+    Router::new().post(&API_METHOD_GENERATE_ENROLLMENT_TOKEN);
+
+const ITEM_SUBDIRS: proxmox_router::SubdirMap = &[
+    ("enrollment-token", &ENROLLMENT_TOKEN_ROUTER),
+];
+
 const ITEM_ROUTER: Router = Router::new()
     .get(&API_METHOD_READ_HOST)
     .put(&API_METHOD_UPDATE_HOST)
-    .delete(&API_METHOD_DELETE_HOST);
+    .delete(&API_METHOD_DELETE_HOST)
+    .subdirs(ITEM_SUBDIRS);
 
 pub const ROUTER: Router = Router::new()
     .get(&API_METHOD_LIST_HOSTS)

@@ -389,7 +389,10 @@ func EnsureServerCertUsingExistingCA(outDir, org string, keySize, validDays int,
 		hostnames = append(hostnames, hostname)
 	}
 
-	userHostname, ok := os.LookupEnv("PBS_PLUS_HOSTNAME")
+	userHostname, ok := os.LookupEnv("PBSX_HOSTNAME")
+	if !ok {
+		userHostname, ok = os.LookupEnv("PBS_PLUS_HOSTNAME")
+	}
 	if ok {
 		if err := host.ValidateHostname(userHostname); err == nil {
 			hostnames = append(hostnames, userHostname)
@@ -401,7 +404,10 @@ func EnsureServerCertUsingExistingCA(outDir, org string, keySize, validDays int,
 		skPEM, kErr := os.ReadFile(serverKeyPath)
 		caPEM, cErr := os.ReadFile(caCertPath)
 		if sErr == nil && kErr == nil && cErr == nil {
-			serverName := os.Getenv("PBS_PLUS_HOSTNAME")
+			serverName := os.Getenv("PBSX_HOSTNAME")
+			if serverName == "" {
+				serverName = os.Getenv("PBS_PLUS_HOSTNAME")
+			}
 			if vErr := ValidateExistingCert(scPEM, skPEM, caPEM, serverName); vErr == nil {
 				return serverCertPath, serverKeyPath, nil
 			}

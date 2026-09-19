@@ -1,18 +1,16 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use anyhow::Error;
-use lazy_static::lazy_static;
-
 use proxmox_schema::{ApiType, Schema};
+use proxmox_product_config::replace_privileged_config;
 use proxmox_section_config::{SectionConfig, SectionConfigData, SectionConfigPlugin};
 
 use pbsx_api_types::{HostConfig, HOST_ID_SCHEMA};
 
 use crate::{open_backup_lockfile, BackupLockGuard};
 
-lazy_static! {
-    pub static ref CONFIG: SectionConfig = init();
-}
+pub static CONFIG: LazyLock<SectionConfig> = LazyLock::new(init);
 
 fn init() -> SectionConfig {
     let obj_schema = match HostConfig::API_SCHEMA {
@@ -47,7 +45,7 @@ pub fn config() -> Result<(SectionConfigData, [u8; 32]), Error> {
 /// Persist the PBS-X host configuration.
 pub fn save_config(config: &SectionConfigData) -> Result<(), Error> {
     let raw = CONFIG.write(HOST_CFG_FILENAME, config)?;
-    crate::replace_backup_config(HOST_CFG_FILENAME, raw.as_bytes())
+    replace_privileged_config(HOST_CFG_FILENAME, raw.as_bytes())
 }
 
 /// Shell completion helper for host IDs.

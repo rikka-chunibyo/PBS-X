@@ -4,6 +4,42 @@
 //! deliberately reserves three high bits for host management so it can extend ACLs without
 //! forking the separately packaged `pbs-api-types` crate.
 
+
+use serde::{Deserialize, Serialize};
+
+use proxmox_schema::api;
+
+use pbs_api_types::{ACL_PATH_SCHEMA, ACL_PROPAGATE_SCHEMA};
+
+#[api(
+    properties: {
+        path: { schema: ACL_PATH_SCHEMA },
+        propagate: { schema: ACL_PROPAGATE_SCHEMA },
+        "ugid-type": {
+            type: String,
+            description: "ACL identity type (user or group).",
+        },
+        ugid: {
+            type: String,
+            description: "User or group identifier.",
+        },
+        roleid: {
+            type: String,
+            description: "Role identifier, including PBS-X extension roles.",
+        },
+    },
+)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// ACL entry whose role schema can represent both upstream and PBS-X roles.
+pub struct PbsxAclListItem {
+    pub path: String,
+    pub ugid: String,
+    pub ugid_type: String,
+    pub propagate: bool,
+    pub roleid: String,
+}
+
 /// Host.Audit allows reading PBS-X host configuration, inventory and runtime status.
 pub const PRIV_HOST_AUDIT: u64 = 1_u64 << 60;
 /// Host.Modify allows creating, updating and deleting PBS-X hosts and host backup jobs.

@@ -111,7 +111,7 @@ func GetPStart() uint64 {
 
 // '/' becomes '-', a leading '.' is escaped, [A-Za-z0-9_.] stay literal,
 // everything else becomes lowercase \xNN. Used inside UPID worker IDs so
-// pbs-plus UPIDs round-trip with the real daemon's parser.
+// PBS-X UPIDs round-trip with the real daemon's parser.
 func EncodeToHexEscapes(input string) string {
 	var encoded strings.Builder
 	for i := 0; i < len(input); i++ {

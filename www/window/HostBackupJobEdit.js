@@ -41,7 +41,7 @@ Ext.define('PBS.window.HostBackupJobEdit', {
     },
 
     items: {
-	extype: 'inputpanel',
+	xtype: 'inputpanel',
 	onGetValues: function(values) {
 	    let win = this.up('pbsHostBackupJobEdit');
 	    if (!values.id && win.isCreate) {

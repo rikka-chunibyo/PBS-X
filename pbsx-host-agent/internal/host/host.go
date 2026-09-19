@@ -11,7 +11,10 @@ import (
 
 // is validated when sourced from the environment.
 func AgentHostname() (string, error) {
-	h := os.Getenv("PBS_PLUS_HOSTNAME")
+	h := os.Getenv("PBSX_HOSTNAME")
+	if h == "" {
+		h = os.Getenv("PBS_PLUS_HOSTNAME")
+	}
 	if h == "" {
 		return os.Hostname()
 	}

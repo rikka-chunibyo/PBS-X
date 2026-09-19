@@ -11,11 +11,21 @@ use nix::sys::stat::Mode;
 
 use proxmox_sys::fs::{create_path, file_read_optional_string, replace_file, CreateOptions};
 
-use pbsx_api_types::HostAgentStatus;
+use pbsx_api_types::{HostAgentStatus, HostEnrollmentToken};
 use pbs_buildcfg::PROXMOX_BACKUP_STATE_DIR_M;
 use pbs_config::{open_backup_lockfile, BackupLockGuard};
 
 pub const HOST_STATUS_BASEDIR: &str = concat!(PROXMOX_BACKUP_STATE_DIR_M!(), "/host-status");
+pub const HOST_ENROLLMENT_BASEDIR: &str =
+    concat!(PROXMOX_BACKUP_STATE_DIR_M!(), "/pbsx-enrollment");
+
+const HOST_ENROLLMENT_TTL: i64 = 15 * 60;
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct HostEnrollmentRecord {
+    digest: String,
+    expires: i64,
+}
 
 /// A host is shown as online if it has checked in within this many seconds.
 pub const HOST_ONLINE_THRESHOLD: i64 = 180;
@@ -32,9 +42,16 @@ pub fn create_host_status_dir() -> Result<(), Error> {
     create_path(
         HOST_STATUS_BASEDIR,
         Some(options.clone()),
-        Some(options),
+        Some(options.clone()),
     )
     .map_err(|err: Error| format_err!("unable to create PBS-X host status directory - {err}"))?;
+
+    create_path(
+        HOST_ENROLLMENT_BASEDIR,
+        Some(options.clone()),
+        Some(options),
+    )
+    .map_err(|err: Error| format_err!("unable to create PBS-X enrollment directory - {err}"))?;
 
     Ok(())
 }
@@ -83,8 +100,54 @@ pub fn write_host_status(host: &str, status: &HostAgentStatus) -> Result<(), Err
     Ok(())
 }
 
+fn enrollment_path(host: &str) -> PathBuf {
+    let mut path = PathBuf::from(HOST_ENROLLMENT_BASEDIR);
+    path.push(format!("{host}.json"));
+    path
+}
+
+/// Create a new short-lived, one-time enrollment credential. Only its SHA-256 digest is stored.
+pub fn create_enrollment_token(host: &str) -> Result<HostEnrollmentToken, Error> {
+    create_host_status_dir()?;
+
+    let mut raw = [0u8; 32];
+    proxmox_sys::linux::fill_with_random_data(&mut raw)?;
+    let token = hex::encode(raw);
+    let expires = proxmox_time::epoch_i64() + HOST_ENROLLMENT_TTL;
+    let record = HostEnrollmentRecord {
+        digest: hex::encode(openssl::sha::sha256(token.as_bytes())),
+        expires,
+    };
+
+    let path = enrollment_path(host);
+    let _lock = get_lock(&path)?;
+    let raw = serde_json::to_vec(&record)?;
+    let backup_user = pbs_config::backup_user()?;
+    let options = CreateOptions::new()
+        .perm(Mode::from_bits_truncate(0o0640))
+        .owner(backup_user.uid)
+        .group(backup_user.gid);
+    replace_file(&path, &raw, options, true)
+        .map_err(|err| format_err!("unable to persist enrollment token for host '{host}' - {err}"))?;
+
+    Ok(HostEnrollmentToken { token, expires })
+}
+
+/// Remove any outstanding enrollment credential for a host.
+pub fn remove_enrollment_token(host: &str) -> Result<(), Error> {
+    let path = enrollment_path(host);
+    let _lock = get_lock(&path)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+    Ok(())
+}
+
 /// Remove runtime state after deleting a host definition.
 pub fn remove_host_status(host: &str) -> Result<(), Error> {
+    remove_enrollment_token(host)?;
     let path = status_path(host);
     let _lock = get_lock(&path)?;
 
