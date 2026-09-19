@@ -14,7 +14,7 @@ use pbs_api_types::Authid;
 use pbs_config::CachedUserInfo;
 use pbsx_api_types::{
     HostAgentHeartbeat, HostAgentStatus, HostBackupRunCommand, HostBackupRunProgress,
-    HostBackupRunResult, HostRestoreRunCommand, HostRestoreRunResult,
+    HostBackupRunResult, HostRestoreRunCommand, HostRestoreRunProgress, HostRestoreRunResult,
     HostBootstrapRequest, HostBootstrapResponse, HostConfig, HOST_ID_SCHEMA, PRIV_HOST_AGENT,
 };
 
@@ -237,6 +237,24 @@ pub fn claim_restore(
     protected: true,
     input: {
         properties: {
+            progress: { type: HostRestoreRunProgress, flatten: true },
+        },
+    },
+    access: { permission: &Permission::Anybody },
+)]
+/// Persist progress for a currently claimed direct host restore.
+pub fn update_restore_progress(
+    progress: HostRestoreRunProgress,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<(), Error> {
+    ensure_agent_access(&progress.host_id, rpcenv)?;
+    crate::server::host::update_host_restore_progress(&progress)
+}
+
+#[api(
+    protected: true,
+    input: {
+        properties: {
             result: { type: HostRestoreRunResult, flatten: true },
         },
     },
@@ -257,6 +275,7 @@ const NEXT_ROUTER: Router = Router::new().get(&API_METHOD_CLAIM_BACKUP);
 const PROGRESS_ROUTER: Router = Router::new().post(&API_METHOD_UPDATE_BACKUP_PROGRESS);
 const FINISH_ROUTER: Router = Router::new().post(&API_METHOD_FINISH_BACKUP);
 const RESTORE_NEXT_ROUTER: Router = Router::new().get(&API_METHOD_CLAIM_RESTORE);
+const RESTORE_PROGRESS_ROUTER: Router = Router::new().post(&API_METHOD_UPDATE_RESTORE_PROGRESS);
 const RESTORE_FINISH_ROUTER: Router = Router::new().post(&API_METHOD_FINISH_RESTORE);
 
 const SUBDIRS: SubdirMap = &[
@@ -266,6 +285,7 @@ const SUBDIRS: SubdirMap = &[
     ("progress", &PROGRESS_ROUTER),
     ("restore-finish", &RESTORE_FINISH_ROUTER),
     ("restore-next", &RESTORE_NEXT_ROUTER),
+    ("restore-progress", &RESTORE_PROGRESS_ROUTER),
     ("status", &STATUS_ROUTER),
 ];
 

@@ -30,8 +30,15 @@ const (
 )
 
 type RestoreOptions struct {
-	Mode    RestoreMode
-	DestDir string
+	Mode       RestoreMode
+	DestDir    string
+	OnProgress func(RestoreProgress)
+}
+
+// RestoreProgress is logical restore progress reported after successfully processing files.
+type RestoreProgress struct {
+	Files uint64
+	Bytes uint64
 }
 
 // reportErr sends a metadata error to the server immediately (never batched
@@ -78,6 +85,24 @@ type restoreState struct {
 	wg             *sync.WaitGroup
 	pendingDirMeta []dirMeta
 	pendingMu      sync.Mutex
+	progressMu     sync.Mutex
+	progress       RestoreProgress
+	onProgress     func(RestoreProgress)
+}
+
+func (st *restoreState) recordProgress(job restoreJob) {
+	if job.info.FileType != pxar.FileTypeFile && job.info.FileType != pxar.FileTypeHardlink {
+		return
+	}
+	st.progressMu.Lock()
+	st.progress.Files++
+	st.progress.Bytes += job.info.RawSize
+	progress := st.progress
+	callback := st.onProgress
+	st.progressMu.Unlock()
+	if callback != nil {
+		callback(progress)
+	}
 }
 
 type dirMeta struct {
@@ -235,7 +260,7 @@ func RestoreWithOptions(ctx context.Context, client *Client, sources []string, o
 	}
 
 	noAttr := opts.Mode == RestoreModeNoAttr
-	return restoreNormal(ctx, client, sources, opts.DestDir, noAttr)
+	return restoreNormal(ctx, client, sources, opts, noAttr)
 }
 
 // cleanupStaleTemps removes leftover .pxar-restore-* temp files from a prior
@@ -263,7 +288,8 @@ func cleanupStaleTemps(root string) {
 	}
 }
 
-func restoreNormal(ctx context.Context, client *Client, sources []string, destDir string, noAttr bool) error {
+func restoreNormal(ctx context.Context, client *Client, sources []string, opts RestoreOptions, noAttr bool) error {
+	destDir := opts.DestDir
 	cleanupStaleTemps(destDir)
 
 	prepareRestoreProcess()
@@ -280,12 +306,13 @@ func restoreNormal(ctx context.Context, client *Client, sources []string, destDi
 	var wg sync.WaitGroup
 
 	st := &restoreState{
-		client: client,
-		fsCap:  fsCap,
-		noAttr: noAttr,
-		hl:     newHardlinkIndex(),
-		jobs:   jobs,
-		wg:     &wg,
+		client:     client,
+		fsCap:      fsCap,
+		noAttr:     noAttr,
+		hl:         newHardlinkIndex(),
+		jobs:       jobs,
+		wg:         &wg,
+		onProgress: opts.OnProgress,
 	}
 
 	workerCtx, cancel := context.WithCancel(ctx)
@@ -305,7 +332,9 @@ func restoreNormal(ctx context.Context, client *Client, sources []string, destDi
 							log.Error(err, "", "sendErr", serr.Error(), "restore", "error-report-failed")
 
 						}
+						return
 					}
+					st.recordProgress(job)
 				}()
 			}
 		})

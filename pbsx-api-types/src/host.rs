@@ -808,3 +808,91 @@ pub struct HostRestoreRunResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
+
+#[api]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+/// PBS-X native host restore orchestration state.
+pub enum HostRestoreRunState {
+    Queued,
+    Running,
+    Finished,
+}
+
+#[api(
+    properties: {
+        "host-id": { schema: HOST_ID_SCHEMA },
+        "run-id": { type: String },
+        stage: { optional: true, type: String },
+        "processed-bytes": { type: u64, optional: true, default: 0 },
+        files: { type: u64, optional: true, default: 0 },
+    },
+)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// Progress submitted by the enrolled agent for a currently claimed restore.
+pub struct HostRestoreRunProgress {
+    pub host_id: String,
+    pub run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub processed_bytes: u64,
+    #[serde(default)]
+    pub files: u64,
+}
+
+#[api(
+    properties: {
+        "run-id": { type: String },
+        "host-id": { schema: HOST_ID_SCHEMA },
+        state: { type: HostRestoreRunState },
+        store: { schema: DATASTORE_SCHEMA },
+        ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
+        "backup-time": { schema: BACKUP_TIME_SCHEMA },
+        sources: { type: Array, items: { type: String } },
+        destination: { type: String },
+        mode: { type: HostRestoreMode },
+        "requested-at": { type: i64 },
+        "started-at": { optional: true, type: i64 },
+        "updated-at": { optional: true, type: i64 },
+        "finished-at": { optional: true, type: i64 },
+        success: { optional: true, type: bool },
+        error: { optional: true, type: String },
+        stage: { optional: true, type: String },
+        "processed-bytes": { type: u64 },
+        files: { type: u64 },
+        "duration-ms": { type: u64 },
+    },
+)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// Queue/execution history for one native host restore.
+pub struct HostRestoreRunInfo {
+    pub run_id: String,
+    pub host_id: String,
+    pub state: HostRestoreRunState,
+    pub store: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ns: Option<BackupNamespace>,
+    pub backup_time: i64,
+    pub sources: Vec<String>,
+    pub destination: String,
+    pub mode: HostRestoreMode,
+    pub requested_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
+    pub processed_bytes: u64,
+    pub files: u64,
+    pub duration_ms: u64,
+}

@@ -14,14 +14,15 @@ import (
 )
 
 type Job struct {
-	ID          string   `json:"run-id"`
-	HostID      string   `json:"host-id"`
-	Datastore   string   `json:"store"`
-	Namespace   string   `json:"ns,omitempty"`
-	BackupTime  int64    `json:"backup-time"`
-	Sources     []string `json:"sources"`
-	Destination string   `json:"destination"`
-	Mode        string   `json:"mode,omitempty"`
+	ID          string                    `json:"run-id"`
+	HostID      string                    `json:"host-id"`
+	Datastore   string                    `json:"store"`
+	Namespace   string                    `json:"ns,omitempty"`
+	BackupTime  int64                     `json:"backup-time"`
+	Sources     []string                  `json:"sources"`
+	Destination string                    `json:"destination"`
+	Mode        string                    `json:"mode,omitempty"`
+	OnProgress  func(files, bytes uint64) `json:"-"`
 }
 
 func Run(ctx context.Context, job Job) error {
@@ -74,7 +75,15 @@ func Run(ctx context.Context, job Job) error {
 	default:
 		return fmt.Errorf("unsupported native restore mode %q", job.Mode)
 	}
-	restoreErr := restorepxar.RestoreWithOptions(ctx, client, job.Sources, restorepxar.RestoreOptions{Mode: mode, DestDir: job.Destination})
+	restoreErr := restorepxar.RestoreWithOptions(ctx, client, job.Sources, restorepxar.RestoreOptions{
+		Mode:    mode,
+		DestDir: job.Destination,
+		OnProgress: func(progress restorepxar.RestoreProgress) {
+			if job.OnProgress != nil {
+				job.OnProgress(progress.Files, progress.Bytes)
+			}
+		},
+	})
 	var reported []error
 	for {
 		select {

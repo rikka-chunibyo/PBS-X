@@ -68,6 +68,7 @@ JSSRC=							\
 	host/Inventory.js				\
 	host/Jobs.js					\
 	host/Runs.js					\
+	host/Restores.js				\
 	host/Agent.js					\
 	host/Panel.js					\
 	config/TrafficControlView.js			\

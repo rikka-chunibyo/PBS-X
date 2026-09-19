@@ -13,6 +13,7 @@ Ext.define('PBS.HostPanel', {
 	{ xtype: 'pbsHostInventoryView', itemId: 'inventory' },
 	{ xtype: 'pbsHostBackupJobView', itemId: 'jobs' },
 	{ xtype: 'pbsHostBackupRunView', itemId: 'runs' },
+	{ xtype: 'pbsHostRestoreRunView', itemId: 'restores' },
 	{ xtype: 'pbsHostAgentView', itemId: 'agent' },
     ],
 

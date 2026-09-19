@@ -6,11 +6,12 @@ use proxmox_schema::api;
 
 use pbs_api_types::{
     Authid, BackupNamespace, BackupType, BACKUP_NAMESPACE_SCHEMA, BACKUP_TIME_SCHEMA,
-    DATASTORE_SCHEMA, JOB_ID_SCHEMA,
+    DATASTORE_SCHEMA, JOB_ID_SCHEMA, PRIV_DATASTORE_READ,
 };
 use pbsx_api_types::{
     HostAgentHeartbeat, HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand,
     HostBackupRunInfo, HostConfig, HostListItem, HostRestoreMode, HostRestoreRunCommand,
+    HostRestoreRunInfo,
     HostSnapshotListItem, HOST_ID_SCHEMA,
     PRIV_HOST_AGENT, PRIV_HOST_AUDIT,
     PRIV_HOST_MODIFY,
@@ -265,6 +266,30 @@ pub fn list_backup_runs(
 }
 
 #[api(
+    input: {
+        properties: {
+            name: { schema: HOST_ID_SCHEMA },
+        },
+    },
+    returns: {
+        description: "Current and recent PBS-X native host restores.",
+        type: Array,
+        items: { type: HostRestoreRunInfo },
+    },
+    access: { permission: &Permission::Anybody },
+)]
+/// List restore orchestration state for this host.
+pub fn list_restore_runs(
+    name: String,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<Vec<HostRestoreRunInfo>, Error> {
+    if !can_audit_host(&name, rpcenv)? {
+        http_bail!(FORBIDDEN, "missing Host.Audit permission for host '{}'", name);
+    }
+    crate::server::host::list_host_restore_runs(&name)
+}
+
+#[api(
     protected: true,
     input: {
         properties: {
@@ -328,11 +353,30 @@ pub fn run_restore(
     sources: Option<Vec<String>>,
     destination: String,
     mode: Option<HostRestoreMode>,
+    rpcenv: &mut dyn RpcEnvironment,
 ) -> Result<HostRestoreRunCommand, Error> {
     let host = get_host_config(&name)?;
     if !host.enable {
         http_bail!(FORBIDDEN, "host '{}' is disabled", name);
     }
+
+    // Restoring is a data-read operation. Host.Modify alone must not allow an operator to
+    // exfiltrate backup contents onto a machine they control without datastore read rights.
+    let auth_id: Authid = rpcenv
+        .get_auth_id()
+        .ok_or_else(|| anyhow::format_err!("missing authentication ID"))?
+        .parse()?;
+    let user_info = CachedUserInfo::new()?;
+    let effective_ns = ns.clone().unwrap_or_else(BackupNamespace::root);
+    if let Err(err) = user_info.check_privs(
+        &auth_id,
+        &effective_ns.acl_path(&store),
+        PRIV_DATASTORE_READ,
+        false,
+    ) {
+        http_bail!(FORBIDDEN, "{err}");
+    }
+
     crate::server::host::queue_host_restore(
         &name,
         &store,
@@ -347,6 +391,7 @@ pub fn run_restore(
 const HEARTBEAT_ROUTER: Router = Router::new().post(&API_METHOD_HEARTBEAT);
 const BACKUP_ROUTER: Router = Router::new().post(&API_METHOD_RUN_BACKUP);
 const RUNS_ROUTER: Router = Router::new().get(&API_METHOD_LIST_BACKUP_RUNS);
+const RESTORE_RUNS_ROUTER: Router = Router::new().get(&API_METHOD_LIST_RESTORE_RUNS);
 const SNAPSHOTS_ROUTER: Router = Router::new().get(&API_METHOD_LIST_HOST_SNAPSHOTS);
 const RESTORE_ROUTER: Router = Router::new().post(&API_METHOD_RUN_RESTORE);
 
@@ -354,6 +399,7 @@ const ITEM_SUBDIRS: SubdirMap = &[
     ("backup", &BACKUP_ROUTER),
     ("heartbeat", &HEARTBEAT_ROUTER),
     ("restore", &RESTORE_ROUTER),
+    ("restore-runs", &RESTORE_RUNS_ROUTER),
     ("runs", &RUNS_ROUTER),
     ("snapshots", &SNAPSHOTS_ROUTER),
 ];

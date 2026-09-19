@@ -15,7 +15,8 @@ use pbs_api_types::{Authid, Tokenname, Userid};
 use pbsx_api_types::{
     HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand, HostBackupRunInfo,
     HostBackupRunProgress, HostBackupRunResult, HostBackupRunState, HostConfig, HostEnrollmentToken,
-    HostRestoreMode, HostRestoreRunCommand, HostRestoreRunResult,
+    HostRestoreMode, HostRestoreRunCommand, HostRestoreRunInfo, HostRestoreRunProgress,
+    HostRestoreRunResult, HostRestoreRunState,
 };
 use pbs_buildcfg::PROXMOX_BACKUP_STATE_DIR_M;
 use pbs_config::{open_backup_lockfile, BackupLockGuard};
@@ -450,7 +451,10 @@ fn create_run_dirs(host: &str) -> Result<(), Error> {
         .group(backup_user.gid);
     let host_dir = run_host_dir(host);
     create_path(&host_dir, Some(options.clone()), Some(options.clone()))?;
-    for child in ["queued", "running", "progress", "history", "restore-queued", "restore-running", "restore-history"] {
+    for child in [
+        "queued", "running", "progress", "history",
+        "restore-queued", "restore-running", "restore-progress", "restore-history",
+    ] {
         create_path(
             host_dir.join(child),
             Some(options.clone()),
@@ -853,9 +857,19 @@ pub fn status_is_online(status: &HostAgentStatus, now: i64) -> bool {
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
+struct HostRestoreRunProgressRecord {
+    progress: HostRestoreRunProgress,
+    started_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 struct HostRestoreRunHistory {
     command: HostRestoreRunCommand,
     result: HostRestoreRunResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    progress: Option<HostRestoreRunProgressRecord>,
     finished_at: i64,
 }
 
@@ -867,6 +881,72 @@ fn read_restore_command(path: &Path) -> Result<HostRestoreRunCommand, Error> {
             path.display()
         )
     })
+}
+
+fn restore_progress_path(host: &str, run_id: &str) -> PathBuf {
+    run_host_dir(host)
+        .join("restore-progress")
+        .join(format!("{run_id}.json"))
+}
+
+fn read_restore_progress(path: &Path) -> Result<HostRestoreRunProgressRecord, Error> {
+    let raw = std::fs::read(path)?;
+    serde_json::from_slice(&raw).map_err(|err| {
+        format_err!(
+            "unable to parse PBS-X host restore progress '{}': {err}",
+            path.display()
+        )
+    })
+}
+
+fn ensure_initial_restore_progress(command: &HostRestoreRunCommand) -> Result<(), Error> {
+    let path = restore_progress_path(&command.host_id, &command.run_id);
+    if path.exists() {
+        return Ok(());
+    }
+    let now = proxmox_time::epoch_i64();
+    write_run_json(
+        &path,
+        &HostRestoreRunProgressRecord {
+            progress: HostRestoreRunProgress {
+                host_id: command.host_id.clone(),
+                run_id: command.run_id.clone(),
+                stage: Some("starting".to_string()),
+                processed_bytes: 0,
+                files: 0,
+            },
+            started_at: now,
+            updated_at: now,
+        },
+    )
+}
+
+/// Persist progress for a currently claimed native restore.
+pub fn update_host_restore_progress(progress: &HostRestoreRunProgress) -> Result<(), Error> {
+    create_run_dirs(&progress.host_id)?;
+    let _lock = host_run_lock(&progress.host_id)?;
+    let running = run_host_dir(&progress.host_id)
+        .join("restore-running")
+        .join(format!("{}.json", progress.run_id));
+    let command = read_restore_command(&running)
+        .map_err(|_| format_err!("restore run '{}' is not currently claimed", progress.run_id))?;
+    if command.host_id != progress.host_id || command.run_id != progress.run_id {
+        bail!("host restore progress identity mismatch");
+    }
+
+    let path = restore_progress_path(&progress.host_id, &progress.run_id);
+    let now = proxmox_time::epoch_i64();
+    let started_at = read_restore_progress(&path)
+        .map(|record| record.started_at)
+        .unwrap_or(now);
+    write_run_json(
+        &path,
+        &HostRestoreRunProgressRecord {
+            progress: progress.clone(),
+            started_at,
+            updated_at: now,
+        },
+    )
 }
 
 /// Queue a native restore of one normal PBS host snapshot back to its enrolled host.
@@ -929,7 +1009,9 @@ pub fn claim_host_restore(host: &str) -> Result<Option<HostRestoreRunCommand>, E
     let _lock = host_run_lock(host)?;
     let base = run_host_dir(host);
     if let Some(path) = first_json_file(&base.join("restore-running"))? {
-        return Ok(Some(read_restore_command(&path)?));
+        let command = read_restore_command(&path)?;
+        ensure_initial_restore_progress(&command)?;
+        return Ok(Some(command));
     }
     let Some(queued) = first_json_file(&base.join("restore-queued"))? else {
         return Ok(None);
@@ -939,7 +1021,9 @@ pub fn claim_host_restore(host: &str) -> Result<Option<HostRestoreRunCommand>, E
         .ok_or_else(|| format_err!("invalid queued host restore path"))?;
     let running = base.join("restore-running").join(file_name);
     std::fs::rename(&queued, &running)?;
-    Ok(Some(read_restore_command(&running)?))
+    let command = read_restore_command(&running)?;
+    ensure_initial_restore_progress(&command)?;
+    Ok(Some(command))
 }
 
 /// Finish a claimed restore and retain a bounded orchestration history.
@@ -955,9 +1039,12 @@ pub fn finish_host_restore(result: &HostRestoreRunResult) -> Result<(), Error> {
     if command.host_id != result.host_id || command.run_id != result.run_id {
         bail!("host restore completion identity mismatch");
     }
+    let progress_path = restore_progress_path(&result.host_id, &result.run_id);
+    let progress = read_restore_progress(&progress_path).ok();
     let history = HostRestoreRunHistory {
         command,
         result: result.clone(),
+        progress,
         finished_at: proxmox_time::epoch_i64(),
     };
     write_run_json(
@@ -965,6 +1052,7 @@ pub fn finish_host_restore(result: &HostRestoreRunResult) -> Result<(), Error> {
         &history,
     )?;
     std::fs::remove_file(running)?;
+    let _ = std::fs::remove_file(progress_path);
 
     let history_dir = base.join("restore-history");
     if let Ok(entries) = std::fs::read_dir(&history_dir) {
@@ -982,4 +1070,94 @@ pub fn finish_host_restore(result: &HostRestoreRunResult) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// List queued, running and recent native restore orchestration state for one host.
+pub fn list_host_restore_runs(host: &str) -> Result<Vec<HostRestoreRunInfo>, Error> {
+    create_run_dirs(host)?;
+    let _lock = host_run_lock(host)?;
+    let base = run_host_dir(host);
+    let mut out = Vec::new();
+
+    let make_info = |command: HostRestoreRunCommand, state: HostRestoreRunState, progress: Option<&HostRestoreRunProgressRecord>| {
+        let mut info = HostRestoreRunInfo {
+            run_id: command.run_id.clone(),
+            host_id: command.host_id.clone(),
+            state,
+            store: command.store.clone(),
+            ns: command.ns.clone(),
+            backup_time: command.backup_time,
+            sources: command.sources.clone(),
+            destination: command.destination.clone(),
+            mode: command.mode,
+            requested_at: command.requested_at,
+            started_at: None,
+            updated_at: None,
+            finished_at: None,
+            success: None,
+            error: None,
+            stage: None,
+            processed_bytes: 0,
+            files: 0,
+            duration_ms: 0,
+        };
+        if let Some(progress) = progress {
+            info.started_at = Some(progress.started_at);
+            info.updated_at = Some(progress.updated_at);
+            info.stage = progress.progress.stage.clone();
+            info.processed_bytes = progress.progress.processed_bytes;
+            info.files = progress.progress.files;
+        }
+        info
+    };
+
+    for (dir_name, state) in [
+        ("restore-queued", HostRestoreRunState::Queued),
+        ("restore-running", HostRestoreRunState::Running),
+    ] {
+        if let Ok(entries) = std::fs::read_dir(base.join(dir_name)) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|v| v.to_str()) != Some("json") {
+                    continue;
+                }
+                let command = read_restore_command(&path)?;
+                let progress = if state == HostRestoreRunState::Running {
+                    read_restore_progress(&restore_progress_path(host, &command.run_id)).ok()
+                } else {
+                    None
+                };
+                out.push(make_info(command, state, progress.as_ref()));
+            }
+        }
+    }
+
+    if let Ok(entries) = std::fs::read_dir(base.join("restore-history")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|v| v.to_str()) != Some("json") {
+                continue;
+            }
+            let raw = std::fs::read(&path)?;
+            let history: HostRestoreRunHistory = serde_json::from_slice(&raw).map_err(|err| {
+                format_err!("unable to parse PBS-X restore history '{}': {err}", path.display())
+            })?;
+            let mut info = make_info(
+                history.command,
+                HostRestoreRunState::Finished,
+                history.progress.as_ref(),
+            );
+            info.finished_at = Some(history.finished_at);
+            info.success = Some(history.result.success);
+            info.error = history.result.error;
+            if let Some(started_at) = info.started_at {
+                info.duration_ms = history.finished_at.saturating_sub(started_at) as u64 * 1000;
+            }
+            out.push(info);
+        }
+    }
+
+    out.sort_by(|a, b| b.requested_at.cmp(&a.requested_at));
+    out.truncate(200);
+    Ok(out)
 }

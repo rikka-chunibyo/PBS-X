@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pbs-x/pbsx-host-agent/internal/agent"
@@ -30,6 +31,23 @@ type runFinish struct {
 	RunID   string `json:"run-id"`
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
+}
+
+type runProgress struct {
+	HostID         string `json:"host-id"`
+	RunID          string `json:"run-id"`
+	Stage          string `json:"stage,omitempty"`
+	ProcessedBytes uint64 `json:"processed-bytes,omitempty"`
+	Files          uint64 `json:"files,omitempty"`
+}
+
+func postProgress(ctx context.Context, hostID, runID, stage string, files, processedBytes uint64) {
+	progress := runProgress{
+		HostID: hostID, RunID: runID, Stage: stage, Files: files, ProcessedBytes: processedBytes,
+	}
+	if err := agent.PBSAPIRequest(ctx, http.MethodPost, "/pbsx/agent/restore-progress", progress, nil); err != nil && ctx.Err() == nil {
+		log.Warn("failed to report native restore progress", "run_id", runID, "error", err.Error())
+	}
 }
 
 func Poll(ctx context.Context, interval time.Duration) {
@@ -70,11 +88,38 @@ func pollOnce(ctx context.Context) error {
 	}
 
 	log.Info("claimed native host restore", "run_id", run.RunID, "store", run.Store, "backup_time", run.BackupTime, "destination", run.Destination)
+	postProgress(ctx, hostID, run.RunID, "opening", 0, 0)
+
+	var files atomic.Uint64
+	var processedBytes atomic.Uint64
+	progressCtx, stopProgress := context.WithCancel(ctx)
+	progressDone := make(chan struct{})
+	go func() {
+		defer close(progressDone)
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-progressCtx.Done():
+				return
+			case <-ticker.C:
+				postProgress(progressCtx, hostID, run.RunID, "restoring", files.Load(), processedBytes.Load())
+			}
+		}
+	}()
+
 	runErr := Run(ctx, Job{
 		ID: run.RunID, HostID: run.HostID, Datastore: run.Store,
 		Namespace: run.Namespace, BackupTime: run.BackupTime,
 		Sources: run.Sources, Destination: run.Destination, Mode: run.Mode,
+		OnProgress: func(fileCount, byteCount uint64) {
+			files.Store(fileCount)
+			processedBytes.Store(byteCount)
+		},
 	})
+	stopProgress()
+	<-progressDone
+	postProgress(ctx, hostID, run.RunID, "finishing", files.Load(), processedBytes.Load())
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
