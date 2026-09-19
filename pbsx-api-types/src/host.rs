@@ -389,6 +389,14 @@ impl Default for HostChangeDetectionMode {
                 description: "Agent-visible filesystem, volume or path to protect.",
             },
         },
+        excludes: {
+            type: Array,
+            optional: true,
+            items: {
+                type: String,
+                description: "Absolute or source-relative subtree path to exclude.",
+            },
+        },
         schedule: {
             optional: true,
             schema: HOST_BACKUP_SCHEDULE_SCHEMA,
@@ -426,6 +434,8 @@ pub struct HostBackupJobConfig {
     pub ns: Option<BackupNamespace>,
     #[serde(default)]
     pub sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excludes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
     #[serde(default)]
@@ -471,6 +481,11 @@ impl HostBackupJobConfig {
             type: Array,
             items: { type: String },
         },
+        excludes: {
+            type: Array,
+            optional: true,
+            items: { type: String },
+        },
         "snapshot-mode": { type: HostSnapshotMode },
         "change-detection-mode": { type: HostChangeDetectionMode },
         "requested-at": {
@@ -493,6 +508,8 @@ pub struct HostBackupRunCommand {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ns: Option<BackupNamespace>,
     pub sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excludes: Vec<String>,
     pub snapshot_mode: HostSnapshotMode,
     pub change_detection_mode: HostChangeDetectionMode,
     pub requested_at: i64,
@@ -550,6 +567,113 @@ pub struct HostBackupRunResult {
     pub logical_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+}
+
+
+#[api]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+/// PBS-X host backup orchestration state. Datastore snapshots remain the backup truth.
+pub enum HostBackupRunState {
+    Queued,
+    Running,
+    Finished,
+}
+
+#[api(
+    properties: {
+        "host-id": { schema: HOST_ID_SCHEMA },
+        "run-id": { type: String },
+        stage: {
+            optional: true,
+            type: String,
+        },
+        "processed-bytes": { type: u64, optional: true, default: 0 },
+        "uploaded-bytes": { type: u64, optional: true, default: 0 },
+        "processed-chunks": { type: u64, optional: true, default: 0 },
+        "uploaded-chunks": { type: u64, optional: true, default: 0 },
+        files: { type: u64, optional: true, default: 0 },
+    },
+)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// Progress submitted by the enrolled agent for a currently claimed run.
+pub struct HostBackupRunProgress {
+    pub host_id: String,
+    pub run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub processed_bytes: u64,
+    #[serde(default)]
+    pub uploaded_bytes: u64,
+    #[serde(default)]
+    pub processed_chunks: u64,
+    #[serde(default)]
+    pub uploaded_chunks: u64,
+    #[serde(default)]
+    pub files: u64,
+}
+
+#[api(
+    properties: {
+        "run-id": { type: String },
+        "job-id": { schema: JOB_ID_SCHEMA },
+        "host-id": { schema: HOST_ID_SCHEMA },
+        state: { type: HostBackupRunState },
+        store: { schema: DATASTORE_SCHEMA },
+        ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
+        "requested-at": { type: i64 },
+        "backup-time": { schema: BACKUP_TIME_SCHEMA },
+        "started-at": { optional: true, type: i64 },
+        "updated-at": { optional: true, type: i64 },
+        "finished-at": { optional: true, type: i64 },
+        success: { optional: true, type: bool },
+        error: { optional: true, type: String },
+        stage: { optional: true, type: String },
+        "processed-bytes": { type: u64 },
+        "uploaded-bytes": { type: u64 },
+        "processed-chunks": { type: u64 },
+        "uploaded-chunks": { type: u64 },
+        files: { type: u64 },
+        directories: { type: u64 },
+        "logical-bytes": { type: u64 },
+        "duration-ms": { type: u64 },
+    },
+)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// Queue/execution history for one host backup run.
+pub struct HostBackupRunInfo {
+    pub run_id: String,
+    pub job_id: String,
+    pub host_id: String,
+    pub state: HostBackupRunState,
+    pub store: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ns: Option<BackupNamespace>,
+    pub requested_at: i64,
+    pub backup_time: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
+    pub processed_bytes: u64,
+    pub uploaded_bytes: u64,
+    pub processed_chunks: u64,
+    pub uploaded_chunks: u64,
+    pub files: u64,
+    pub directories: u64,
+    pub logical_bytes: u64,
+    pub duration_ms: u64,
 }
 
 #[api(

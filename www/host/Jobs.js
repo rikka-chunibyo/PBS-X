@@ -1,7 +1,7 @@
 Ext.define('pbsx-host-backup-jobs', {
     extend: 'Ext.data.Model',
     fields: [
-	'id', 'host', 'store', 'ns', 'sources', 'schedule', 'snapshot-mode',
+	'id', 'host', 'store', 'ns', 'sources', 'excludes', 'schedule', 'snapshot-mode',
 	'change-detection-mode', 'enable', 'comment',
     ],
     idProperty: 'id',

@@ -2,12 +2,12 @@ package agentfs
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -16,6 +16,7 @@ import (
 	"github.com/pbs-plus/pxar/format"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/agentfs/fswire"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/snapshots"
+	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
 
 // Canonical PBS-X metadata xattrs. These match the existing PBS Plus restore
@@ -29,6 +30,8 @@ const (
 	nativeXAttrCreationTime   = "user.creationtime"
 	nativeXAttrLastAccessTime = "user.lastaccesstime"
 	nativeXAttrLastWriteTime  = "user.lastwritetime"
+	nativeXAttrADSManifest    = "user.pbsx.ads.manifest"
+	nativeXAttrADSPrefix      = "user.pbsx.ads."
 )
 
 // NativeAccessor exposes a local point-in-time snapshot to the Go PXAR
@@ -52,7 +55,10 @@ func NewNativeAccessor(jobID, readMode string, snapshot snapshots.Snapshot) *Nat
 func (a *NativeAccessor) Close() { a.fs.Close() }
 
 func (a *NativeAccessor) Stat(path string) (format.Stat, error) {
-	abs := a.fs.abs(cleanNativePath(path))
+	abs, err := a.fs.safeAbs(path)
+	if err != nil {
+		return format.Stat{}, err
+	}
 	info, err := a.fs.platformStat(abs)
 	if err != nil {
 		return format.Stat{}, err
@@ -62,7 +68,10 @@ func (a *NativeAccessor) Stat(path string) (format.Stat, error) {
 }
 
 func (a *NativeAccessor) ReadDir(path string) ([]backupproxy.DirEntry, error) {
-	abs := a.fs.abs(cleanNativePath(path))
+	abs, err := a.fs.safeAbs(path)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(abs)
 	if err != nil {
 		return nil, err
@@ -74,6 +83,10 @@ func (a *NativeAccessor) ReadDir(path string) ([]backupproxy.DirEntry, error) {
 		childAbs := filepath.Join(abs, name)
 		info, err := a.fs.platformStat(childAbs)
 		if err != nil {
+			if errors.Is(err, ErrUnsupportedReparsePoint) {
+				log.Warn("skipping unsupported Windows reparse point", "path", childAbs)
+				continue
+			}
 			return nil, fmt.Errorf("stat %q: %w", childAbs, err)
 		}
 		xinfo, _ := a.fs.platformXstat(childAbs, false)
@@ -87,7 +100,10 @@ func (a *NativeAccessor) ReadDir(path string) ([]backupproxy.DirEntry, error) {
 }
 
 func (a *NativeAccessor) OpenFile(path string) (io.ReadCloser, uint64, error) {
-	abs := a.fs.abs(cleanNativePath(path))
+	abs, err := a.fs.safeAbs(path)
+	if err != nil {
+		return nil, 0, err
+	}
 	fh, err := a.fs.platformOpen(abs)
 	if err != nil {
 		return nil, 0, err
@@ -104,12 +120,18 @@ func (a *NativeAccessor) OpenFile(path string) (io.ReadCloser, uint64, error) {
 }
 
 func (a *NativeAccessor) ReadLink(path string) (string, error) {
-	abs := a.fs.abs(cleanNativePath(path))
+	abs, err := a.fs.safeAbs(path)
+	if err != nil {
+		return "", err
+	}
 	return os.Readlink(abs)
 }
 
 func (a *NativeAccessor) GetXAttrs(path string) ([]format.XAttr, error) {
-	abs := a.fs.abs(cleanNativePath(path))
+	abs, err := a.fs.safeAbs(path)
+	if err != nil {
+		return nil, err
+	}
 
 	attrs, err := nativePlatformXAttrs(abs)
 	if err != nil {
@@ -172,7 +194,10 @@ func (a *NativeAccessor) GetXAttrs(path string) ([]format.XAttr, error) {
 }
 
 func (a *NativeAccessor) GetACL(path string) (pxarlib.ACL, error) {
-	abs := a.fs.abs(cleanNativePath(path))
+	abs, err := a.fs.safeAbs(path)
+	if err != nil {
+		return pxarlib.ACL{}, err
+	}
 	xinfo, err := a.fs.platformXstat(abs, true)
 	if err != nil || len(xinfo.PosixACLs) == 0 {
 		return pxarlib.ACL{}, err
@@ -180,17 +205,20 @@ func (a *NativeAccessor) GetACL(path string) (pxarlib.ACL, error) {
 	return posixACLToPXAR(xinfo.PosixACLs), nil
 }
 
-func (a *NativeAccessor) GetFCaps(path string) ([]byte, error) {
-	return nativePlatformFCaps(a.fs.abs(cleanNativePath(path)))
+func (a *NativeAccessor) FileIdentity(path string) (backupproxy.FileIdentity, error) {
+	abs, err := a.fs.safeAbs(path)
+	if err != nil {
+		return backupproxy.FileIdentity{}, err
+	}
+	return nativeFileIdentity(abs)
 }
 
-func cleanNativePath(path string) string {
-	path = strings.TrimSpace(path)
-	switch path {
-	case "", ".", "/", `\\`:
-		return "."
+func (a *NativeAccessor) GetFCaps(path string) ([]byte, error) {
+	abs, err := a.fs.safeAbs(path)
+	if err != nil {
+		return nil, err
 	}
-	return path
+	return nativePlatformFCaps(abs)
 }
 
 func nativeFormatStat(abs string, info, xinfo fswire.AgentFileInfo) format.Stat {

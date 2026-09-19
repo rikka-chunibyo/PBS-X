@@ -4,6 +4,8 @@ package pxar
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -264,13 +266,71 @@ func openReparsePoint(p string, access uint32) (windows.Handle, error) {
 	)
 }
 
+type adsManifestEntry struct {
+	Name   string `cbor:"name"`
+	Size   int64  `cbor:"size"`
+	Digest []byte `cbor:"digest"`
+	Chunks int    `cbor:"chunks"`
+}
+
 // writeAlternateDataStreams writes non-canonical user.* xattrs as NTFS
 func writeAlternateDataStreams(ctx context.Context, st *restoreState, name string, xattrs map[string][]byte) {
+	consumed := make(map[string]struct{})
+	if raw, ok := xattrs[XAttrADSManifest]; ok {
+		var manifest []adsManifestEntry
+		if err := cbor.Unmarshal(raw, &manifest); err != nil {
+			st.reportErr(ctx, "decode ADS manifest", name, err)
+		} else {
+			for streamIndex, entry := range manifest {
+				if entry.Name == "" || strings.ContainsAny(entry.Name, `<>:"/\|?*`) {
+					continue
+				}
+				digestTag := ""
+				if len(entry.Digest) >= 8 {
+					digestTag = hex.EncodeToString(entry.Digest[:8])
+				}
+				var data []byte
+				missing := false
+				for chunkIndex := 0; chunkIndex < entry.Chunks; chunkIndex++ {
+					key := fmt.Sprintf("%s%04x.%s.%06x", XAttrADSPrefix, streamIndex, digestTag, chunkIndex)
+					chunk, ok := xattrs[key]
+					if !ok {
+						st.reportErr(ctx, "restore ADS", name, fmt.Errorf("missing metadata chunk %q", key))
+						missing = true
+						break
+					}
+					consumed[key] = struct{}{}
+					data = append(data, chunk...)
+				}
+				if missing {
+					continue
+				}
+				if int64(len(data)) != entry.Size {
+					st.reportErr(ctx, "restore ADS", name, fmt.Errorf("stream %q size mismatch: got %d, want %d", entry.Name, len(data), entry.Size))
+					continue
+				}
+				if len(entry.Digest) == sha256.Size {
+					digest := sha256.Sum256(data)
+					if !strings.EqualFold(hex.EncodeToString(digest[:]), hex.EncodeToString(entry.Digest)) {
+						st.reportErr(ctx, "restore ADS", name, fmt.Errorf("stream %q digest mismatch", entry.Name))
+						continue
+					}
+				}
+				st.reportErr(ctx, "write ads "+entry.Name, name, os.WriteFile(name+":"+entry.Name, data, 0o666))
+			}
+		}
+	}
+
+	// Backward compatibility with PBS Plus/PBS-X snapshots which represented
+	// small ADS directly as non-canonical user.<stream> xattrs.
 	for k, v := range xattrs {
-		if !strings.HasPrefix(k, "user.") {
+		if !strings.HasPrefix(k, "user.") || strings.HasPrefix(k, XAttrADSPrefix) {
 			continue
 		}
 		if IsCanonicalXAttr(k) {
+			continue
+		}
+		if _, ok := consumed[k]; ok {
 			continue
 		}
 		stream := strings.TrimPrefix(k, "user.")

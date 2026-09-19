@@ -3,6 +3,8 @@ package agentfs
 import (
 	"fmt"
 	"io"
+	"os"
+	pathpkg "path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -20,6 +22,7 @@ type VirtualSource struct {
 	Alias    string
 	Snapshot snapshots.Snapshot
 	Accessor *NativeAccessor
+	Excludes []string
 }
 
 // VirtualAccessor presents one or more point-in-time source snapshots as a
@@ -47,6 +50,7 @@ func NewVirtualAccessor(jobID, readMode string, snaps []snapshots.Snapshot) (*Vi
 			Alias:    alias,
 			Snapshot: snap,
 			Accessor: NewNativeAccessor(jobID, readMode, snap),
+			Excludes: normalizeVirtualExcludes(snap.Excludes),
 		}
 		v.sources = append(v.sources, source)
 	}
@@ -95,7 +99,23 @@ func (v *VirtualAccessor) ReadDir(path string) ([]backupproxy.DirEntry, error) {
 		}
 		return out, nil
 	}
-	return source.Accessor.ReadDir(sub)
+	entries, err := source.Accessor.ReadDir(sub)
+	if err != nil {
+		return nil, err
+	}
+	base := filepath.ToSlash(sub)
+	if base == "." {
+		base = ""
+	}
+	filtered := entries[:0]
+	for _, entry := range entries {
+		child := pathpkg.Join(base, entry.Name)
+		if source.isExcluded(child) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered, nil
 }
 
 func (v *VirtualAccessor) OpenFile(path string) (io.ReadCloser, uint64, error) {
@@ -142,6 +162,24 @@ func (v *VirtualAccessor) GetACL(path string) (pxarlib.ACL, error) {
 	return source.Accessor.GetACL(sub)
 }
 
+func (v *VirtualAccessor) FileIdentity(path string) (backupproxy.FileIdentity, error) {
+	source, sub, root, err := v.resolve(path)
+	if err != nil {
+		return backupproxy.FileIdentity{}, err
+	}
+	if root {
+		return backupproxy.FileIdentity{}, nil
+	}
+	identity, err := source.Accessor.FileIdentity(sub)
+	if err != nil || identity.Key == "" {
+		return identity, err
+	}
+	// Never merge hardlinks across configured source boundaries even if a
+	// platform happens to report colliding device/file IDs.
+	identity.Key = source.Alias + ":" + identity.Key
+	return identity, nil
+}
+
 func (v *VirtualAccessor) GetFCaps(path string) ([]byte, error) {
 	source, sub, root, err := v.resolve(path)
 	if err != nil {
@@ -171,7 +209,43 @@ func (v *VirtualAccessor) resolve(path string) (*VirtualSource, string, bool, er
 	if len(parts) == 2 && parts[1] != "" {
 		sub = filepath.FromSlash(parts[1])
 	}
+	if source.isExcluded(filepath.ToSlash(sub)) {
+		return nil, "", false, os.ErrNotExist
+	}
 	return source, sub, false, nil
+}
+
+func normalizeVirtualExcludes(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(strings.ReplaceAll(value, `\`, "/"))
+		value = strings.Trim(value, "/")
+		value = pathpkg.Clean(value)
+		if value == "." || value == "" || value == ".." || strings.HasPrefix(value, "../") {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *VirtualSource) isExcluded(rel string) bool {
+	rel = strings.Trim(pathpkg.Clean(strings.ReplaceAll(rel, `\`, "/")), "/")
+	if rel == "." {
+		rel = ""
+	}
+	for _, exclude := range s.Excludes {
+		if rel == exclude || strings.HasPrefix(rel, exclude+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func sourceAlias(source string) string {

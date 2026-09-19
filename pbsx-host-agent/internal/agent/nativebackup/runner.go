@@ -25,14 +25,31 @@ import (
 // Job is the agent-side form of a PBS-X host backup job. HostID is the PBS
 // backup group identity and must match the identity enrolled on this machine.
 type Job struct {
-	ID                  string   `json:"id" cbor:"id"`
-	HostID              string   `json:"host" cbor:"host"`
-	Datastore           string   `json:"store" cbor:"store"`
-	Namespace           string   `json:"ns,omitempty" cbor:"ns,omitempty"`
-	Sources             []string `json:"sources" cbor:"sources"`
-	SnapshotMode        string   `json:"snapshot-mode" cbor:"snapshot-mode"`
-	ChangeDetectionMode string   `json:"change-detection-mode" cbor:"change-detection-mode"`
-	BackupTime          int64    `json:"backup-time" cbor:"backup-time"`
+	ID                  string         `json:"id" cbor:"id"`
+	HostID              string         `json:"host" cbor:"host"`
+	Datastore           string         `json:"store" cbor:"store"`
+	Namespace           string         `json:"ns,omitempty" cbor:"ns,omitempty"`
+	Sources             []string       `json:"sources" cbor:"sources"`
+	Excludes            []string       `json:"excludes,omitempty" cbor:"excludes,omitempty"`
+	SnapshotMode        string         `json:"snapshot-mode" cbor:"snapshot-mode"`
+	ChangeDetectionMode string         `json:"change-detection-mode" cbor:"change-detection-mode"`
+	BackupTime          int64          `json:"backup-time" cbor:"backup-time"`
+	Progress            func(Progress) `json:"-" cbor:"-"`
+}
+
+type Progress struct {
+	Stage           string
+	ProcessedBytes  uint64
+	UploadedBytes   uint64
+	ProcessedChunks uint64
+	UploadedChunks  uint64
+	Files           uint64
+}
+
+func emitProgress(job Job, progress Progress) {
+	if job.Progress != nil {
+		job.Progress(progress)
+	}
 }
 
 type Result struct {
@@ -91,7 +108,13 @@ func Run(ctx context.Context, job Job) (*Result, error) {
 		}
 	}
 
-	snaps, err := createSnapshots(job)
+	emitProgress(job, Progress{Stage: "planning"})
+	plans, err := planSources(job.Sources, job.Excludes)
+	if err != nil {
+		return nil, err
+	}
+	emitProgress(job, Progress{Stage: "snapshotting"})
+	snaps, err := createSnapshots(job, plans)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +125,7 @@ func Run(ctx context.Context, job Job) (*Result, error) {
 		return nil, err
 	}
 	defer vfs.Close()
+	emitProgress(job, Progress{Stage: "scanning"})
 
 	previous, err := findPreviousFromTimes(job, times, listErr, backupTime)
 	if err != nil {
@@ -122,6 +146,15 @@ func Run(ctx context.Context, job Job) (*Result, error) {
 		DetectionMode:  detection,
 		PreviousBackup: previous,
 		Compress:       true,
+		OnUploadProgress: func(progress backupproxy.UploadProgress) {
+			emitProgress(job, Progress{
+				Stage:           "uploading",
+				ProcessedBytes:  progress.ProcessedBytes,
+				UploadedBytes:   progress.UploadedBytes,
+				ProcessedChunks: progress.ProcessedChunks,
+				UploadedChunks:  progress.UploadedChunks,
+			})
+		},
 	}
 
 	store := backupproxy.NewPBSStore(backupproxy.PBSConfig{
@@ -142,10 +175,15 @@ func Run(ctx context.Context, job Job) (*Result, error) {
 		"sources", len(job.Sources),
 		"mode", detection.String())
 
-	res, err := serverRunner.RunBackupWithMode(ctx, "/", config)
+	res, err := serverRunner.RunBackupWithMode(ctx, ".", config)
 	if err != nil {
 		return nil, fmt.Errorf("native PBS backup failed: %w", err)
 	}
+	emitProgress(job, Progress{
+		Stage:          "finishing",
+		ProcessedBytes: uint64(max(res.TotalBytes, 0)),
+		Files:          uint64(max(res.FileCount, 0)),
+	})
 	return &Result{
 		BackupTime:      backupTime,
 		Files:           res.FileCount,
@@ -156,24 +194,104 @@ func Run(ctx context.Context, job Job) (*Result, error) {
 	}, nil
 }
 
-func createSnapshots(job Job) ([]snapshots.Snapshot, error) {
+type sourcePlan struct {
+	Source   string
+	Excludes []string
+}
+
+func planSources(sources, excludes []string) ([]sourcePlan, error) {
+	plans := make([]sourcePlan, 0, len(sources))
+	for index, rawSource := range sources {
+		source := strings.TrimSpace(rawSource)
+		if source == "" {
+			return nil, fmt.Errorf("backup source %d is empty", index)
+		}
+		sourceAbs, err := filepath.Abs(source)
+		if err != nil {
+			return nil, fmt.Errorf("resolve backup source %q: %w", source, err)
+		}
+		plan := sourcePlan{Source: source}
+		seen := make(map[string]struct{})
+		excludeRoot := false
+		for _, rawExclude := range excludes {
+			exclude := strings.TrimSpace(rawExclude)
+			if exclude == "" {
+				continue
+			}
+			var rel string
+			if isAbsoluteExclude(exclude) {
+				excludeAbs, err := filepath.Abs(exclude)
+				if err != nil {
+					return nil, fmt.Errorf("resolve exclusion %q: %w", exclude, err)
+				}
+				rel, err = filepath.Rel(sourceAbs, excludeAbs)
+				if err != nil {
+					continue // different Windows volume, therefore not under this source
+				}
+				if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					continue
+				}
+			} else {
+				rel = filepath.FromSlash(strings.ReplaceAll(exclude, `\`, "/"))
+				rel = filepath.Clean(rel)
+				if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+					return nil, fmt.Errorf("invalid source-relative exclusion %q", exclude)
+				}
+			}
+			if rel == "." || rel == "" {
+				excludeRoot = true
+				break
+			}
+			rel = filepath.Clean(rel)
+			if _, ok := seen[rel]; !ok {
+				seen[rel] = struct{}{}
+				plan.Excludes = append(plan.Excludes, rel)
+			}
+		}
+		if excludeRoot {
+			log.Info("backup source excluded by job", "source", source)
+			continue
+		}
+		plans = append(plans, plan)
+	}
+	if len(plans) == 0 {
+		return nil, fmt.Errorf("all configured backup sources are excluded")
+	}
+	return plans, nil
+}
+
+func isAbsoluteExclude(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if filepath.IsAbs(value) || filepath.VolumeName(value) != "" {
+		return true
+	}
+	return strings.HasPrefix(value, `\`) || strings.HasPrefix(value, "/")
+}
+
+func createSnapshots(job Job, plans []sourcePlan) ([]snapshots.Snapshot, error) {
 	mode := strings.ToLower(strings.TrimSpace(job.SnapshotMode))
 	if mode == "" {
 		mode = "auto"
 	}
-	result := make([]snapshots.Snapshot, 0, len(job.Sources))
-	for index, source := range job.Sources {
-		source = strings.TrimSpace(source)
+	result := make([]snapshots.Snapshot, 0, len(plans))
+	for index, plan := range plans {
+		source := strings.TrimSpace(plan.Source)
 		if source == "" {
 			cleanupSnapshots(result)
 			return nil, fmt.Errorf("backup source %d is empty", index)
 		}
 		if mode == "direct" {
-			result = append(result, directSnapshot(source))
+			snap := directSnapshot(source)
+			snap.Excludes = append(snap.Excludes, plan.Excludes...)
+			result = append(result, snap)
 			continue
 		}
 		snap, err := snapshots.Manager.CreateSnapshot(job.ID, source)
 		if err == nil {
+			snap.Excludes = append(snap.Excludes, plan.Excludes...)
 			result = append(result, snap)
 			continue
 		}
@@ -182,7 +300,9 @@ func createSnapshots(job Job) ([]snapshots.Snapshot, error) {
 			return nil, fmt.Errorf("snapshot source %q: %w", source, err)
 		}
 		log.Warn("snapshot provider unavailable; using direct read for this source", "source", source, "error", err.Error())
-		result = append(result, directSnapshot(source))
+		snap = directSnapshot(source)
+		snap.Excludes = append(snap.Excludes, plan.Excludes...)
+		result = append(result, snap)
 	}
 	return result, nil
 }

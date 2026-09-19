@@ -54,6 +54,12 @@ Ext.define('PBS.window.HostBackupJobEdit', {
 		    .map(value => value.trim())
 		    .filter(value => value.length > 0);
 	    }
+	    if (typeof values.excludes === 'string') {
+		values.excludes = values.excludes
+		    .split(/\r?\n/)
+		    .map(value => value.trim())
+		    .filter(value => value.length > 0);
+	    }
 	    return values;
 	},
 
@@ -135,6 +141,16 @@ Ext.define('PBS.window.HostBackupJobEdit', {
 		},
 	    },
 	    {
+		xtype: 'textarea',
+		name: 'excludes',
+		fieldLabel: gettext('Excludes'),
+		height: 90,
+		emptyText: gettext('One path per line, for example C:\\Temp or /var/cache'),
+		getSubmitValue: function() {
+		    return this.getValue();
+		},
+	    },
+	    {
 		xtype: 'proxmoxtextfield',
 		name: 'comment',
 		fieldLabel: gettext('Comment'),
@@ -158,6 +174,9 @@ Ext.define('PBS.window.HostBackupJobEdit', {
     setValues: function(values) {
 	if (Ext.isArray(values.sources)) {
 	    values.sources = values.sources.join('\n');
+	}
+	if (Ext.isArray(values.excludes)) {
+	    values.excludes = values.excludes.join('\n');
 	}
 	this.callParent([values]);
     },

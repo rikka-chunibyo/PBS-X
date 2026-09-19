@@ -242,6 +242,9 @@ pub fn update_host_backup_job(
         }
         data.sources = sources;
     }
+    if let Some(excludes) = update.excludes {
+        data.excludes = excludes;
+    }
     if let Some(schedule) = update.schedule {
         data.schedule = Some(schedule);
     }

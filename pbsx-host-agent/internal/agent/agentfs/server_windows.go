@@ -3,6 +3,7 @@
 package agentfs
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -40,7 +41,7 @@ func (s *Server) platformOpen(path string) (*FileHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := windows.CreateFile(pathUTF16, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	raw, err := windows.CreateFile(pathUTF16, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +75,22 @@ func (s *Server) platformStat(path string) (fswire.AgentFileInfo, error) {
 	if err := ntQueryFileNetworkOpenInformation(h, &nfo); err != nil {
 		return fswire.AgentFileInfo{}, err
 	}
+	mode := windowsFileModeFromHandle(h, nfo.FileAttributes)
+	isDir := (nfo.FileAttributes & windows.FILE_ATTRIBUTE_DIRECTORY) != 0
+	if nfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		tag, err := reparseTagForHandle(h)
+		if err != nil {
+			return fswire.AgentFileInfo{}, err
+		}
+		switch tag {
+		case ioReparseTagSymlink, ioReparseTagMountPoint:
+			mode &^= uint32(os.ModeDir)
+			mode |= uint32(os.ModeSymlink)
+			isDir = false
+		default:
+			return fswire.AgentFileInfo{}, fmt.Errorf("%w: tag 0x%08x", ErrUnsupportedReparsePoint, tag)
+		}
+	}
 	bs := s.statFs.Bsize
 	if bs == 0 {
 		bs = 4096
@@ -82,12 +99,12 @@ func (s *Server) platformStat(path string) (fswire.AgentFileInfo, error) {
 	return fswire.AgentFileInfo{
 		Name: filepath.Base(filepath.Clean(path)),
 		Size: nfo.EndOfFile,
-		Mode: windowsFileModeFromHandle(h, nfo.FileAttributes),
+		Mode: mode,
 		ModTime: filetimeToUnix(windows.Filetime{
 			LowDateTime:  uint32(uint64(nfo.LastWriteTime) & 0xFFFFFFFF),
 			HighDateTime: uint32(uint64(nfo.LastWriteTime) >> 32),
 		}),
-		IsDir:  (nfo.FileAttributes & windows.FILE_ATTRIBUTE_DIRECTORY) != 0,
+		IsDir:  isDir,
 		Blocks: uint64((alloc + int64(bs) - 1) / int64(bs)),
 	}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pbs-x/pbsx-host-agent/internal/agent"
@@ -19,6 +20,7 @@ type runCommand struct {
 	Store               string   `json:"store"`
 	Namespace           string   `json:"ns,omitempty"`
 	Sources             []string `json:"sources"`
+	Excludes            []string `json:"excludes,omitempty"`
 	SnapshotMode        string   `json:"snapshot-mode"`
 	ChangeDetectionMode string   `json:"change-detection-mode"`
 	RequestedAt         int64    `json:"requested-at"`
@@ -35,6 +37,52 @@ type runFinish struct {
 	Directories  *uint64 `json:"directories,omitempty"`
 	LogicalBytes *uint64 `json:"logical-bytes,omitempty"`
 	DurationMS   *uint64 `json:"duration-ms,omitempty"`
+}
+
+type runProgress struct {
+	HostID          string `json:"host-id"`
+	RunID           string `json:"run-id"`
+	Stage           string `json:"stage,omitempty"`
+	ProcessedBytes  uint64 `json:"processed-bytes,omitempty"`
+	UploadedBytes   uint64 `json:"uploaded-bytes,omitempty"`
+	ProcessedChunks uint64 `json:"processed-chunks,omitempty"`
+	UploadedChunks  uint64 `json:"uploaded-chunks,omitempty"`
+	Files           uint64 `json:"files,omitempty"`
+}
+
+type progressReporter struct {
+	ctx       context.Context
+	hostID    string
+	runID     string
+	mu        sync.Mutex
+	lastSent  time.Time
+	lastStage string
+}
+
+func (r *progressReporter) report(progress Progress) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	force := progress.Stage != r.lastStage
+	if !force && !r.lastSent.IsZero() && now.Sub(r.lastSent) < 2*time.Second {
+		return
+	}
+	payload := runProgress{
+		HostID:          r.hostID,
+		RunID:           r.runID,
+		Stage:           progress.Stage,
+		ProcessedBytes:  progress.ProcessedBytes,
+		UploadedBytes:   progress.UploadedBytes,
+		ProcessedChunks: progress.ProcessedChunks,
+		UploadedChunks:  progress.UploadedChunks,
+		Files:           progress.Files,
+	}
+	if err := agent.PBSAPIRequest(r.ctx, http.MethodPost, "/pbsx/agent/progress", payload, nil); err != nil {
+		log.Debug("failed to report native backup progress", "run_id", r.runID, "error", err.Error())
+		return
+	}
+	r.lastSent = now
+	r.lastStage = progress.Stage
 }
 
 // Poll continuously claims server-owned backup runs and executes them one at a
@@ -74,15 +122,18 @@ func pollOnce(ctx context.Context) error {
 	}
 	log.Info("claimed native host backup", "run_id", run.RunID, "job", run.JobID, "requested_at", run.RequestedAt)
 
+	reporter := &progressReporter{ctx: ctx, hostID: hostID, runID: run.RunID}
 	result, runErr := Run(ctx, Job{
 		ID:                  run.JobID,
 		HostID:              run.HostID,
 		Datastore:           run.Store,
 		Namespace:           run.Namespace,
 		Sources:             run.Sources,
+		Excludes:            run.Excludes,
 		SnapshotMode:        run.SnapshotMode,
 		ChangeDetectionMode: run.ChangeDetectionMode,
 		BackupTime:          run.BackupTime,
+		Progress:            reporter.report,
 	})
 	if ctx.Err() != nil {
 		// Leave the command in running/ so a restarted agent can recover it.

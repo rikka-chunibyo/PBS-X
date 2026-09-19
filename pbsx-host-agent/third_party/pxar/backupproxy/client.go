@@ -58,6 +58,20 @@ type ClientProvider interface {
 	GetFCaps(ctx context.Context, path string) ([]byte, error)
 }
 
+// FileIdentity identifies an inode/file-record for hardlink preservation. Key is
+// opaque to the backup engine and only needs to be stable for the duration of
+// one filesystem walk. Links is the platform link count.
+type FileIdentity struct {
+	Key   string
+	Links uint64
+}
+
+// FileIdentityProvider is an optional extension implemented by local clients
+// which can identify hardlinked files.
+type FileIdentityProvider interface {
+	FileIdentity(ctx context.Context, path string) (FileIdentity, error)
+}
+
 // FileOpener is an optional interface for streaming file reads.
 // Clients that implement this allow the server to stream file content
 // directly into the archive encoder without buffering the entire file.
@@ -114,4 +128,13 @@ func (lc *LocalClient) GetACL(_ context.Context, path string) (pxar.ACL, error) 
 // GetFCaps returns the file capabilities for the given path.
 func (lc *LocalClient) GetFCaps(_ context.Context, path string) ([]byte, error) {
 	return lc.fs.GetFCaps(path)
+}
+
+func (lc *LocalClient) FileIdentity(ctx context.Context, path string) (FileIdentity, error) {
+	if provider, ok := lc.fs.(interface {
+		FileIdentity(string) (FileIdentity, error)
+	}); ok {
+		return provider.FileIdentity(path)
+	}
+	return FileIdentity{}, nil
 }

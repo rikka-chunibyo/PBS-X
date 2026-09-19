@@ -13,7 +13,8 @@ use proxmox_schema::api;
 use pbs_api_types::Authid;
 use pbs_config::CachedUserInfo;
 use pbsx_api_types::{
-    HostAgentHeartbeat, HostAgentStatus, HostBackupRunCommand, HostBackupRunResult,
+    HostAgentHeartbeat, HostAgentStatus, HostBackupRunCommand, HostBackupRunProgress,
+    HostBackupRunResult,
     HostBootstrapRequest, HostBootstrapResponse, HostConfig, HOST_ID_SCHEMA, PRIV_HOST_AGENT,
 };
 
@@ -173,6 +174,24 @@ pub fn claim_backup(
     protected: true,
     input: {
         properties: {
+            progress: { type: HostBackupRunProgress, flatten: true },
+        },
+    },
+    access: { permission: &Permission::Anybody },
+)]
+/// Persist progress for a currently claimed native host backup run.
+pub fn update_backup_progress(
+    progress: HostBackupRunProgress,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<(), Error> {
+    ensure_agent_access(&progress.host_id, rpcenv)?;
+    crate::server::host::update_host_backup_progress(&progress)
+}
+
+#[api(
+    protected: true,
+    input: {
+        properties: {
             result: { type: HostBackupRunResult, flatten: true },
         },
     },
@@ -190,12 +209,14 @@ pub fn finish_backup(
 const BOOTSTRAP_ROUTER: Router = Router::new().post(&API_METHOD_BOOTSTRAP_AGENT);
 const STATUS_ROUTER: Router = Router::new().post(&API_METHOD_UPDATE_STATUS);
 const NEXT_ROUTER: Router = Router::new().get(&API_METHOD_CLAIM_BACKUP);
+const PROGRESS_ROUTER: Router = Router::new().post(&API_METHOD_UPDATE_BACKUP_PROGRESS);
 const FINISH_ROUTER: Router = Router::new().post(&API_METHOD_FINISH_BACKUP);
 
 const SUBDIRS: SubdirMap = &[
     ("bootstrap", &BOOTSTRAP_ROUTER),
     ("finish", &FINISH_ROUTER),
     ("next", &NEXT_ROUTER),
+    ("progress", &PROGRESS_ROUTER),
     ("status", &STATUS_ROUTER),
 ];
 

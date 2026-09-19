@@ -13,8 +13,8 @@ use proxmox_sys::fs::{create_path, file_read_optional_string, replace_file, Crea
 
 use pbs_api_types::{Authid, Tokenname, Userid};
 use pbsx_api_types::{
-    HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand, HostBackupRunResult, HostConfig,
-    HostEnrollmentToken,
+    HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand, HostBackupRunInfo,
+    HostBackupRunProgress, HostBackupRunResult, HostBackupRunState, HostConfig, HostEnrollmentToken,
 };
 use pbs_buildcfg::PROXMOX_BACKUP_STATE_DIR_M;
 use pbs_config::{open_backup_lockfile, BackupLockGuard};
@@ -395,9 +395,19 @@ pub fn remove_host_status(host: &str) -> Result<(), Error> {
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
+struct HostBackupRunProgressRecord {
+    progress: HostBackupRunProgress,
+    started_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 struct HostBackupRunHistory {
     command: HostBackupRunCommand,
     result: HostBackupRunResult,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    progress: Option<HostBackupRunProgressRecord>,
     finished_at: i64,
 }
 
@@ -416,7 +426,7 @@ fn create_run_dirs(host: &str) -> Result<(), Error> {
         .group(backup_user.gid);
     let host_dir = run_host_dir(host);
     create_path(&host_dir, Some(options.clone()), Some(options.clone()))?;
-    for child in ["queued", "running", "history"] {
+    for child in ["queued", "running", "progress", "history"] {
         create_path(
             host_dir.join(child),
             Some(options.clone()),
@@ -446,6 +456,32 @@ fn read_run_command(path: &Path) -> Result<HostBackupRunCommand, Error> {
     let raw = std::fs::read(path)?;
     serde_json::from_slice(&raw)
         .map_err(|err| format_err!("unable to parse PBS-X host run '{}': {err}", path.display()))
+}
+
+fn read_run_progress(path: &Path) -> Result<HostBackupRunProgressRecord, Error> {
+    let raw = std::fs::read(path)?;
+    serde_json::from_slice(&raw).map_err(|err| {
+        format_err!(
+            "unable to parse PBS-X host run progress '{}': {err}",
+            path.display()
+        )
+    })
+}
+
+fn read_run_history(path: &Path) -> Result<HostBackupRunHistory, Error> {
+    let raw = std::fs::read(path)?;
+    serde_json::from_slice(&raw).map_err(|err| {
+        format_err!(
+            "unable to parse PBS-X host run history '{}': {err}",
+            path.display()
+        )
+    })
+}
+
+fn run_progress_path(host: &str, run_id: &str) -> PathBuf {
+    run_host_dir(host)
+        .join("progress")
+        .join(format!("{run_id}.json"))
 }
 
 /// Queue one configured host backup job for pickup by the enrolled agent.
@@ -502,6 +538,17 @@ pub fn queue_host_backup(job: &HostBackupJobConfig) -> Result<HostBackupRunComma
             }
         }
     }
+    if let Ok(entries) = std::fs::read_dir(base.join("history")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(existing) = read_run_history(&path) {
+                backup_time = backup_time.max(existing.command.backup_time.saturating_add(1));
+            }
+        }
+    }
 
     let run_id = format!("{}-{}", requested_at, hex::encode(random));
     let command = HostBackupRunCommand {
@@ -511,6 +558,7 @@ pub fn queue_host_backup(job: &HostBackupJobConfig) -> Result<HostBackupRunComma
         store: job.store.clone(),
         ns: job.ns.clone(),
         sources: job.sources.clone(),
+        excludes: job.excludes.clone(),
         snapshot_mode: job.snapshot_mode,
         change_detection_mode: job.change_detection_mode,
         requested_at,
@@ -544,7 +592,9 @@ pub fn claim_host_backup(host: &str) -> Result<Option<HostBackupRunCommand>, Err
     let _lock = host_run_lock(host)?;
     let base = run_host_dir(host);
     if let Some(path) = first_json_file(&base.join("running"))? {
-        return read_run_command(&path).map(Some);
+        let command = read_run_command(&path)?;
+        ensure_initial_run_progress(&command)?;
+        return Ok(Some(command));
     }
     let Some(queued) = first_json_file(&base.join("queued"))? else {
         return Ok(None);
@@ -554,7 +604,65 @@ pub fn claim_host_backup(host: &str) -> Result<Option<HostBackupRunCommand>, Err
         .ok_or_else(|| format_err!("invalid queued host run path"))?;
     let running = base.join("running").join(file_name);
     std::fs::rename(&queued, &running)?;
-    read_run_command(&running).map(Some)
+    let command = read_run_command(&running)?;
+    ensure_initial_run_progress(&command)?;
+    Ok(Some(command))
+}
+
+fn ensure_initial_run_progress(command: &HostBackupRunCommand) -> Result<(), Error> {
+    let path = run_progress_path(&command.host_id, &command.run_id);
+    if path.exists() {
+        return Ok(());
+    }
+    let now = proxmox_time::epoch_i64();
+    let record = HostBackupRunProgressRecord {
+        progress: HostBackupRunProgress {
+            host_id: command.host_id.clone(),
+            run_id: command.run_id.clone(),
+            stage: Some("running".to_string()),
+            ..Default::default()
+        },
+        started_at: now,
+        updated_at: now,
+    };
+    write_run_json(&path, &record)
+}
+
+/// Persist agent progress independently from the immutable claimed command.
+pub fn update_host_backup_progress(progress: &HostBackupRunProgress) -> Result<(), Error> {
+    create_run_dirs(&progress.host_id)?;
+    let _lock = host_run_lock(&progress.host_id)?;
+    let base = run_host_dir(&progress.host_id);
+    let running = base.join("running").join(format!("{}.json", progress.run_id));
+    let command = read_run_command(&running)
+        .map_err(|_| format_err!("host run '{}' is not currently claimed", progress.run_id))?;
+    if command.host_id != progress.host_id || command.run_id != progress.run_id {
+        bail!("host run progress identity mismatch");
+    }
+
+    let path = run_progress_path(&progress.host_id, &progress.run_id);
+    let now = proxmox_time::epoch_i64();
+    let previous = read_run_progress(&path).ok();
+    let started_at = previous.as_ref().map(|record| record.started_at).unwrap_or(now);
+    let mut current = progress.clone();
+    if let Some(previous) = previous {
+        current.processed_bytes = current.processed_bytes.max(previous.progress.processed_bytes);
+        current.uploaded_bytes = current.uploaded_bytes.max(previous.progress.uploaded_bytes);
+        current.processed_chunks = current.processed_chunks.max(previous.progress.processed_chunks);
+        current.uploaded_chunks = current.uploaded_chunks.max(previous.progress.uploaded_chunks);
+        current.files = current.files.max(previous.progress.files);
+        if current.stage.is_none() {
+            current.stage = previous.progress.stage;
+        }
+    }
+    write_run_json(
+        &path,
+        &HostBackupRunProgressRecord {
+            progress: current,
+            started_at,
+            updated_at: now,
+        },
+    )
 }
 
 /// Complete a claimed run and move it into immutable history.
@@ -568,15 +676,139 @@ pub fn finish_host_backup(result: &HostBackupRunResult) -> Result<(), Error> {
     if command.host_id != result.host_id {
         bail!("host run identity mismatch");
     }
+    let progress_path = run_progress_path(&result.host_id, &result.run_id);
+    let progress = read_run_progress(&progress_path).ok();
     let record = HostBackupRunHistory {
         command,
         result: result.clone(),
+        progress,
         finished_at: proxmox_time::epoch_i64(),
     };
     let history = base.join("history").join(format!("{}.json", result.run_id));
     write_run_json(&history, &record)?;
     std::fs::remove_file(running)?;
+    let _ = std::fs::remove_file(progress_path);
+    prune_host_run_history(&base.join("history"), 200)?;
     Ok(())
+}
+
+fn prune_host_run_history(path: &Path, keep: usize) -> Result<(), Error> {
+    let mut files = match std::fs::read_dir(path) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+            .collect::<Vec<_>>(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    files.sort();
+    let remove = files.len().saturating_sub(keep);
+    for path in files.into_iter().take(remove) {
+        let _ = std::fs::remove_file(path);
+    }
+    Ok(())
+}
+
+fn run_info_from_command(
+    command: &HostBackupRunCommand,
+    state: HostBackupRunState,
+    progress: Option<&HostBackupRunProgressRecord>,
+) -> HostBackupRunInfo {
+    let (stage, processed_bytes, uploaded_bytes, processed_chunks, uploaded_chunks, files) =
+        progress
+            .map(|record| {
+                (
+                    record.progress.stage.clone(),
+                    record.progress.processed_bytes,
+                    record.progress.uploaded_bytes,
+                    record.progress.processed_chunks,
+                    record.progress.uploaded_chunks,
+                    record.progress.files,
+                )
+            })
+            .unwrap_or((None, 0, 0, 0, 0, 0));
+    HostBackupRunInfo {
+        run_id: command.run_id.clone(),
+        job_id: command.job_id.clone(),
+        host_id: command.host_id.clone(),
+        state,
+        store: command.store.clone(),
+        ns: command.ns.clone(),
+        requested_at: command.requested_at,
+        backup_time: command.backup_time,
+        started_at: progress.map(|record| record.started_at),
+        updated_at: progress.map(|record| record.updated_at),
+        finished_at: None,
+        success: None,
+        error: None,
+        stage,
+        processed_bytes,
+        uploaded_bytes,
+        processed_chunks,
+        uploaded_chunks,
+        files,
+        directories: 0,
+        logical_bytes: 0,
+        duration_ms: 0,
+    }
+}
+
+/// List current and recent host backup orchestration records. Actual backup
+/// retention and existence are represented by datastore snapshots, not this log.
+pub fn list_host_backup_runs(host: &str) -> Result<Vec<HostBackupRunInfo>, Error> {
+    create_run_dirs(host)?;
+    let _lock = host_run_lock(host)?;
+    let base = run_host_dir(host);
+    let mut out = Vec::new();
+
+    for (dir, state) in [
+        ("queued", HostBackupRunState::Queued),
+        ("running", HostBackupRunState::Running),
+    ] {
+        if let Ok(entries) = std::fs::read_dir(base.join(dir)) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(command) = read_run_command(&path) else { continue };
+                let progress = if matches!(state, HostBackupRunState::Running) {
+                    read_run_progress(&run_progress_path(host, &command.run_id)).ok()
+                } else {
+                    None
+                };
+                out.push(run_info_from_command(&command, state, progress.as_ref()));
+            }
+        }
+    }
+
+    if let Ok(entries) = std::fs::read_dir(base.join("history")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(history) = read_run_history(&path) else { continue };
+            let mut info = run_info_from_command(
+                &history.command,
+                HostBackupRunState::Finished,
+                history.progress.as_ref(),
+            );
+            info.finished_at = Some(history.finished_at);
+            info.success = Some(history.result.success);
+            info.error = history.result.error.clone();
+            info.files = history.result.files.unwrap_or(info.files);
+            info.directories = history.result.directories.unwrap_or(0);
+            info.logical_bytes = history.result.logical_bytes.unwrap_or(0);
+            info.duration_ms = history.result.duration_ms.unwrap_or(0);
+            out.push(info);
+        }
+    }
+
+    out.sort_by(|a, b| b.backup_time.cmp(&a.backup_time));
+    out.truncate(200);
+    Ok(out)
 }
 
 /// Remove queued/running state when the host itself is deleted. Historical records are deleted

@@ -12,12 +12,16 @@ import (
 // is provider-private state used to tear the snapshot down (for example a ZFS
 // dataset@snapshot name or an LVM snapshot block device).
 type Snapshot struct {
-	Path        string          `json:"path"`
-	BackendPath string          `json:"backend_path,omitempty"`
-	TimeStarted time.Time       `json:"time_started"`
-	SourcePath  string          `json:"source_path"`
-	Direct      bool            `json:"direct"`
-	Handler     SnapshotHandler `json:"-"`
+	Path        string    `json:"path"`
+	BackendPath string    `json:"backend_path,omitempty"`
+	TimeStarted time.Time `json:"time_started"`
+	SourcePath  string    `json:"source_path"`
+	Direct      bool      `json:"direct"`
+	// Excludes are paths relative to Path that the PXAR walker must never enter.
+	// Snapshot providers use this for their own management namespaces; the
+	// native runner appends user-configured exclusions.
+	Excludes []string        `json:"-"`
+	Handler  SnapshotHandler `json:"-"`
 }
 
 type SnapshotHandler interface {

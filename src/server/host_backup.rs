@@ -70,6 +70,7 @@ mod tests {
             store: "main".to_string(),
             ns: None,
             sources: vec!["C:\\".to_string()],
+            excludes: Vec::new(),
             schedule: Some("daily".to_string()),
             snapshot_mode: HostSnapshotMode::Auto,
             change_detection_mode: HostChangeDetectionMode::Metadata,

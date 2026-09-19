@@ -6,8 +6,9 @@ use proxmox_schema::api;
 
 use pbs_api_types::{Authid, BackupNamespace, BackupType, JOB_ID_SCHEMA};
 use pbsx_api_types::{
-    HostAgentHeartbeat, HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand, HostConfig,
-    HostListItem, HostSnapshotListItem, HOST_ID_SCHEMA, PRIV_HOST_AGENT, PRIV_HOST_AUDIT,
+    HostAgentHeartbeat, HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand,
+    HostBackupRunInfo, HostConfig, HostListItem, HostSnapshotListItem, HOST_ID_SCHEMA,
+    PRIV_HOST_AGENT, PRIV_HOST_AUDIT,
     PRIV_HOST_MODIFY,
 };
 use pbs_config::CachedUserInfo;
@@ -236,6 +237,30 @@ pub async fn list_host_snapshots(
 
 
 #[api(
+    input: {
+        properties: {
+            name: { schema: HOST_ID_SCHEMA },
+        },
+    },
+    returns: {
+        description: "Current and recent PBS-X host backup runs.",
+        type: Array,
+        items: { type: HostBackupRunInfo },
+    },
+    access: { permission: &Permission::Anybody },
+)]
+/// List orchestration state for this host. Datastore snapshots remain the source of truth for backups.
+pub fn list_backup_runs(
+    name: String,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<Vec<HostBackupRunInfo>, Error> {
+    if !can_audit_host(&name, rpcenv)? {
+        http_bail!(FORBIDDEN, "missing Host.Audit permission for host '{}'", name);
+    }
+    crate::server::host::list_host_backup_runs(&name)
+}
+
+#[api(
     protected: true,
     input: {
         properties: {
@@ -269,11 +294,13 @@ pub fn run_backup(name: String, id: String) -> Result<HostBackupRunCommand, Erro
 
 const HEARTBEAT_ROUTER: Router = Router::new().post(&API_METHOD_HEARTBEAT);
 const BACKUP_ROUTER: Router = Router::new().post(&API_METHOD_RUN_BACKUP);
+const RUNS_ROUTER: Router = Router::new().get(&API_METHOD_LIST_BACKUP_RUNS);
 const SNAPSHOTS_ROUTER: Router = Router::new().get(&API_METHOD_LIST_HOST_SNAPSHOTS);
 
 const ITEM_SUBDIRS: SubdirMap = &[
     ("backup", &BACKUP_ROUTER),
     ("heartbeat", &HEARTBEAT_ROUTER),
+    ("runs", &RUNS_ROUTER),
     ("snapshots", &SNAPSHOTS_ROUTER),
 ];
 

@@ -49,7 +49,11 @@ func (b *BtrfsSnapshotHandler) CreateSnapshot(jobID string, sourcePath string) (
 	if rel != "." && rel != "" {
 		root = filepath.Join(backend, rel)
 	}
-	return Snapshot{Path: root, BackendPath: backend, TimeStarted: time.Now(), SourcePath: sourcePath, Handler: b}, nil
+	snapshot := Snapshot{Path: root, BackendPath: backend, TimeStarted: time.Now(), SourcePath: sourcePath, Handler: b}
+	if rel == "." || rel == "" {
+		snapshot.Excludes = append(snapshot.Excludes, ".pbsx-snapshots")
+	}
+	return snapshot, nil
 }
 
 func (b *BtrfsSnapshotHandler) DeleteSnapshot(snapshot Snapshot) error {

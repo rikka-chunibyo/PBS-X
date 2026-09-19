@@ -41,7 +41,10 @@ func (s *Server) handleOpenFile(req *arpc.Request) (arpc.Response, error) {
 		return arpc.Response{Status: 403, Data: errBytes}, nil
 	}
 
-	path := s.abs(payload.Path)
+	path, err := s.safeAbs(payload.Path)
+	if err != nil {
+		return arpc.Response{}, wrapPathError("open", payload.Path, err)
+	}
 	fh, err := s.platformOpen(path)
 	if err != nil {
 		return arpc.Response{}, wrapPathError("open", payload.Path, err)
@@ -68,7 +71,10 @@ func (s *Server) handleAttr(req *arpc.Request) (arpc.Response, error) {
 		return arpc.Response{}, err
 	}
 
-	fullPath := s.abs(payload.Path)
+	fullPath, err := s.safeAbs(payload.Path)
+	if err != nil {
+		return arpc.Response{}, wrapPathError("stat", payload.Path, err)
+	}
 	info, err := s.platformStat(fullPath)
 	if err != nil {
 		return arpc.Response{}, wrapPathError("stat", payload.Path, err)
@@ -91,7 +97,10 @@ func (s *Server) handleXattr(req *arpc.Request) (arpc.Response, error) {
 		return arpc.Response{}, err
 	}
 
-	fullPath := s.abs(payload.Path)
+	fullPath, err := s.safeAbs(payload.Path)
+	if err != nil {
+		return arpc.Response{}, wrapPathError("xstat", payload.Path, err)
+	}
 	info, err := s.platformXstat(fullPath, payload.AclOnly)
 	if err != nil {
 		return arpc.Response{}, wrapPathError("xstat", payload.Path, err)

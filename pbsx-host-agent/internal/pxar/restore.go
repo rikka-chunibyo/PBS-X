@@ -93,15 +93,17 @@ const (
 	XAttrCreationTime   = "user.creationtime"
 	XAttrLastAccessTime = "user.lastaccesstime"
 	XAttrLastWriteTime  = "user.lastwritetime"
+	XAttrADSManifest    = "user.pbsx.ads.manifest"
+	XAttrADSPrefix      = "user.pbsx.ads."
 )
 
 func IsCanonicalXAttr(name string) bool {
 	switch name {
 	case XAttrOwner, XAttrGroup, XAttrACLs, XAttrFileAttributes,
-		XAttrCreationTime, XAttrLastAccessTime, XAttrLastWriteTime:
+		XAttrCreationTime, XAttrLastAccessTime, XAttrLastWriteTime, XAttrADSManifest:
 		return true
 	}
-	return false
+	return strings.HasPrefix(name, XAttrADSPrefix)
 }
 
 func ParseXattrUnixSecs(data []byte) (secs int64, ok bool) {

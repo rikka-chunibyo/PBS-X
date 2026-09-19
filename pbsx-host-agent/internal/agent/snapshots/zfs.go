@@ -75,7 +75,11 @@ func (z *ZFSSnapshotHandler) CreateSnapshot(jobID string, sourcePath string) (Sn
 	if rel != "." && rel != "" {
 		root = filepath.Join(root, rel)
 	}
-	return Snapshot{Path: root, BackendPath: backend, TimeStarted: time.Now(), SourcePath: sourcePath, Handler: z}, nil
+	snapshot := Snapshot{Path: root, BackendPath: backend, TimeStarted: time.Now(), SourcePath: sourcePath, Handler: z}
+	if rel == "." || rel == "" {
+		snapshot.Excludes = append(snapshot.Excludes, ".zfs")
+	}
+	return snapshot, nil
 }
 
 func (z *ZFSSnapshotHandler) DeleteSnapshot(snapshot Snapshot) error {

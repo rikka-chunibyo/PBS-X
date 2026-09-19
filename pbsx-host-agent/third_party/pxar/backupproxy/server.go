@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path"
 	"time"
 
 	pxar "github.com/pbs-plus/pxar"
@@ -48,6 +49,10 @@ func (cb *catalogBuilder) addFile(name string, size uint64, mtime int64) {
 
 func (cb *catalogBuilder) addSymlink(name string) {
 	cb.w.AddSymlink(name)
+}
+
+func (cb *catalogBuilder) addHardlink(name string) {
+	cb.w.AddHardlink(name)
 }
 
 func (cb *catalogBuilder) addBlockDevice(name string) {
@@ -137,7 +142,7 @@ func (s *Server) RunBackup(ctx context.Context, root string, config BackupConfig
 	result := &BackupResult{}
 	var catBuf bytes.Buffer
 	catBuilder := newCatalogBuilder(&catBuf)
-	if err := s.walkDir(ctx, root, enc, nil, catBuilder, nil, result); err != nil {
+	if err := s.walkDir(ctx, root, "", enc, nil, catBuilder, nil, result, newWalkState()); err != nil {
 		pipeWriter.CloseWithError(err)
 		<-uploadErrCh
 		return nil, err
@@ -222,7 +227,7 @@ func (s *Server) RunSplitBackup(ctx context.Context, root string, config BackupC
 	result := &BackupResult{}
 	var catBuf bytes.Buffer
 	catBuilder := newCatalogBuilder(&catBuf)
-	if err := s.walkDir(ctx, root, enc, nil, catBuilder, nil, result); err != nil {
+	if err := s.walkDir(ctx, root, "", enc, nil, catBuilder, nil, result, newWalkState()); err != nil {
 		closeWithError(err)
 		<-uploadCh
 		return nil, err
@@ -412,7 +417,7 @@ func (s *Server) RunMetadataBackup(ctx context.Context, root string, config Back
 	}
 	var catBuf bytes.Buffer
 	catBuilder := newCatalogBuilder(&catBuf)
-	if err := s.walkDir(ctx, root, enc, mw, catBuilder, suggest, result); err != nil {
+	if err := s.walkDir(ctx, root, "", enc, mw, catBuilder, suggest, result, newWalkState()); err != nil {
 		_, _ = finishPayload(err)
 		return nil, err
 	}
@@ -571,7 +576,20 @@ func (mw *metadataWalker) injectChunks(enc *encoder.Encoder, plan datastore.Chun
 	return nil
 }
 
-func (s *Server) walkDir(ctx context.Context, dirPath string, enc *encoder.Encoder, mw *metadataWalker, catBuilder *catalogBuilder, suggest func(uint64), result *BackupResult) error {
+type hardlinkTarget struct {
+	path   string
+	offset encoder.LinkOffset
+}
+
+type walkState struct {
+	hardlinks map[string]hardlinkTarget
+}
+
+func newWalkState() *walkState {
+	return &walkState{hardlinks: make(map[string]hardlinkTarget)}
+}
+
+func (s *Server) walkDir(ctx context.Context, dirPath, archiveDir string, enc *encoder.Encoder, mw *metadataWalker, catBuilder *catalogBuilder, suggest func(uint64), result *BackupResult, state *walkState) error {
 	entries, err := s.client.ReadDir(ctx, dirPath)
 	if err != nil {
 		return fmt.Errorf("readdir %q: %w", dirPath, err)
@@ -618,7 +636,7 @@ func (s *Server) walkDir(ctx context.Context, dirPath string, enc *encoder.Encod
 			if err := enc.CreateDirectory(entry.Name, meta); err != nil {
 				return fmt.Errorf("create dir %q: %w", entry.Name, err)
 			}
-			if err := s.walkDir(ctx, fullPath, enc, mw, catBuilder, suggest, result); err != nil {
+			if err := s.walkDir(ctx, fullPath, path.Join(archiveDir, entry.Name), enc, mw, catBuilder, suggest, result, state); err != nil {
 				return err
 			}
 			if err := enc.Finish(); err != nil {
@@ -628,6 +646,42 @@ func (s *Server) walkDir(ctx context.Context, dirPath string, enc *encoder.Encod
 
 		case entry.Stat.IsRegularFile():
 			result.FileCount++
+			archivePath := path.Join(archiveDir, entry.Name)
+			var identity FileIdentity
+			if provider, ok := s.client.(FileIdentityProvider); ok {
+				identity, _ = provider.FileIdentity(ctx, fullPath)
+			}
+			if identity.Links > 1 && identity.Key != "" {
+				if target, ok := state.hardlinks[identity.Key]; ok {
+					if mw != nil {
+						if err := mw.flushPending(enc, false); err != nil {
+							return fmt.Errorf("flush reused payload: %w", err)
+						}
+					}
+					catBuilder.addHardlink(entry.Name)
+					if err := enc.AddHardlink(entry.Name, target.path, target.offset); err != nil {
+						return fmt.Errorf("hardlink %q: %w", archivePath, err)
+					}
+					continue
+				}
+
+				// The first occurrence must be materialized so the PXAR encoder has
+				// a concrete LinkOffset for later names. Chunk-level dedup still
+				// avoids duplicate datastore/network content.
+				if mw != nil {
+					if err := mw.flushPending(enc, false); err != nil {
+						return fmt.Errorf("flush reused payload: %w", err)
+					}
+				}
+				catBuilder.addFile(entry.Name, entry.Size, entry.Stat.Mtime.Secs)
+				offset, err := s.encodeFile(ctx, enc, entry.Name, fullPath, meta, suggest)
+				if err != nil {
+					return fmt.Errorf("file %q: %w", entry.Name, err)
+				}
+				state.hardlinks[identity.Key] = hardlinkTarget{path: archivePath, offset: offset}
+				continue
+			}
+
 			catBuilder.addFile(entry.Name, entry.Size, entry.Stat.Mtime.Secs)
 			if mw != nil {
 				if reused, err := mw.maybeReusePayload(enc, entry.Name, fullPath, entry, *meta); reused || err != nil {
@@ -640,7 +694,7 @@ func (s *Server) walkDir(ctx context.Context, dirPath string, enc *encoder.Encod
 					return fmt.Errorf("flush reused payload: %w", err)
 				}
 			}
-			if err := s.encodeFile(ctx, enc, entry.Name, fullPath, meta, suggest); err != nil {
+			if _, err := s.encodeFile(ctx, enc, entry.Name, fullPath, meta, suggest); err != nil {
 				return fmt.Errorf("file %q: %w", entry.Name, err)
 			}
 
@@ -684,25 +738,26 @@ func (s *Server) walkDir(ctx context.Context, dirPath string, enc *encoder.Encod
 	return nil
 }
 
-func (s *Server) encodeFile(ctx context.Context, enc *encoder.Encoder, name, fullPath string, meta *pxar.Metadata, suggest func(uint64)) error {
+func (s *Server) encodeFile(ctx context.Context, enc *encoder.Encoder, name, fullPath string, meta *pxar.Metadata, suggest func(uint64)) (encoder.LinkOffset, error) {
 	r, size, err := s.client.OpenFile(ctx, fullPath)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer r.Close()
 	fw, err := enc.CreateFile(meta, name, size)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	offset := fw.FileOffset()
 	if _, err := io.Copy(fw, r); err != nil {
 		fw.Close()
-		return err
+		return 0, err
 	}
 	if err := fw.Close(); err != nil {
-		return err
+		return 0, err
 	}
 	if suggest != nil {
 		suggest(enc.PayloadPosition())
 	}
-	return nil
+	return offset, nil
 }

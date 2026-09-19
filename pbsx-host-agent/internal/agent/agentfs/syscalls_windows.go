@@ -179,3 +179,27 @@ func sparseSeekAllocatedRanges(h windows.Handle, start int64, whence int, fileSi
 		return 0, os.ErrInvalid
 	}
 }
+
+const (
+	fileAttributeTagInfoClass = 9
+	ioReparseTagMountPoint    = 0xA0000003
+	ioReparseTagSymlink       = 0xA000000C
+)
+
+type fileAttributeTagInfo struct {
+	FileAttributes uint32
+	ReparseTag     uint32
+}
+
+func reparseTagForHandle(h windows.Handle) (uint32, error) {
+	var info fileAttributeTagInfo
+	if err := windows.GetFileInformationByHandleEx(
+		h,
+		fileAttributeTagInfoClass,
+		(*byte)(unsafe.Pointer(&info)),
+		uint32(unsafe.Sizeof(info)),
+	); err != nil {
+		return 0, err
+	}
+	return info.ReparseTag, nil
+}
