@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,34 @@ import (
 
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
 )
+
+// PBSConnectionInfo returns the pinned native PBS endpoint and host-scoped
+// API token issued during enrollment. Both backup and restore protocol clients
+// use this so the credential/TLS policy stays identical.
+func PBSConnectionInfo() (string, string, *tls.Config, error) {
+	server, err := registry.GetEntry(registry.CONFIG, "ServerURL", false)
+	if err != nil || server == nil || strings.TrimSpace(server.Value) == "" {
+		return "", "", nil, fmt.Errorf("PBS API server URL is not configured")
+	}
+	authID, err := registry.GetEntry(registry.AUTH, "BackupAuthID", false)
+	if err != nil || authID == nil || strings.TrimSpace(authID.Value) == "" {
+		return "", "", nil, fmt.Errorf("PBS API auth ID is not configured")
+	}
+	secret, err := registry.GetEntry(registry.AUTH, "BackupSecret", true)
+	if err != nil || secret == nil || strings.TrimSpace(secret.Value) == "" {
+		return "", "", nil, fmt.Errorf("PBS API secret is not configured")
+	}
+	endpoint, _, err := pbsAPIEndpoint(server.Value, "/api2/json")
+	if err != nil {
+		return "", "", nil, err
+	}
+	tlsConfig, err := GetTLSConfig()
+	if err != nil {
+		return "", "", nil, err
+	}
+	token := strings.TrimSpace(authID.Value) + ":" + strings.TrimSpace(secret.Value)
+	return strings.TrimSuffix(endpoint, "/"), token, tlsConfig, nil
+}
 
 type pbsAPIEnvelope[T any] struct {
 	Data T `json:"data"`

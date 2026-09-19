@@ -50,14 +50,17 @@ func nativePlatformXAttrs(path string) ([]format.XAttr, error) {
 			continue
 		}
 		valueSize, err := unix.Lgetxattr(path, name, nil)
-		if err != nil || valueSize < 0 {
-			continue
+		if err != nil {
+			return nil, err
+		}
+		if valueSize < 0 {
+			return nil, unix.EIO
 		}
 		value := make([]byte, valueSize)
 		if valueSize != 0 {
 			got, err := unix.Lgetxattr(path, name, value)
 			if err != nil {
-				continue
+				return nil, err
 			}
 			value = value[:got]
 		}

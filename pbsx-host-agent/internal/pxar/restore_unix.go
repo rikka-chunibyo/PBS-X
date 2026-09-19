@@ -48,6 +48,8 @@ func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.File
 	xattrs, lerr := st.client.ListXAttrs(ctx, e.EntryRangeStart, e.EntryRangeEnd)
 	if lerr != nil {
 		st.reportErr(ctx, "list xattrs", path, lerr)
+	} else {
+		applySparseLayout(ctx, st, file, xattrs, e.RawSize)
 	}
 
 	if st.fsCap.supportsChown {
@@ -108,7 +110,7 @@ func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.File
 
 		if st.fsCap.supportsXAttrs {
 			for name, val := range xattrs {
-				if name == XAttrCreationTime || name == XAttrFileAttributes {
+				if IsCanonicalXAttr(name) {
 					continue
 				}
 				st.reportErr(ctx, "setxattr "+name, path, unix.Fsetxattr(fd, name, val, 0))

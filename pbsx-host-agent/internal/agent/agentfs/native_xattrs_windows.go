@@ -18,7 +18,9 @@ import (
 )
 
 const (
-	nativeADSChunkSize = 60 << 10
+	nativeADSChunkSize     = 60 << 10
+	nativeADSMaxStreamSize = 32 << 20
+	nativeADSMaxFileTotal  = 64 << 20
 )
 
 type nativeADSManifestEntry struct {
@@ -61,10 +63,18 @@ func nativePlatformXAttrs(path string) ([]format.XAttr, error) {
 
 	attrs := make([]format.XAttr, 0, len(streams)+4)
 	manifest := make([]nativeADSManifestEntry, 0, len(streams))
+	totalADSBytes := 0
 	for streamIndex, stream := range streams {
 		data, err := readAlternateDataStream(path, stream)
 		if err != nil {
 			return nil, fmt.Errorf("read alternate data stream %q: %w", stream, err)
+		}
+		if len(data) > nativeADSMaxStreamSize {
+			return nil, fmt.Errorf("alternate data stream %q is %d bytes; streams larger than %d bytes require the future ADS payload archive", stream, len(data), nativeADSMaxStreamSize)
+		}
+		totalADSBytes += len(data)
+		if totalADSBytes > nativeADSMaxFileTotal {
+			return nil, fmt.Errorf("alternate data streams on %q exceed the %d byte metadata safety limit", path, nativeADSMaxFileTotal)
 		}
 		digest := sha256.Sum256(data)
 		chunks := 0

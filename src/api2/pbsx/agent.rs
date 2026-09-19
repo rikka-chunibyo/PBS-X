@@ -14,7 +14,7 @@ use pbs_api_types::Authid;
 use pbs_config::CachedUserInfo;
 use pbsx_api_types::{
     HostAgentHeartbeat, HostAgentStatus, HostBackupRunCommand, HostBackupRunProgress,
-    HostBackupRunResult,
+    HostBackupRunResult, HostRestoreRunCommand, HostRestoreRunResult,
     HostBootstrapRequest, HostBootstrapResponse, HostConfig, HOST_ID_SCHEMA, PRIV_HOST_AGENT,
 };
 
@@ -101,6 +101,7 @@ pub fn bootstrap_agent(request: HostBootstrapRequest) -> Result<HostBootstrapRes
         issued: proxmox_time::epoch_i64(),
     };
     if let Err(err) = crate::server::host::write_host_credentials(&request.host_id, &record) {
+        let _ = crate::server::host::revoke_host_upload_auth(&backup_auth_id);
         let _ = crate::server::host::remove_host_credentials(&request.host_id);
         return Err(err);
     }
@@ -206,17 +207,65 @@ pub fn finish_backup(
     crate::server::host::finish_host_backup(&result)
 }
 
+
+#[api(
+    protected: true,
+    input: {
+        properties: {
+            "host-id": { schema: HOST_ID_SCHEMA },
+        },
+    },
+    returns: {
+        description: "Zero or one claimed native host restore runs.",
+        type: Array,
+        items: { type: HostRestoreRunCommand },
+    },
+    access: { permission: &Permission::Anybody },
+)]
+/// Claim the next direct PBS reader restore for this host.
+pub fn claim_restore(
+    host_id: String,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<Vec<HostRestoreRunCommand>, Error> {
+    ensure_agent_access(&host_id, rpcenv)?;
+    Ok(crate::server::host::claim_host_restore(&host_id)?
+        .into_iter()
+        .collect())
+}
+
+#[api(
+    protected: true,
+    input: {
+        properties: {
+            result: { type: HostRestoreRunResult, flatten: true },
+        },
+    },
+    access: { permission: &Permission::Anybody },
+)]
+/// Finish a claimed direct host restore.
+pub fn finish_restore(
+    result: HostRestoreRunResult,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<(), Error> {
+    ensure_agent_access(&result.host_id, rpcenv)?;
+    crate::server::host::finish_host_restore(&result)
+}
+
 const BOOTSTRAP_ROUTER: Router = Router::new().post(&API_METHOD_BOOTSTRAP_AGENT);
 const STATUS_ROUTER: Router = Router::new().post(&API_METHOD_UPDATE_STATUS);
 const NEXT_ROUTER: Router = Router::new().get(&API_METHOD_CLAIM_BACKUP);
 const PROGRESS_ROUTER: Router = Router::new().post(&API_METHOD_UPDATE_BACKUP_PROGRESS);
 const FINISH_ROUTER: Router = Router::new().post(&API_METHOD_FINISH_BACKUP);
+const RESTORE_NEXT_ROUTER: Router = Router::new().get(&API_METHOD_CLAIM_RESTORE);
+const RESTORE_FINISH_ROUTER: Router = Router::new().post(&API_METHOD_FINISH_RESTORE);
 
 const SUBDIRS: SubdirMap = &[
     ("bootstrap", &BOOTSTRAP_ROUTER),
     ("finish", &FINISH_ROUTER),
     ("next", &NEXT_ROUTER),
     ("progress", &PROGRESS_ROUTER),
+    ("restore-finish", &RESTORE_FINISH_ROUTER),
+    ("restore-next", &RESTORE_NEXT_ROUTER),
     ("status", &STATUS_ROUTER),
 ];
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pbs-x/pbsx-host-agent/internal/agent"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/workgate"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
 
@@ -104,6 +105,8 @@ func Poll(ctx context.Context, interval time.Duration) {
 }
 
 func pollOnce(ctx context.Context) error {
+	workgate.Mu.Lock()
+	defer workgate.Mu.Unlock()
 	hostID, err := agent.AgentHostID()
 	if err != nil {
 		return err

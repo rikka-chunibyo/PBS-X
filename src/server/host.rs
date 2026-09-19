@@ -15,6 +15,7 @@ use pbs_api_types::{Authid, Tokenname, Userid};
 use pbsx_api_types::{
     HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand, HostBackupRunInfo,
     HostBackupRunProgress, HostBackupRunResult, HostBackupRunState, HostConfig, HostEnrollmentToken,
+    HostRestoreMode, HostRestoreRunCommand, HostRestoreRunResult,
 };
 use pbs_buildcfg::PROXMOX_BACKUP_STATE_DIR_M;
 use pbs_config::{open_backup_lockfile, BackupLockGuard};
@@ -301,6 +302,25 @@ pub fn sync_host_upload_acl(host: &str) -> Result<(), Error> {
     sync_host_upload_acl_for(host, &auth_id)
 }
 
+/// Revoke a generated host upload token and remove any ACL entries for it.
+/// This is used as rollback when enrollment cannot commit all credential state.
+pub fn revoke_host_upload_auth(auth_id: &str) -> Result<(), Error> {
+    let auth_id: Authid = auth_id.parse()?;
+    if let Some(token_name) = auth_id.tokenname().map(ToOwned::to_owned) {
+        let _ = crate::api2::access::user::delete_token(
+            auth_id.user().clone(),
+            token_name,
+            None,
+        );
+    }
+
+    let _lock = pbs_config::acl::lock_config()?;
+    let (mut acl, _) = pbs_config::acl::config()?;
+    acl.delete_authid(&auth_id);
+    pbs_config::acl::save_config(&acl)?;
+    Ok(())
+}
+
 /// Rotate the narrow PBS API token used by an agent for native backup uploads.
 pub fn issue_host_upload_token(host: &str) -> Result<(String, String), Error> {
     let userid = Userid::root_userid().clone();
@@ -329,7 +349,11 @@ pub fn issue_host_upload_token(host: &str) -> Result<(String, String), Error> {
         .ok_or_else(|| format_err!("generated token response has no secret"))?
         .to_string();
 
-    sync_host_upload_acl_for(host, &auth_id)?;
+    if let Err(err) = sync_host_upload_acl_for(host, &auth_id) {
+        let auth_id_string = auth_id.to_string();
+        let _ = revoke_host_upload_auth(&auth_id_string);
+        return Err(err);
+    }
     Ok((auth_id.to_string(), secret))
 }
 
@@ -426,7 +450,7 @@ fn create_run_dirs(host: &str) -> Result<(), Error> {
         .group(backup_user.gid);
     let host_dir = run_host_dir(host);
     create_path(&host_dir, Some(options.clone()), Some(options.clone()))?;
-    for child in ["queued", "running", "progress", "history"] {
+    for child in ["queued", "running", "progress", "history", "restore-queued", "restore-running", "restore-history"] {
         create_path(
             host_dir.join(child),
             Some(options.clone()),
@@ -825,4 +849,137 @@ pub fn remove_host_runs(host: &str) -> Result<(), Error> {
 /// Decide whether a persisted status still represents a connected agent.
 pub fn status_is_online(status: &HostAgentStatus, now: i64) -> bool {
     now.saturating_sub(status.last_seen) <= HOST_ONLINE_THRESHOLD
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+struct HostRestoreRunHistory {
+    command: HostRestoreRunCommand,
+    result: HostRestoreRunResult,
+    finished_at: i64,
+}
+
+fn read_restore_command(path: &Path) -> Result<HostRestoreRunCommand, Error> {
+    let raw = std::fs::read(path)?;
+    serde_json::from_slice(&raw).map_err(|err| {
+        format_err!(
+            "unable to parse PBS-X host restore run '{}': {err}",
+            path.display()
+        )
+    })
+}
+
+/// Queue a native restore of one normal PBS host snapshot back to its enrolled host.
+pub fn queue_host_restore(
+    host: &str,
+    store: &str,
+    ns: Option<pbs_api_types::BackupNamespace>,
+    backup_time: i64,
+    sources: Vec<String>,
+    destination: String,
+    mode: HostRestoreMode,
+) -> Result<HostRestoreRunCommand, Error> {
+    let (host_config, _) = pbs_config::host::config()?;
+    let host_cfg: HostConfig = host_config
+        .lookup("host", host)
+        .map_err(|_| format_err!("PBS-X host '{host}' does not exist"))?;
+    if !host_cfg.enable {
+        bail!("PBS-X host '{host}' is disabled");
+    }
+    if destination.trim().is_empty() {
+        bail!("restore destination must not be empty");
+    }
+    let effective_ns = ns.clone().unwrap_or_else(pbs_api_types::BackupNamespace::root);
+    if !upload_target_allowed(host, store, &effective_ns)? {
+        bail!("datastore/namespace target is not configured for host '{host}'");
+    }
+    let sources = if sources.is_empty() {
+        vec!["/".to_string()]
+    } else {
+        sources
+    };
+
+    create_run_dirs(host)?;
+    let _lock = host_run_lock(host)?;
+    let requested_at = proxmox_time::epoch_i64();
+    let mut random = [0u8; 12];
+    proxmox_sys::linux::fill_with_random_data(&mut random)?;
+    let run_id = format!("restore-{requested_at}-{}", hex::encode(random));
+    let command = HostRestoreRunCommand {
+        run_id: run_id.clone(),
+        host_id: host.to_string(),
+        store: store.to_string(),
+        ns,
+        backup_time,
+        sources,
+        destination,
+        mode,
+        requested_at,
+    };
+    let path = run_host_dir(host)
+        .join("restore-queued")
+        .join(format!("{run_id}.json"));
+    write_run_json(&path, &command)?;
+    Ok(command)
+}
+
+/// Claim the next restore. Running work is returned again after an agent restart.
+pub fn claim_host_restore(host: &str) -> Result<Option<HostRestoreRunCommand>, Error> {
+    create_run_dirs(host)?;
+    let _lock = host_run_lock(host)?;
+    let base = run_host_dir(host);
+    if let Some(path) = first_json_file(&base.join("restore-running"))? {
+        return Ok(Some(read_restore_command(&path)?));
+    }
+    let Some(queued) = first_json_file(&base.join("restore-queued"))? else {
+        return Ok(None);
+    };
+    let file_name = queued
+        .file_name()
+        .ok_or_else(|| format_err!("invalid queued host restore path"))?;
+    let running = base.join("restore-running").join(file_name);
+    std::fs::rename(&queued, &running)?;
+    Ok(Some(read_restore_command(&running)?))
+}
+
+/// Finish a claimed restore and retain a bounded orchestration history.
+pub fn finish_host_restore(result: &HostRestoreRunResult) -> Result<(), Error> {
+    create_run_dirs(&result.host_id)?;
+    let _lock = host_run_lock(&result.host_id)?;
+    let base = run_host_dir(&result.host_id);
+    let running = base
+        .join("restore-running")
+        .join(format!("{}.json", result.run_id));
+    let command = read_restore_command(&running)
+        .map_err(|_| format_err!("restore run '{}' is not currently claimed", result.run_id))?;
+    if command.host_id != result.host_id || command.run_id != result.run_id {
+        bail!("host restore completion identity mismatch");
+    }
+    let history = HostRestoreRunHistory {
+        command,
+        result: result.clone(),
+        finished_at: proxmox_time::epoch_i64(),
+    };
+    write_run_json(
+        &base.join("restore-history").join(format!("{}.json", result.run_id)),
+        &history,
+    )?;
+    std::fs::remove_file(running)?;
+
+    let history_dir = base.join("restore-history");
+    if let Ok(entries) = std::fs::read_dir(&history_dir) {
+        let mut files = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|v| v.to_str()) == Some("json"))
+            .collect::<Vec<_>>();
+        files.sort();
+        if files.len() > 200 {
+            let remove_count = files.len() - 200;
+            for path in files.into_iter().take(remove_count) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    Ok(())
 }

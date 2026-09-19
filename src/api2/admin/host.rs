@@ -4,10 +4,14 @@ use serde_json::Value;
 use proxmox_router::{http_bail, ApiMethod, Permission, Router, RpcEnvironment, SubdirMap};
 use proxmox_schema::api;
 
-use pbs_api_types::{Authid, BackupNamespace, BackupType, JOB_ID_SCHEMA};
+use pbs_api_types::{
+    Authid, BackupNamespace, BackupType, BACKUP_NAMESPACE_SCHEMA, BACKUP_TIME_SCHEMA,
+    DATASTORE_SCHEMA, JOB_ID_SCHEMA,
+};
 use pbsx_api_types::{
     HostAgentHeartbeat, HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand,
-    HostBackupRunInfo, HostConfig, HostListItem, HostSnapshotListItem, HOST_ID_SCHEMA,
+    HostBackupRunInfo, HostConfig, HostListItem, HostRestoreMode, HostRestoreRunCommand,
+    HostSnapshotListItem, HOST_ID_SCHEMA,
     PRIV_HOST_AGENT, PRIV_HOST_AUDIT,
     PRIV_HOST_MODIFY,
 };
@@ -292,14 +296,64 @@ pub fn run_backup(name: String, id: String) -> Result<HostBackupRunCommand, Erro
     crate::server::host::queue_host_backup(&job)
 }
 
+
+#[api(
+    protected: true,
+    input: {
+        properties: {
+            name: { schema: HOST_ID_SCHEMA },
+            store: { schema: DATASTORE_SCHEMA },
+            ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
+            "backup-time": { schema: BACKUP_TIME_SCHEMA },
+            sources: {
+                optional: true,
+                type: Array,
+                items: { type: String },
+            },
+            destination: { type: String },
+            mode: { type: HostRestoreMode, optional: true },
+        },
+    },
+    returns: { type: HostRestoreRunCommand },
+    access: {
+        permission: &Permission::Privilege(&["host", "{name}"], PRIV_HOST_MODIFY, false),
+    },
+)]
+/// Queue a restore from one of this host's ordinary PBS snapshots back to the enrolled agent.
+pub fn run_restore(
+    name: String,
+    store: String,
+    ns: Option<BackupNamespace>,
+    backup_time: i64,
+    sources: Option<Vec<String>>,
+    destination: String,
+    mode: Option<HostRestoreMode>,
+) -> Result<HostRestoreRunCommand, Error> {
+    let host = get_host_config(&name)?;
+    if !host.enable {
+        http_bail!(FORBIDDEN, "host '{}' is disabled", name);
+    }
+    crate::server::host::queue_host_restore(
+        &name,
+        &store,
+        ns,
+        backup_time,
+        sources.unwrap_or_else(|| vec!["/".to_string()]),
+        destination,
+        mode.unwrap_or_default(),
+    )
+}
+
 const HEARTBEAT_ROUTER: Router = Router::new().post(&API_METHOD_HEARTBEAT);
 const BACKUP_ROUTER: Router = Router::new().post(&API_METHOD_RUN_BACKUP);
 const RUNS_ROUTER: Router = Router::new().get(&API_METHOD_LIST_BACKUP_RUNS);
 const SNAPSHOTS_ROUTER: Router = Router::new().get(&API_METHOD_LIST_HOST_SNAPSHOTS);
+const RESTORE_ROUTER: Router = Router::new().post(&API_METHOD_RUN_RESTORE);
 
 const ITEM_SUBDIRS: SubdirMap = &[
     ("backup", &BACKUP_ROUTER),
     ("heartbeat", &HEARTBEAT_ROUTER),
+    ("restore", &RESTORE_ROUTER),
     ("runs", &RUNS_ROUTER),
     ("snapshots", &SNAPSHOTS_ROUTER),
 ];

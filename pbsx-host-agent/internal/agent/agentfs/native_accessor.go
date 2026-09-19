@@ -32,6 +32,8 @@ const (
 	nativeXAttrLastWriteTime  = "user.lastwritetime"
 	nativeXAttrADSManifest    = "user.pbsx.ads.manifest"
 	nativeXAttrADSPrefix      = "user.pbsx.ads."
+	nativeXAttrSparseManifest = "user.pbsx.sparse.manifest"
+	nativeXAttrSparsePrefix   = "user.pbsx.sparse."
 )
 
 // NativeAccessor exposes a local point-in-time snapshot to the Go PXAR
@@ -143,7 +145,7 @@ func (a *NativeAccessor) GetXAttrs(path string) ([]format.XAttr, error) {
 	// does not otherwise preserve as ordinary PXAR xattrs.
 	xinfo, err := a.fs.platformXstat(abs, false)
 	if err != nil {
-		return attrs, nil // extended metadata is best-effort, matching PBS client behavior
+		return nil, err
 	}
 
 	upsert := func(name string, value []byte) {
@@ -188,6 +190,14 @@ func (a *NativeAccessor) GetXAttrs(path string) ([]format.XAttr, error) {
 		if data, err := cbor.Marshal(xinfo.PosixACLs); err == nil {
 			upsert(nativeXAttrACLs, data)
 		}
+	}
+
+	sparseAttrs, sparseErr := nativeSparseXAttrs(abs)
+	if sparseErr != nil {
+		return nil, sparseErr
+	}
+	for _, attr := range sparseAttrs {
+		upsert(attr.Name(), attr.Value())
 	}
 
 	return attrs, nil

@@ -146,6 +146,7 @@ func Run(ctx context.Context, job Job) (*Result, error) {
 		DetectionMode:  detection,
 		PreviousBackup: previous,
 		Compress:       true,
+		StrictMetadata: true,
 		OnUploadProgress: func(progress backupproxy.UploadProgress) {
 			emitProgress(job, Progress{
 				Stage:           "uploading",

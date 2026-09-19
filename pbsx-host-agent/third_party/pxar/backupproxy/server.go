@@ -142,7 +142,7 @@ func (s *Server) RunBackup(ctx context.Context, root string, config BackupConfig
 	result := &BackupResult{}
 	var catBuf bytes.Buffer
 	catBuilder := newCatalogBuilder(&catBuf)
-	if err := s.walkDir(ctx, root, "", enc, nil, catBuilder, nil, result, newWalkState()); err != nil {
+	if err := s.walkDir(ctx, root, "", enc, nil, catBuilder, nil, result, newWalkState(), config.StrictMetadata); err != nil {
 		pipeWriter.CloseWithError(err)
 		<-uploadErrCh
 		return nil, err
@@ -227,7 +227,7 @@ func (s *Server) RunSplitBackup(ctx context.Context, root string, config BackupC
 	result := &BackupResult{}
 	var catBuf bytes.Buffer
 	catBuilder := newCatalogBuilder(&catBuf)
-	if err := s.walkDir(ctx, root, "", enc, nil, catBuilder, nil, result, newWalkState()); err != nil {
+	if err := s.walkDir(ctx, root, "", enc, nil, catBuilder, nil, result, newWalkState(), config.StrictMetadata); err != nil {
 		closeWithError(err)
 		<-uploadCh
 		return nil, err
@@ -417,7 +417,7 @@ func (s *Server) RunMetadataBackup(ctx context.Context, root string, config Back
 	}
 	var catBuf bytes.Buffer
 	catBuilder := newCatalogBuilder(&catBuf)
-	if err := s.walkDir(ctx, root, "", enc, mw, catBuilder, suggest, result, newWalkState()); err != nil {
+	if err := s.walkDir(ctx, root, "", enc, mw, catBuilder, suggest, result, newWalkState(), config.StrictMetadata); err != nil {
 		_, _ = finishPayload(err)
 		return nil, err
 	}
@@ -589,7 +589,7 @@ func newWalkState() *walkState {
 	return &walkState{hardlinks: make(map[string]hardlinkTarget)}
 }
 
-func (s *Server) walkDir(ctx context.Context, dirPath, archiveDir string, enc *encoder.Encoder, mw *metadataWalker, catBuilder *catalogBuilder, suggest func(uint64), result *BackupResult, state *walkState) error {
+func (s *Server) walkDir(ctx context.Context, dirPath, archiveDir string, enc *encoder.Encoder, mw *metadataWalker, catBuilder *catalogBuilder, suggest func(uint64), result *BackupResult, state *walkState, strictMetadata bool) error {
 	entries, err := s.client.ReadDir(ctx, dirPath)
 	if err != nil {
 		return fmt.Errorf("readdir %q: %w", dirPath, err)
@@ -605,17 +605,28 @@ func (s *Server) walkDir(ctx context.Context, dirPath, archiveDir string, enc *e
 		meta := &pxar.Metadata{Stat: entry.Stat}
 		fullPath := dirPath + "/" + entry.Name
 
-		// Collect extended metadata (xattrs, ACLs, FCaps)
-		if xattrs, err := s.client.GetXAttrs(ctx, fullPath); err == nil {
+		// Collect extended metadata. PBS-X uses strict mode so a successful backup
+		// cannot silently lose ACLs/xattrs/ADS when the platform reader fails.
+		if xattrs, err := s.client.GetXAttrs(ctx, fullPath); err != nil {
+			if strictMetadata {
+				return fmt.Errorf("read xattrs for %q: %w", fullPath, err)
+			}
+		} else {
 			meta.XAttrs = xattrs
 		}
-		if acl, err := s.client.GetACL(ctx, fullPath); err == nil {
+		if acl, err := s.client.GetACL(ctx, fullPath); err != nil {
+			if strictMetadata {
+				return fmt.Errorf("read ACL for %q: %w", fullPath, err)
+			}
+		} else {
 			meta.ACL = acl
 		}
-		if fcaps, err := s.client.GetFCaps(ctx, fullPath); err == nil {
-			if len(fcaps) > 0 {
-				meta.FCaps = fcaps
+		if fcaps, err := s.client.GetFCaps(ctx, fullPath); err != nil {
+			if strictMetadata {
+				return fmt.Errorf("read file capabilities for %q: %w", fullPath, err)
 			}
+		} else if len(fcaps) > 0 {
+			meta.FCaps = fcaps
 		}
 
 		// Propagate extended metadata to DirEntry for change detection
@@ -636,7 +647,7 @@ func (s *Server) walkDir(ctx context.Context, dirPath, archiveDir string, enc *e
 			if err := enc.CreateDirectory(entry.Name, meta); err != nil {
 				return fmt.Errorf("create dir %q: %w", entry.Name, err)
 			}
-			if err := s.walkDir(ctx, fullPath, path.Join(archiveDir, entry.Name), enc, mw, catBuilder, suggest, result, state); err != nil {
+			if err := s.walkDir(ctx, fullPath, path.Join(archiveDir, entry.Name), enc, mw, catBuilder, suggest, result, state, strictMetadata); err != nil {
 				return err
 			}
 			if err := enc.Finish(); err != nil {

@@ -2,6 +2,8 @@ package pxar
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -95,15 +97,78 @@ const (
 	XAttrLastWriteTime  = "user.lastwritetime"
 	XAttrADSManifest    = "user.pbsx.ads.manifest"
 	XAttrADSPrefix      = "user.pbsx.ads."
+	XAttrSparseManifest = "user.pbsx.sparse.manifest"
+	XAttrSparsePrefix   = "user.pbsx.sparse."
 )
 
 func IsCanonicalXAttr(name string) bool {
 	switch name {
 	case XAttrOwner, XAttrGroup, XAttrACLs, XAttrFileAttributes,
-		XAttrCreationTime, XAttrLastAccessTime, XAttrLastWriteTime, XAttrADSManifest:
+		XAttrCreationTime, XAttrLastAccessTime, XAttrLastWriteTime, XAttrADSManifest, XAttrSparseManifest:
 		return true
 	}
-	return strings.HasPrefix(name, XAttrADSPrefix)
+	return strings.HasPrefix(name, XAttrADSPrefix) || strings.HasPrefix(name, XAttrSparsePrefix)
+}
+
+type sparseHole struct {
+	Offset uint64 `cbor:"o"`
+	Length uint64 `cbor:"l"`
+}
+
+type sparseRestoreManifest struct {
+	Size   uint64 `cbor:"size"`
+	Digest string `cbor:"digest"`
+	Chunks uint32 `cbor:"chunks"`
+}
+
+func decodeSparseHoles(xattrs map[string][]byte, fileSize uint64) ([]sparseHole, bool, error) {
+	rawManifest, ok := xattrs[XAttrSparseManifest]
+	if !ok {
+		return nil, false, nil
+	}
+	var manifest sparseRestoreManifest
+	if err := cbor.Unmarshal(rawManifest, &manifest); err != nil {
+		return nil, true, fmt.Errorf("decode sparse manifest: %w", err)
+	}
+	if manifest.Size != fileSize {
+		return nil, true, fmt.Errorf("sparse manifest size %d does not match file size %d", manifest.Size, fileSize)
+	}
+	if manifest.Chunks == 0 || manifest.Chunks > 1<<20 {
+		return nil, true, fmt.Errorf("invalid sparse metadata chunk count %d", manifest.Chunks)
+	}
+	digestBytes, err := hex.DecodeString(manifest.Digest)
+	if err != nil || len(digestBytes) != sha256.Size {
+		return nil, true, fmt.Errorf("invalid sparse metadata digest")
+	}
+	digestTag := manifest.Digest[:16]
+	var encoded []byte
+	for i := uint32(0); i < manifest.Chunks; i++ {
+		key := fmt.Sprintf("%s%s.%06x", XAttrSparsePrefix, digestTag, i)
+		chunk, exists := xattrs[key]
+		if !exists {
+			return nil, true, fmt.Errorf("missing sparse metadata chunk %d", i)
+		}
+		encoded = append(encoded, chunk...)
+	}
+	actual := sha256.Sum256(encoded)
+	if !strings.EqualFold(hex.EncodeToString(actual[:]), manifest.Digest) {
+		return nil, true, fmt.Errorf("sparse metadata digest mismatch")
+	}
+	var holes []sparseHole
+	if err := cbor.Unmarshal(encoded, &holes); err != nil {
+		return nil, true, fmt.Errorf("decode sparse ranges: %w", err)
+	}
+	var lastEnd uint64
+	for i, hole := range holes {
+		if hole.Length == 0 || hole.Offset > fileSize || hole.Length > fileSize-hole.Offset {
+			return nil, true, fmt.Errorf("invalid sparse range %d", i)
+		}
+		if i > 0 && hole.Offset < lastEnd {
+			return nil, true, fmt.Errorf("overlapping sparse range %d", i)
+		}
+		lastEnd = hole.Offset + hole.Length
+	}
+	return holes, true, nil
 }
 
 func ParseXattrUnixSecs(data []byte) (secs int64, ok bool) {

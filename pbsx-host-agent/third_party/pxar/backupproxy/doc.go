@@ -135,6 +135,9 @@ type BackupConfig struct {
 	// snapshot. Useful for migrating old archives (e.g. tape restores) where
 	// the original backup time predates the latest PBS snapshot.
 	IgnoreNewerPrevious bool
+	// StrictMetadata turns xattr/ACL/file-capability read failures into backup failures.
+	// PBS-X enables this so a successful host backup never silently omits metadata.
+	StrictMetadata bool
 }
 
 // PreviousBackupRef identifies a previous backup snapshot for metadata comparison.

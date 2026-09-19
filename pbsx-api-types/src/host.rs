@@ -736,3 +736,75 @@ pub enum PbsxZfsRaidLevel {
     /// Triple-parity RAIDZ3.
     RaidZ3,
 }
+
+#[api]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+/// Metadata behavior for a PBS-X host restore.
+pub enum HostRestoreMode {
+    /// Restore content and supported filesystem metadata.
+    Normal,
+    /// Restore content only, without applying archived metadata.
+    NoAttr,
+}
+
+impl Default for HostRestoreMode {
+    fn default() -> Self {
+        Self::Normal
+    }
+}
+
+#[api(
+    properties: {
+        "run-id": { type: String },
+        "host-id": { schema: HOST_ID_SCHEMA },
+        store: { schema: DATASTORE_SCHEMA },
+        ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
+        "backup-time": { schema: BACKUP_TIME_SCHEMA },
+        sources: {
+            type: Array,
+            items: { type: String },
+        },
+        destination: {
+            type: String,
+            description: "Destination directory on the protected host.",
+        },
+        mode: { type: HostRestoreMode },
+        "requested-at": { type: i64 },
+    },
+)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// Durable restore command claimed by the enrolled host agent.
+pub struct HostRestoreRunCommand {
+    pub run_id: String,
+    pub host_id: String,
+    pub store: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ns: Option<BackupNamespace>,
+    pub backup_time: i64,
+    pub sources: Vec<String>,
+    pub destination: String,
+    #[serde(default)]
+    pub mode: HostRestoreMode,
+    pub requested_at: i64,
+}
+
+#[api(
+    properties: {
+        "host-id": { schema: HOST_ID_SCHEMA },
+        "run-id": { type: String },
+        success: { type: bool },
+        error: { optional: true, type: String },
+    },
+)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// Completion payload for a direct PBS-X host restore.
+pub struct HostRestoreRunResult {
+    pub host_id: String,
+    pub run_id: String,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}

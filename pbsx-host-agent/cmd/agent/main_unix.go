@@ -19,6 +19,7 @@ import (
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/lifecycle"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/migration"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativebackup"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativerestore"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/updater"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
@@ -108,6 +109,10 @@ func (p *pbsService) run() {
 
 	innerWg.Go(func() {
 		nativebackup.Poll(innerCtx, 15*time.Second)
+	})
+
+	innerWg.Go(func() {
+		nativerestore.Poll(innerCtx, 15*time.Second)
 	})
 
 	innerWg.Go(func() {

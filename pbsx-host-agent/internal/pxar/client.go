@@ -19,9 +19,18 @@ var clientBufPool = sync.Pool{
 	},
 }
 
+type localReader interface {
+	LookupByPath(context.Context, string) (*pxar.FileInfo, error)
+	ReadDir(context.Context, uint64) ([]pxar.FileInfo, error)
+	ReadLink(context.Context, uint64, uint64) ([]byte, error)
+	ListXAttrs(context.Context, uint64, uint64) (map[string][]byte, error)
+	ReadFileContentReader(context.Context, uint64, uint64) (io.ReadCloser, error)
+	Close() error
+}
+
 type Client struct {
 	pipe       *arpc.StreamPipe
-	pr         *PxarReader
+	pr         localReader
 	errCh      chan error
 	errFwd     chan error
 	errFwdDone chan struct{}
@@ -39,8 +48,8 @@ func NewRemoteClient(pipe *arpc.StreamPipe, name string) *Client {
 	return c
 }
 
-func NewLocalClient(pr *PxarReader, name string) (*Client, chan error) {
-	errCh := make(chan error, 256)
+func NewLocalClient(pr localReader, name string) (*Client, chan error) {
+	errCh := make(chan error, 4096)
 	return &Client{pr: pr, errCh: errCh, name: name}, errCh
 }
 
