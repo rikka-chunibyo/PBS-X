@@ -25,6 +25,19 @@ func ValidateHostID(id string) error {
 // InitializeHostID persists a stable PBS-X host identity. PBSX_HOST_ID wins on
 // first enrollment. Otherwise the current hostname becomes the initial ID.
 func InitializeHostID() (string, error) {
+	// A supplied bootstrap token marks an explicit enrollment attempt. In that
+	// case, honor the accompanying host ID instead of retaining an earlier one.
+	if conf.Env.InitBootstrapToken != "" && conf.Env.HostID != "" {
+		if err := ValidateHostID(conf.Env.HostID); err != nil {
+			return "", err
+		}
+		entry := &registry.RegistryEntry{Path: registry.CONFIG, Key: "HostID", Value: conf.Env.HostID}
+		if err := registry.UpsertEntry(entry); err != nil {
+			return "", fmt.Errorf("persist HostID: %w", err)
+		}
+		return conf.Env.HostID, nil
+	}
+
 	if existing, err := registry.GetEntry(registry.CONFIG, "HostID", false); err == nil && existing != nil && existing.Value != "" {
 		if err := ValidateHostID(existing.Value); err != nil {
 			return "", fmt.Errorf("stored HostID is invalid: %w", err)

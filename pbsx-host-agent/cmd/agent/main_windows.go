@@ -18,7 +18,6 @@ import (
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/lifecycle"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativebackup"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativerestore"
-	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/updater"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
 	"github.com/pbs-x/pbsx-host-agent/internal/crypto"
@@ -64,8 +63,14 @@ func (p *pbsService) Start(s service.Service) error {
 func (p *pbsService) run() {
 	_ = log.L.SetServiceLogger()
 	_ = windows.SetPriorityClass(windows.CurrentProcess(), 0x00000040)
-	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "ServerURL", Value: conf.Env.InitServerURL})
-	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "BootstrapToken", Value: conf.Env.InitBootstrapToken})
+	if err := persistEnrollmentValue("ServerURL", conf.Env.InitServerURL); err != nil {
+		log.Error(err, "failed to save PBS-X server URL")
+		return
+	}
+	if err := persistEnrollmentValue("BootstrapToken", conf.Env.InitBootstrapToken); err != nil {
+		log.Error(err, "failed to save PBS-X bootstrap token")
+		return
+	}
 	if _, err := agent.InitializeHostID(); err != nil {
 		log.Error(err, "failed to initialize PBS-X host identity")
 		return
@@ -74,7 +79,10 @@ func (p *pbsService) run() {
 	if fingerprint == "" {
 		fingerprint = os.Getenv("PBS_PLUS_INIT_SERVER_CA_FINGERPRINT")
 	}
-	_ = registry.CreateEntryIfNotExists(&registry.RegistryEntry{Path: registry.CONFIG, Key: "ServerCAFingerprint", Value: fingerprint})
+	if err := persistEnrollmentValue("ServerCAFingerprint", fingerprint); err != nil {
+		log.Error(err, "failed to save PBS-X server fingerprint")
+		return
+	}
 
 	if err := lifecycle.WaitForServerURL(p.ctx); err != nil {
 		return
@@ -160,6 +168,16 @@ func main() {
 		}
 	}()
 	conf.Version = Version
+	if code, requested, err := enrollmentCodeFromArgs(os.Args[1:]); requested {
+		if err == nil {
+			err = runEnrollmentCode(code)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Enrollment failed:", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if pending {
 		go func() {

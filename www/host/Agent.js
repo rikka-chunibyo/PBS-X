@@ -17,60 +17,81 @@ Ext.define('PBS.HostAgentView', {
 		success: function(response) {
 		    let data = response.result.data;
 		    let origin = window.location.origin;
-		    let values = {
-			PBSX_HOST_ID: view.host,
-			PBSX_INIT_SERVER_URL: origin,
-			PBSX_INIT_BOOTSTRAP_TOKEN: data.token,
-			PBSX_INIT_SERVER_CA_FINGERPRINT: data['server-fingerprint'],
-			GODEBUG: 'fips140=on',
-			PBSX_STDOUT_ONLY: 'true',
+		    let encodeEnrollment = function(server) {
+			let payload = JSON.stringify({
+			    v: 1,
+			    host_id: view.host,
+			    server_url: server,
+			    bootstrap_token: data.token,
+			    server_ca_fingerprint: data['server-fingerprint'],
+			});
+			let binary = '';
+			for (let byte of new TextEncoder().encode(payload)) {
+			    binary += String.fromCharCode(byte);
+			}
+			return `pbsx1.${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
 		    };
-		    let powerShell = Object.entries(values).map(([key, value]) => {
-			value = String(value).replace(/'/g, "''");
-			return `$env:${key} = '${value}'`;
-		    });
-		    powerShell.push("& '.\\pbsx-host-agent-windows-amd64.exe'");
-		    let commandPrompt = Object.entries(values).map(([key, value]) => {
-			return `set "${key}=${value}"`;
-		    });
-		    commandPrompt.push('pbsx-host-agent-windows-amd64.exe');
-		    let raw = Object.entries(values).map(([key, value]) => `${key}=${value}`);
-		    let posixShell = Object.entries(values).map(([key, value]) => {
-			value = String(value).replace(/'/g, "'\\''");
-			return `export ${key}='${value}'`;
-		    });
-		    posixShell.push('./pbsx-host-agent-linux-amd64');
-
-		    let textArea = function(title, value) {
-			return {
-			    xtype: 'textarea',
-			    title,
-			    value: value.join('\n'),
-			    readOnly: true,
-			    fieldStyle: 'font-family: monospace',
-			};
-		    };
+		    let initialCode = encodeEnrollment(origin);
 
 		    Ext.create('Ext.window.Window', {
 			title: gettext('Enroll Agent'),
 			modal: true,
-			width: 820,
-			height: 440,
+			width: 760,
+			height: 430,
 			layout: 'fit',
 			items: [{
-			    xtype: 'tabpanel',
-			    items: [
-				textArea(gettext('PowerShell'), powerShell),
-				textArea(gettext('CMD'), commandPrompt),
-				textArea(gettext('Bash'), posixShell),
-				textArea(gettext('Raw'), raw),
-			    ],
+			    xtype: 'form',
+			    bodyPadding: 15,
+			    defaults: {
+				anchor: '100%',
+				labelWidth: 150,
+			    },
+			    items: [{
+				xtype: 'textfield',
+				fieldLabel: gettext('ID'),
+				value: view.host,
+				readOnly: true,
+			    }, {
+				xtype: 'textfield',
+				itemId: 'serverField',
+				fieldLabel: gettext('Server / Host'),
+				value: origin,
+				allowBlank: false,
+				listeners: {
+				    change: function(field, value) {
+					field.up('form').down('#enrollmentCode').setValue(encodeEnrollment(value.trim()));
+				    },
+				},
+			    }, {
+				xtype: 'textfield',
+				fieldLabel: gettext('Token'),
+				value: data.token,
+				readOnly: true,
+			    }, {
+				xtype: 'textfield',
+				fieldLabel: gettext('Fingerprint'),
+				value: data['server-fingerprint'],
+				readOnly: true,
+			    }, {
+				xtype: 'displayfield',
+				fieldLabel: gettext('Run'),
+				value: 'pbsx-host-agent-windows-amd64.exe enroll &lt;enrollment-code&gt;',
+			    }, {
+				xtype: 'textarea',
+				itemId: 'enrollmentCode',
+				fieldLabel: gettext('Enrollment Code'),
+				value: initialCode,
+				readOnly: true,
+				height: 110,
+				fieldStyle: 'font-family: monospace',
+			    }],
 			}],
 			buttons: [{
-			    text: gettext('Copy'),
+			    text: gettext('Copy Enrollment Code'),
+			    iconCls: 'fa fa-clipboard',
 			    handler: function(button) {
 				let win = button.up('window');
-				let area = win.down('tabpanel').getActiveTab();
+				let area = win.down('#enrollmentCode');
 				let value = area.getValue();
 				if (navigator.clipboard) {
 				    navigator.clipboard.writeText(value).catch(() => area.selectText());
@@ -85,7 +106,7 @@ Ext.define('PBS.HostAgentView', {
 			}],
 			listeners: {
 			    afterrender: function(win) {
-				win.down('tabpanel').getActiveTab().focus(true, 100);
+				win.down('#serverField').focus(true, 100);
 			    },
 			},
 		    }).show();
