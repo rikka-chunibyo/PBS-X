@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use anyhow::Error;
-use proxmox_schema::{ApiType, Schema};
 use proxmox_product_config::replace_privileged_config;
+use proxmox_schema::{ApiType, Schema};
 use proxmox_section_config::{SectionConfig, SectionConfigData, SectionConfigPlugin};
 
 use pbs_api_types::JOB_ID_SCHEMA;
 use pbsx_api_types::HostBackupJobConfig;
 
-use crate::{open_backup_lockfile, BackupLockGuard};
+use crate::{BackupLockGuard, open_backup_lockfile};
 
 pub static CONFIG: LazyLock<SectionConfig> = LazyLock::new(init);
 
@@ -49,10 +49,7 @@ pub fn save_config(config: &SectionConfigData) -> Result<(), Error> {
     replace_privileged_config(HOST_BACKUP_CFG_FILENAME, raw.as_bytes())
 }
 
-pub fn complete_host_backup_job_id(
-    _arg: &str,
-    _param: &HashMap<String, String>,
-) -> Vec<String> {
+pub fn complete_host_backup_job_id(_arg: &str, _param: &HashMap<String, String>) -> Vec<String> {
     match config() {
         Ok((data, _digest)) => data.sections.keys().map(|id| id.to_string()).collect(),
         Err(_) => Vec::new(),

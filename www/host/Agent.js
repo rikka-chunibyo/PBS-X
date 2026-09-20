@@ -17,32 +17,75 @@ Ext.define('PBS.HostAgentView', {
 		success: function(response) {
 		    let data = response.result.data;
 		    let origin = window.location.origin;
-		    let text = [
-			`PBSX_HOST_ID=${view.host}`,
-			`PBSX_INIT_SERVER_URL=${origin}`,
-			`PBSX_INIT_BOOTSTRAP_TOKEN=${data.token}`,
-			`PBSX_INIT_SERVER_CA_FINGERPRINT=${data['server-fingerprint']}`,
-		    ].join('\n');
+		    let values = {
+			PBSX_HOST_ID: view.host,
+			PBSX_INIT_SERVER_URL: origin,
+			PBSX_INIT_BOOTSTRAP_TOKEN: data.token,
+			PBSX_INIT_SERVER_CA_FINGERPRINT: data['server-fingerprint'],
+			GODEBUG: 'fips140=on',
+			PBSX_STDOUT_ONLY: 'true',
+		    };
+		    let powerShell = Object.entries(values).map(([key, value]) => {
+			value = String(value).replace(/'/g, "''");
+			return `$env:${key} = '${value}'`;
+		    });
+		    powerShell.push("& '.\\pbsx-host-agent-windows-amd64.exe'");
+		    let commandPrompt = Object.entries(values).map(([key, value]) => {
+			return `set "${key}=${value}"`;
+		    });
+		    commandPrompt.push('pbsx-host-agent-windows-amd64.exe');
+		    let raw = Object.entries(values).map(([key, value]) => `${key}=${value}`);
+		    let posixShell = Object.entries(values).map(([key, value]) => {
+			value = String(value).replace(/'/g, "'\\''");
+			return `export ${key}='${value}'`;
+		    });
+		    posixShell.push('./pbsx-host-agent-linux-amd64');
+
+		    let textArea = function(title, value) {
+			return {
+			    xtype: 'textarea',
+			    title,
+			    value: value.join('\n'),
+			    readOnly: true,
+			    fieldStyle: 'font-family: monospace',
+			};
+		    };
 
 		    Ext.create('Ext.window.Window', {
 			title: gettext('Enroll Agent'),
 			modal: true,
-			width: 720,
+			width: 820,
+			height: 440,
 			layout: 'fit',
 			items: [{
-			    xtype: 'textarea',
-			    value: text,
-			    readOnly: true,
-			    grow: true,
-			    fieldStyle: 'font-family: monospace',
+			    xtype: 'tabpanel',
+			    items: [
+				textArea(gettext('PowerShell'), powerShell),
+				textArea(gettext('CMD'), commandPrompt),
+				textArea(gettext('Bash'), posixShell),
+				textArea(gettext('Raw'), raw),
+			    ],
 			}],
 			buttons: [{
+			    text: gettext('Copy'),
+			    handler: function(button) {
+				let win = button.up('window');
+				let area = win.down('tabpanel').getActiveTab();
+				let value = area.getValue();
+				if (navigator.clipboard) {
+				    navigator.clipboard.writeText(value).catch(() => area.selectText());
+				} else {
+				    area.selectText();
+				    document.execCommand('copy');
+				}
+			    },
+			}, {
 			    text: gettext('Close'),
 			    handler: function(button) { button.up('window').close(); },
 			}],
 			listeners: {
 			    afterrender: function(win) {
-				win.down('textarea').focus(true, 100);
+				win.down('tabpanel').getActiveTab().focus(true, 100);
 			    },
 			},
 		    }).show();

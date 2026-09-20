@@ -24,6 +24,17 @@ type Snapshot struct {
 	Handler  SnapshotHandler `json:"-"`
 }
 
+// IsZero reports whether the snapshot contains no provider or direct-mode state.
+func (s Snapshot) IsZero() bool {
+	return s.Path == "" &&
+		s.BackendPath == "" &&
+		s.TimeStarted.IsZero() &&
+		s.SourcePath == "" &&
+		!s.Direct &&
+		len(s.Excludes) == 0 &&
+		s.Handler == nil
+}
+
 type SnapshotHandler interface {
 	CreateSnapshot(jobID string, sourcePath string) (Snapshot, error)
 	DeleteSnapshot(snapshot Snapshot) error

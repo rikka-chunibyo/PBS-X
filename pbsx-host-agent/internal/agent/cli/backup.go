@@ -59,7 +59,7 @@ func (s *backupSession) Close() {
 			log.Info("session: closing agentfs server")
 			s.fs.Close()
 		}
-		if s.snapshot != (snapshots.Snapshot{}) && !s.snapshot.Direct && s.snapshot.Handler != nil {
+		if !s.snapshot.IsZero() && !s.snapshot.Direct && s.snapshot.Handler != nil {
 			log.Info("session: deleting snapshot", "path", s.snapshot.Path)
 			if err := s.snapshot.Handler.DeleteSnapshot(s.snapshot); err != nil {
 				log.Error(err, "session: delete snapshot failed")
@@ -405,7 +405,7 @@ func Backup(rpcSess *arpc.StreamPipe, sourceMode string, readMode string, drive 
 		default:
 			var err error
 			snapshot, err = snapshots.Manager.CreateSnapshot(backupID, drive)
-			if err != nil && snapshot == (snapshots.Snapshot{}) {
+			if err != nil && snapshot.IsZero() {
 				log.Error(err, "Backup: VSS snapshot failed; switching to direct mode", "drive", drive)
 				backupMode = "direct"
 

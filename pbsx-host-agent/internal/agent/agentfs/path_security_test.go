@@ -10,6 +10,7 @@ func TestCanonicalRelativePath(t *testing.T) {
 	good := map[string]string{
 		"":          ".",
 		".":         ".",
+		"/":         ".",
 		"foo":       "foo",
 		"foo/bar":   Join("foo", "bar"),
 		`foo\\bar`:  Join("foo", "bar"),

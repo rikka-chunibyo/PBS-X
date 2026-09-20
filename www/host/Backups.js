@@ -85,7 +85,9 @@ Ext.define('PBS.HostBackupSnapshotView', {
 	restoreSnapshot: function() {
 	    let view = this.getView();
 	    let selection = view.getSelection();
-	    if (selection.length < 1) return;
+	    if (selection.length < 1) {
+		return;
+	    }
 	    let data = selection[0].data;
 	    Ext.create('PBS.window.HostRestore', {
 		host: view.host,

@@ -6,20 +6,20 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, format_err, Error};
+use anyhow::{Error, bail, format_err};
 use nix::sys::stat::Mode;
 
-use proxmox_sys::fs::{create_path, file_read_optional_string, replace_file, CreateOptions};
+use proxmox_sys::fs::{CreateOptions, create_path, file_read_optional_string, replace_file};
 
 use pbs_api_types::{Authid, Tokenname, Userid};
+use pbs_buildcfg::PROXMOX_BACKUP_STATE_DIR_M;
+use pbs_config::{BackupLockGuard, open_backup_lockfile};
 use pbsx_api_types::{
     HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand, HostBackupRunInfo,
-    HostBackupRunProgress, HostBackupRunResult, HostBackupRunState, HostConfig, HostEnrollmentToken,
-    HostRestoreMode, HostRestoreRunCommand, HostRestoreRunInfo, HostRestoreRunProgress,
-    HostRestoreRunResult, HostRestoreRunState,
+    HostBackupRunProgress, HostBackupRunResult, HostBackupRunState, HostConfig,
+    HostEnrollmentToken, HostRestoreMode, HostRestoreRunCommand, HostRestoreRunInfo,
+    HostRestoreRunProgress, HostRestoreRunResult, HostRestoreRunState,
 };
-use pbs_buildcfg::PROXMOX_BACKUP_STATE_DIR_M;
-use pbs_config::{open_backup_lockfile, BackupLockGuard};
 
 pub const HOST_STATUS_BASEDIR: &str = concat!(PROXMOX_BACKUP_STATE_DIR_M!(), "/host-status");
 pub const HOST_ENROLLMENT_BASEDIR: &str =
@@ -56,33 +56,18 @@ pub fn create_host_status_dir() -> Result<(), Error> {
         .owner(backup_user.uid)
         .group(backup_user.gid);
 
-    create_path(
-        HOST_STATUS_BASEDIR,
-        Some(options.clone()),
-        Some(options.clone()),
-    )
-    .map_err(|err: Error| format_err!("unable to create PBS-X host status directory - {err}"))?;
+    create_path(HOST_STATUS_BASEDIR, Some(options), Some(options)).map_err(|err: Error| {
+        format_err!("unable to create PBS-X host status directory - {err}")
+    })?;
 
-    create_path(
-        HOST_ENROLLMENT_BASEDIR,
-        Some(options.clone()),
-        Some(options.clone()),
-    )
-    .map_err(|err: Error| format_err!("unable to create PBS-X enrollment directory - {err}"))?;
+    create_path(HOST_ENROLLMENT_BASEDIR, Some(options), Some(options))
+        .map_err(|err: Error| format_err!("unable to create PBS-X enrollment directory - {err}"))?;
 
-    create_path(
-        HOST_CREDENTIAL_BASEDIR,
-        Some(options.clone()),
-        Some(options.clone()),
-    )
-    .map_err(|err: Error| format_err!("unable to create PBS-X credential directory - {err}"))?;
+    create_path(HOST_CREDENTIAL_BASEDIR, Some(options), Some(options))
+        .map_err(|err: Error| format_err!("unable to create PBS-X credential directory - {err}"))?;
 
-    create_path(
-        HOST_RUN_BASEDIR,
-        Some(options.clone()),
-        Some(options),
-    )
-    .map_err(|err: Error| format_err!("unable to create PBS-X host run directory - {err}"))?;
+    create_path(HOST_RUN_BASEDIR, Some(options), Some(options))
+        .map_err(|err: Error| format_err!("unable to create PBS-X host run directory - {err}"))?;
 
     Ok(())
 }
@@ -158,8 +143,9 @@ pub fn create_enrollment_token(host: &str) -> Result<HostEnrollmentToken, Error>
         .perm(Mode::from_bits_truncate(0o0640))
         .owner(backup_user.uid)
         .group(backup_user.gid);
-    replace_file(&path, &raw, options, true)
-        .map_err(|err| format_err!("unable to persist enrollment token for host '{host}' - {err}"))?;
+    replace_file(&path, &raw, options, true).map_err(|err| {
+        format_err!("unable to persist enrollment token for host '{host}' - {err}")
+    })?;
 
     Ok(HostEnrollmentToken {
         token,
@@ -198,8 +184,9 @@ pub fn consume_enrollment_token(host: &str, token: &str) -> Result<(), Error> {
         bail!("invalid enrollment token for host '{host}'");
     }
 
-    std::fs::remove_file(&path)
-        .map_err(|err| format_err!("unable to consume enrollment token for host '{host}' - {err}"))?;
+    std::fs::remove_file(&path).map_err(|err| {
+        format_err!("unable to consume enrollment token for host '{host}' - {err}")
+    })?;
     Ok(())
 }
 
@@ -262,10 +249,14 @@ pub fn host_for_upload_auth(auth_id: &Authid) -> Result<Option<String>, Error> {
 
 fn token_name_for_host(host: &str) -> Result<Tokenname, Error> {
     let digest = hex::encode(openssl::sha::sha256(host.as_bytes()));
-    format!("pbsx-{}", &digest[..24]).parse().map_err(Error::from)
+    Tokenname::try_from(format!("pbsx-{}", &digest[..24]))
 }
 
-pub fn upload_target_allowed(host: &str, store: &str, ns: &pbs_api_types::BackupNamespace) -> Result<bool, Error> {
+pub fn upload_target_allowed(
+    host: &str,
+    store: &str,
+    ns: &pbs_api_types::BackupNamespace,
+) -> Result<bool, Error> {
     let (config, _) = pbs_config::host_backup::config()?;
     let jobs: Vec<HostBackupJobConfig> = config.convert_to_typed_array("host-backup")?;
     Ok(jobs.into_iter().any(|job| {
@@ -287,7 +278,10 @@ fn sync_host_upload_acl_for(host: &str, auth_id: &Authid) -> Result<(), Error> {
 
     let (config, _) = pbs_config::host_backup::config()?;
     let jobs: Vec<HostBackupJobConfig> = config.convert_to_typed_array("host-backup")?;
-    for job in jobs.into_iter().filter(|job| job.enable && job.host == host) {
+    for job in jobs
+        .into_iter()
+        .filter(|job| job.enable && job.host == host)
+    {
         let path = format!("/{}", job.datastore_acl_path().join("/"));
         acl.insert_user_role(&path, auth_id, "DatastoreBackup", false);
     }
@@ -308,11 +302,7 @@ pub fn sync_host_upload_acl(host: &str) -> Result<(), Error> {
 pub fn revoke_host_upload_auth(auth_id: &str) -> Result<(), Error> {
     let auth_id: Authid = auth_id.parse()?;
     if let Some(token_name) = auth_id.tokenname().map(ToOwned::to_owned) {
-        let _ = crate::api2::access::user::delete_token(
-            auth_id.user().clone(),
-            token_name,
-            None,
-        );
+        let _ = crate::api2::access::user::delete_token(auth_id.user().clone(), token_name, None);
     }
 
     let _lock = pbs_config::acl::lock_config()?;
@@ -417,7 +407,6 @@ pub fn remove_host_status(host: &str) -> Result<(), Error> {
     Ok(())
 }
 
-
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 struct HostBackupRunProgressRecord {
@@ -450,16 +439,18 @@ fn create_run_dirs(host: &str) -> Result<(), Error> {
         .owner(backup_user.uid)
         .group(backup_user.gid);
     let host_dir = run_host_dir(host);
-    create_path(&host_dir, Some(options.clone()), Some(options.clone()))?;
+    create_path(&host_dir, Some(options), Some(options))?;
     for child in [
-        "queued", "running", "progress", "history",
-        "restore-queued", "restore-running", "restore-progress", "restore-history",
+        "queued",
+        "running",
+        "progress",
+        "history",
+        "restore-queued",
+        "restore-running",
+        "restore-progress",
+        "restore-history",
     ] {
-        create_path(
-            host_dir.join(child),
-            Some(options.clone()),
-            Some(options.clone()),
-        )?;
+        create_path(host_dir.join(child), Some(options), Some(options))?;
     }
     Ok(())
 }
@@ -661,7 +652,9 @@ pub fn update_host_backup_progress(progress: &HostBackupRunProgress) -> Result<(
     create_run_dirs(&progress.host_id)?;
     let _lock = host_run_lock(&progress.host_id)?;
     let base = run_host_dir(&progress.host_id);
-    let running = base.join("running").join(format!("{}.json", progress.run_id));
+    let running = base
+        .join("running")
+        .join(format!("{}.json", progress.run_id));
     let command = read_run_command(&running)
         .map_err(|_| format_err!("host run '{}' is not currently claimed", progress.run_id))?;
     if command.host_id != progress.host_id || command.run_id != progress.run_id {
@@ -671,13 +664,22 @@ pub fn update_host_backup_progress(progress: &HostBackupRunProgress) -> Result<(
     let path = run_progress_path(&progress.host_id, &progress.run_id);
     let now = proxmox_time::epoch_i64();
     let previous = read_run_progress(&path).ok();
-    let started_at = previous.as_ref().map(|record| record.started_at).unwrap_or(now);
+    let started_at = previous
+        .as_ref()
+        .map(|record| record.started_at)
+        .unwrap_or(now);
     let mut current = progress.clone();
     if let Some(previous) = previous {
-        current.processed_bytes = current.processed_bytes.max(previous.progress.processed_bytes);
+        current.processed_bytes = current
+            .processed_bytes
+            .max(previous.progress.processed_bytes);
         current.uploaded_bytes = current.uploaded_bytes.max(previous.progress.uploaded_bytes);
-        current.processed_chunks = current.processed_chunks.max(previous.progress.processed_chunks);
-        current.uploaded_chunks = current.uploaded_chunks.max(previous.progress.uploaded_chunks);
+        current.processed_chunks = current
+            .processed_chunks
+            .max(previous.progress.processed_chunks);
+        current.uploaded_chunks = current
+            .uploaded_chunks
+            .max(previous.progress.uploaded_chunks);
         current.files = current.files.max(previous.progress.files);
         if current.stage.is_none() {
             current.stage = previous.progress.stage;
@@ -800,7 +802,9 @@ pub fn list_host_backup_runs(host: &str) -> Result<Vec<HostBackupRunInfo>, Error
                 if path.extension().and_then(|value| value.to_str()) != Some("json") {
                     continue;
                 }
-                let Ok(command) = read_run_command(&path) else { continue };
+                let Ok(command) = read_run_command(&path) else {
+                    continue;
+                };
                 let progress = if matches!(state, HostBackupRunState::Running) {
                     read_run_progress(&run_progress_path(host, &command.run_id)).ok()
                 } else {
@@ -817,7 +821,9 @@ pub fn list_host_backup_runs(host: &str) -> Result<Vec<HostBackupRunInfo>, Error
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
                 continue;
             }
-            let Ok(history) = read_run_history(&path) else { continue };
+            let Ok(history) = read_run_history(&path) else {
+                continue;
+            };
             let mut info = run_info_from_command(
                 &history.command,
                 HostBackupRunState::Finished,
@@ -969,7 +975,9 @@ pub fn queue_host_restore(
     if destination.trim().is_empty() {
         bail!("restore destination must not be empty");
     }
-    let effective_ns = ns.clone().unwrap_or_else(pbs_api_types::BackupNamespace::root);
+    let effective_ns = ns
+        .clone()
+        .unwrap_or_else(pbs_api_types::BackupNamespace::root);
     if !upload_target_allowed(host, store, &effective_ns)? {
         bail!("datastore/namespace target is not configured for host '{host}'");
     }
@@ -1048,7 +1056,9 @@ pub fn finish_host_restore(result: &HostRestoreRunResult) -> Result<(), Error> {
         finished_at: proxmox_time::epoch_i64(),
     };
     write_run_json(
-        &base.join("restore-history").join(format!("{}.json", result.run_id)),
+        &base
+            .join("restore-history")
+            .join(format!("{}.json", result.run_id)),
         &history,
     )?;
     std::fs::remove_file(running)?;
@@ -1079,7 +1089,9 @@ pub fn list_host_restore_runs(host: &str) -> Result<Vec<HostRestoreRunInfo>, Err
     let base = run_host_dir(host);
     let mut out = Vec::new();
 
-    let make_info = |command: HostRestoreRunCommand, state: HostRestoreRunState, progress: Option<&HostRestoreRunProgressRecord>| {
+    let make_info = |command: HostRestoreRunCommand,
+                     state: HostRestoreRunState,
+                     progress: Option<&HostRestoreRunProgressRecord>| {
         let mut info = HostRestoreRunInfo {
             run_id: command.run_id.clone(),
             host_id: command.host_id.clone(),
@@ -1140,7 +1152,10 @@ pub fn list_host_restore_runs(host: &str) -> Result<Vec<HostRestoreRunInfo>, Err
             }
             let raw = std::fs::read(&path)?;
             let history: HostRestoreRunHistory = serde_json::from_slice(&raw).map_err(|err| {
-                format_err!("unable to parse PBS-X restore history '{}': {err}", path.display())
+                format_err!(
+                    "unable to parse PBS-X restore history '{}': {err}",
+                    path.display()
+                )
             })?;
             let mut info = make_info(
                 history.command,

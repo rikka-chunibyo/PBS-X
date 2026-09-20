@@ -64,7 +64,9 @@ Ext.define('PBS.config.HostView', {
 	openHost: function() {
 	    let view = this.getView();
 	    let selection = view.getSelection();
-	    if (selection.length < 1) return;
+	    if (selection.length < 1) {
+		return;
+	    }
 	    let mainview = view.up('mainview');
 	    mainview.getController().redirectTo(`Host-${encodeURIComponent(selection[0].data.name)}`);
 	},
@@ -73,7 +75,9 @@ Ext.define('PBS.config.HostView', {
 	    let me = this;
 	    let view = me.getView();
 	    let selection = view.getSelection();
-	    if (selection.length < 1) return;
+	    if (selection.length < 1) {
+		return;
+	    }
 
 	    Ext.create('PBS.window.HostEdit', {
 		name: selection[0].data.name,

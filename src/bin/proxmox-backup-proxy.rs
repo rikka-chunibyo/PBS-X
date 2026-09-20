@@ -766,7 +766,9 @@ async fn schedule_host_backup_jobs() {
         match proxmox_backup::server::host::queue_host_backup(&job) {
             Ok(run) => {
                 if let Err(err) = jobstate::update_job_last_run_time(worker_type, &job_id) {
-                    eprintln!("unable to update PBS-X host backup schedule state for {job_id} - {err}");
+                    eprintln!(
+                        "unable to update PBS-X host backup schedule state for {job_id} - {err}"
+                    );
                 }
                 tracing::info!(
                     "queued PBS-X host backup job {} for host {} as run {}",

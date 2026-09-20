@@ -3,19 +3,20 @@
 //! the generated host-scoped PBS API token authenticates heartbeats, job claims,
 //! completion reports and native datastore uploads.
 
-use anyhow::{bail, format_err, Error};
+use anyhow::{Error, bail, format_err};
 use openssl::nid::Nid;
 use openssl::x509::X509;
 
-use proxmox_router::{list_subdirs_api_method, Permission, Router, RpcEnvironment, SubdirMap};
+use proxmox_router::{Permission, Router, RpcEnvironment, SubdirMap, list_subdirs_api_method};
 use proxmox_schema::api;
 
 use pbs_api_types::Authid;
 use pbs_config::CachedUserInfo;
 use pbsx_api_types::{
-    HostAgentHeartbeat, HostAgentStatus, HostBackupRunCommand, HostBackupRunProgress,
-    HostBackupRunResult, HostRestoreRunCommand, HostRestoreRunProgress, HostRestoreRunResult,
-    HostBootstrapRequest, HostBootstrapResponse, HostConfig, HOST_ID_SCHEMA, PRIV_HOST_AGENT,
+    HOST_ID_SCHEMA, HostAgentHeartbeat, HostAgentStatus, HostBackupRunCommand,
+    HostBackupRunProgress, HostBackupRunResult, HostBootstrapRequest, HostBootstrapResponse,
+    HostConfig, HostRestoreRunCommand, HostRestoreRunProgress, HostRestoreRunResult,
+    PRIV_HOST_AGENT,
 };
 
 fn ensure_agent_access(host_id: &str, rpcenv: &mut dyn RpcEnvironment) -> Result<(), Error> {
@@ -206,7 +207,6 @@ pub fn finish_backup(
     ensure_agent_access(&result.host_id, rpcenv)?;
     crate::server::host::finish_host_backup(&result)
 }
-
 
 #[api(
     protected: true,

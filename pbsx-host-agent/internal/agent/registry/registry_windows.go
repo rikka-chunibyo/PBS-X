@@ -234,6 +234,41 @@ func CreateEntry(entry *RegistryEntry) error {
 	return baseKey.SetStringValue(entry.Key, value)
 }
 
+func CreateEntryIfNotExists(entry *RegistryEntry) error {
+	if err := ensureInitialized(); err != nil {
+		return err
+	}
+
+	baseKey, _, err := registry.CreateKey(
+		registry.LOCAL_MACHINE,
+		entry.Path,
+		registry.QUERY_VALUE|registry.SET_VALUE,
+	)
+	if err != nil {
+		return fmt.Errorf("CreateEntryIfNotExists error: %w", err)
+	}
+	defer baseKey.Close()
+
+	if _, _, err := baseKey.GetStringValue(entry.Key); err == nil {
+		return nil
+	} else if err != registry.ErrNotExist {
+		return fmt.Errorf("CreateEntryIfNotExists error checking key: %w", err)
+	}
+
+	value := preprocessValue(entry.Value, entry.IsSecret)
+	if entry.IsSecret {
+		value, err = dpapi.EncryptMachineLocal(value)
+		if err != nil {
+			return fmt.Errorf("CreateEntryIfNotExists error encrypting: %w", err)
+		}
+	}
+
+	if err := baseKey.SetStringValue(entry.Key, value); err != nil {
+		return fmt.Errorf("CreateEntryIfNotExists error writing key: %w", err)
+	}
+	return nil
+}
+
 func UpsertEntry(entry *RegistryEntry) error {
 	if err := ensureInitialized(); err != nil {
 		return err

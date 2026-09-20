@@ -1,15 +1,11 @@
 package lifecycle
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/rand/v2"
 	"net/http"
-	"runtime"
 	"strings"
 	"time"
 
@@ -21,7 +17,6 @@ import (
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/updater"
 	"github.com/pbs-x/pbsx-host-agent/internal/arpc"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
-	"github.com/pbs-x/pbsx-host-agent/internal/host"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
 

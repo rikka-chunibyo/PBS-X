@@ -1,4 +1,4 @@
-use anyhow::{bail, Error};
+use anyhow::{Error, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -6,11 +6,11 @@ use proxmox_router::{ApiMethod, Permission, Router, RpcEnvironment};
 use proxmox_schema::api;
 
 use pbs_api_types::{Authid, PROXMOX_CONFIG_DIGEST_SCHEMA};
+use pbs_config::CachedUserInfo;
 use pbsx_api_types::{
-    HostConfig, HostConfigUpdater, HostEnrollmentToken, HOST_ID_SCHEMA, PRIV_HOST_AUDIT,
+    HOST_ID_SCHEMA, HostConfig, HostConfigUpdater, HostEnrollmentToken, PRIV_HOST_AUDIT,
     PRIV_HOST_MODIFY,
 };
-use pbs_config::CachedUserInfo;
 
 #[api(
     input: {
@@ -68,7 +68,7 @@ pub fn create_host(config: HostConfig) -> Result<(), Error> {
     let _lock = pbs_config::host::lock_config()?;
     let (mut section_config, _digest) = pbs_config::host::config()?;
 
-    if section_config.sections.get(&config.name).is_some() {
+    if section_config.sections.contains_key(&config.name) {
         bail!("host '{}' already exists.", config.name);
     }
 
@@ -230,7 +230,6 @@ pub fn delete_host(name: String, digest: Option<String>) -> Result<(), Error> {
     Ok(())
 }
 
-
 #[api(
     protected: true,
     input: {
@@ -253,12 +252,9 @@ pub fn generate_enrollment_token(name: String) -> Result<HostEnrollmentToken, Er
     crate::server::host::create_enrollment_token(&name)
 }
 
-const ENROLLMENT_TOKEN_ROUTER: Router =
-    Router::new().post(&API_METHOD_GENERATE_ENROLLMENT_TOKEN);
+const ENROLLMENT_TOKEN_ROUTER: Router = Router::new().post(&API_METHOD_GENERATE_ENROLLMENT_TOKEN);
 
-const ITEM_SUBDIRS: proxmox_router::SubdirMap = &[
-    ("enrollment-token", &ENROLLMENT_TOKEN_ROUTER),
-];
+const ITEM_SUBDIRS: proxmox_router::SubdirMap = &[("enrollment-token", &ENROLLMENT_TOKEN_ROUTER)];
 
 const ITEM_ROUTER: Router = Router::new()
     .get(&API_METHOD_READ_HOST)

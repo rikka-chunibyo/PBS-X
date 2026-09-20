@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use anyhow::Error;
-use proxmox_schema::{ApiType, Schema};
 use proxmox_product_config::replace_privileged_config;
+use proxmox_schema::{ApiType, Schema};
 use proxmox_section_config::{SectionConfig, SectionConfigData, SectionConfigPlugin};
 
-use pbsx_api_types::{HostConfig, HOST_ID_SCHEMA};
+use pbsx_api_types::{HOST_ID_SCHEMA, HostConfig};
 
-use crate::{open_backup_lockfile, BackupLockGuard};
+use crate::{BackupLockGuard, open_backup_lockfile};
 
 pub static CONFIG: LazyLock<SectionConfig> = LazyLock::new(init);
 

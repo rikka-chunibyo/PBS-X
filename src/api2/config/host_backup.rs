@@ -1,6 +1,5 @@
-use anyhow::{bail, Error};
+use anyhow::{Error, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use proxmox_router::{Permission, Router, RpcEnvironment};
 use proxmox_schema::{api, param_bail};
@@ -9,10 +8,10 @@ use pbs_api_types::{
     Authid, JOB_ID_SCHEMA, PRIV_DATASTORE_AUDIT, PRIV_DATASTORE_BACKUP,
     PROXMOX_CONFIG_DIGEST_SCHEMA,
 };
+use pbs_config::CachedUserInfo;
 use pbsx_api_types::{
     HostBackupJobConfig, HostBackupJobConfigUpdater, PRIV_HOST_AUDIT, PRIV_HOST_MODIFY,
 };
-use pbs_config::CachedUserInfo;
 
 fn host_exists(host: &str) -> Result<bool, Error> {
     let (config, _digest) = pbs_config::host::config()?;
@@ -111,7 +110,7 @@ pub fn create_host_backup_job(
         param_bail!("host", "host '{}' does not exist", config.host);
     }
     if config.sources.is_empty() {
-        param_bail!("sources", "at least one source is required");
+        param_bail!("sources", "at least one source is required",);
     }
     if !check_modify_access(&user_info, &auth_id, &config) {
         bail!("permission check failed");
@@ -164,8 +163,11 @@ pub fn read_host_backup_job(
 #[serde(rename_all = "kebab-case")]
 /// Optional host backup job properties which may be reset.
 pub enum DeletableProperty {
+    /// Reset the backup namespace to the root namespace.
     Namespace,
+    /// Clear the configured backup schedule.
     Schedule,
+    /// Clear the administrator-facing job comment.
     Comment,
 }
 
@@ -181,6 +183,7 @@ pub enum DeletableProperty {
             delete: {
                 type: Array,
                 optional: true,
+                description: "Optional properties to reset to their defaults.",
                 items: { type: DeletableProperty },
             },
             digest: {
@@ -238,7 +241,7 @@ pub fn update_host_backup_job(
     }
     if let Some(sources) = update.sources {
         if sources.is_empty() {
-            param_bail!("sources", "at least one source is required");
+            param_bail!("sources", "at least one source is required",);
         }
         data.sources = sources;
     }

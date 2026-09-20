@@ -52,7 +52,7 @@ func nativePlatformXAttrs(path string) ([]format.XAttr, error) {
 	if err != nil {
 		// Filesystems other than NTFS and some reparse objects may not support
 		// stream enumeration. Treat that as no ADS rather than failing backup.
-		if err == syscall.ERROR_INVALID_FUNCTION || err == syscall.ERROR_NOT_SUPPORTED || err == syscall.ERROR_FILE_NOT_FOUND {
+		if err == windows.ERROR_INVALID_FUNCTION || err == windows.ERROR_NOT_SUPPORTED || err == windows.ERROR_FILE_NOT_FOUND {
 			return nil, nil
 		}
 		return nil, err
@@ -137,7 +137,7 @@ func enumerateAlternateDataStreams(path string) ([]string, error) {
 		if ok != 0 {
 			continue
 		}
-		if errno, isErrno := nextErr.(syscall.Errno); isErrno && errno == syscall.ERROR_HANDLE_EOF {
+		if errno, isErrno := nextErr.(syscall.Errno); isErrno && errno == windows.ERROR_HANDLE_EOF {
 			break
 		}
 		if errno, isErrno := nextErr.(syscall.Errno); isErrno && errno != 0 {

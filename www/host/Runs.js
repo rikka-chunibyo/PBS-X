@@ -85,7 +85,9 @@ Ext.define('PBS.HostBackupRunView', {
 	    dataIndex: 'success',
 	    width: 90,
 	    renderer: function(value, meta, record) {
-		if (record.data.state !== 'finished') return '-';
+		if (record.data.state !== 'finished') {
+		    return '-';
+		}
 		return value ? gettext('OK') : gettext('Failed');
 	    },
 	},

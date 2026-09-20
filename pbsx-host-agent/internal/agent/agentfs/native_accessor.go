@@ -153,7 +153,7 @@ func (a *NativeAccessor) GetXAttrs(path string) ([]format.XAttr, error) {
 			return
 		}
 		for i := range attrs {
-			if attrs[i].Name() == name {
+			if string(attrs[i].Name()) == name {
 				attrs[i] = format.NewXAttr([]byte(name), value)
 				return
 			}
@@ -197,7 +197,7 @@ func (a *NativeAccessor) GetXAttrs(path string) ([]format.XAttr, error) {
 		return nil, sparseErr
 	}
 	for _, attr := range sparseAttrs {
-		upsert(attr.Name(), attr.Value())
+		upsert(string(attr.Name()), attr.Value())
 	}
 
 	return attrs, nil
@@ -348,10 +348,10 @@ func posixACLToPXAR(entries []fswire.PosixACL) pxarlib.ACL {
 
 	if defaults.userObj != nil || defaults.groupObj != nil || defaults.other != nil || defaults.mask != nil {
 		value := format.ACLDefault{
-			UserObjPermissions:  format.ACLNoMask,
-			GroupObjPermissions: format.ACLNoMask,
-			OtherPermissions:    format.ACLNoMask,
-			MaskPermissions:     format.ACLNoMask,
+			UserObjPermissions:  format.ACLPermissions(format.ACLNoMask),
+			GroupObjPermissions: format.ACLPermissions(format.ACLNoMask),
+			OtherPermissions:    format.ACLPermissions(format.ACLNoMask),
+			MaskPermissions:     format.ACLPermissions(format.ACLNoMask),
 		}
 		if defaults.userObj != nil {
 			value.UserObjPermissions = *defaults.userObj

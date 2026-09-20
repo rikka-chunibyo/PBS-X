@@ -1,22 +1,19 @@
 use anyhow::Error;
 use serde_json::Value;
 
-use proxmox_router::{http_bail, ApiMethod, Permission, Router, RpcEnvironment, SubdirMap};
+use proxmox_router::{ApiMethod, Permission, Router, RpcEnvironment, SubdirMap, http_bail};
 use proxmox_schema::api;
 
 use pbs_api_types::{
-    Authid, BackupNamespace, BackupType, BACKUP_NAMESPACE_SCHEMA, BACKUP_TIME_SCHEMA,
+    Authid, BACKUP_NAMESPACE_SCHEMA, BACKUP_TIME_SCHEMA, BackupNamespace, BackupType,
     DATASTORE_SCHEMA, JOB_ID_SCHEMA, PRIV_DATASTORE_READ,
 };
-use pbsx_api_types::{
-    HostAgentHeartbeat, HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand,
-    HostBackupRunInfo, HostConfig, HostListItem, HostRestoreMode, HostRestoreRunCommand,
-    HostRestoreRunInfo,
-    HostSnapshotListItem, HOST_ID_SCHEMA,
-    PRIV_HOST_AGENT, PRIV_HOST_AUDIT,
-    PRIV_HOST_MODIFY,
-};
 use pbs_config::CachedUserInfo;
+use pbsx_api_types::{
+    HOST_ID_SCHEMA, HostAgentHeartbeat, HostAgentStatus, HostBackupJobConfig, HostBackupRunCommand,
+    HostBackupRunInfo, HostConfig, HostListItem, HostRestoreMode, HostRestoreRunCommand,
+    HostRestoreRunInfo, HostSnapshotListItem, PRIV_HOST_AGENT, PRIV_HOST_AUDIT, PRIV_HOST_MODIFY,
+};
 
 fn get_host_config(name: &str) -> Result<HostConfig, Error> {
     let (config, _digest) = pbs_config::host::config()?;
@@ -118,9 +115,7 @@ pub fn read_host(
     let online = config.enable
         && status
             .as_ref()
-            .map(|status| {
-                crate::server::host::status_is_online(status, proxmox_time::epoch_i64())
-            })
+            .map(|status| crate::server::host::status_is_online(status, proxmox_time::epoch_i64()))
             .unwrap_or(false);
 
     Ok(HostListItem {
@@ -163,7 +158,6 @@ pub fn heartbeat(name: String, heartbeat: HostAgentHeartbeat) -> Result<HostAgen
     Ok(status)
 }
 
-
 #[api(
     input: {
         properties: {
@@ -188,7 +182,11 @@ pub async fn list_host_snapshots(
     rpcenv: &mut dyn RpcEnvironment,
 ) -> Result<Vec<HostSnapshotListItem>, Error> {
     if !can_audit_host(&name, rpcenv)? {
-        http_bail!(FORBIDDEN, "missing Host.Audit permission for host '{}'", name);
+        http_bail!(
+            FORBIDDEN,
+            "missing Host.Audit permission for host '{}'",
+            name
+        );
     }
 
     let auth_id: Authid = rpcenv.get_auth_id().unwrap().parse()?;
@@ -198,9 +196,11 @@ pub async fn list_host_snapshots(
     let mut targets = Vec::new();
     for job in jobs.into_iter().filter(|job| job.host == name) {
         let ns_key = job.ns.as_ref().map(|ns| ns.to_string()).unwrap_or_default();
-        if targets.iter().any(|(store, ns, _): &(String, String, Option<BackupNamespace>)| {
-            store == &job.store && ns == &ns_key
-        }) {
+        if targets.iter().any(
+            |(store, ns, _): &(String, String, Option<BackupNamespace>)| {
+                store == &job.store && ns == &ns_key
+            },
+        ) {
             continue;
         }
         targets.push((job.store, ns_key, job.ns));
@@ -240,7 +240,6 @@ pub async fn list_host_snapshots(
     .map_err(|err| anyhow::format_err!("failed to await host snapshot listing: {err}"))?
 }
 
-
 #[api(
     input: {
         properties: {
@@ -260,7 +259,11 @@ pub fn list_backup_runs(
     rpcenv: &mut dyn RpcEnvironment,
 ) -> Result<Vec<HostBackupRunInfo>, Error> {
     if !can_audit_host(&name, rpcenv)? {
-        http_bail!(FORBIDDEN, "missing Host.Audit permission for host '{}'", name);
+        http_bail!(
+            FORBIDDEN,
+            "missing Host.Audit permission for host '{}'",
+            name
+        );
     }
     crate::server::host::list_host_backup_runs(&name)
 }
@@ -284,7 +287,11 @@ pub fn list_restore_runs(
     rpcenv: &mut dyn RpcEnvironment,
 ) -> Result<Vec<HostRestoreRunInfo>, Error> {
     if !can_audit_host(&name, rpcenv)? {
-        http_bail!(FORBIDDEN, "missing Host.Audit permission for host '{}'", name);
+        http_bail!(
+            FORBIDDEN,
+            "missing Host.Audit permission for host '{}'",
+            name
+        );
     }
     crate::server::host::list_host_restore_runs(&name)
 }
@@ -313,14 +320,19 @@ pub fn run_backup(name: String, id: String) -> Result<HostBackupRunCommand, Erro
         .lookup("host-backup", &id)
         .map_err(|_| anyhow::format_err!("host backup job '{}' does not exist", id))?;
     if job.host != name {
-        http_bail!(BAD_REQUEST, "job '{}' belongs to host '{}', not '{}'", id, job.host, name);
+        http_bail!(
+            BAD_REQUEST,
+            "job '{}' belongs to host '{}', not '{}'",
+            id,
+            job.host,
+            name
+        );
     }
     if !job.enable {
         http_bail!(BAD_REQUEST, "host backup job '{}' is disabled", id);
     }
     crate::server::host::queue_host_backup(&job)
 }
-
 
 #[api(
     protected: true,
@@ -333,9 +345,16 @@ pub fn run_backup(name: String, id: String) -> Result<HostBackupRunCommand, Erro
             sources: {
                 optional: true,
                 type: Array,
-                items: { type: String },
+                description: "Archive paths selected for this restore.",
+                items: {
+                    type: String,
+                    description: "Archive path selected for restore.",
+                },
             },
-            destination: { type: String },
+            destination: {
+                type: String,
+                description: "Destination directory on the protected host.",
+            },
             mode: { type: HostRestoreMode, optional: true },
         },
     },
@@ -345,6 +364,7 @@ pub fn run_backup(name: String, id: String) -> Result<HostBackupRunCommand, Erro
     },
 )]
 /// Queue a restore from one of this host's ordinary PBS snapshots back to the enrolled agent.
+#[allow(clippy::too_many_arguments)]
 pub fn run_restore(
     name: String,
     store: String,

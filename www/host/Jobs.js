@@ -32,7 +32,9 @@ Ext.define('PBS.HostBackupJobView', {
 	    let me = this;
 	    let view = me.getView();
 	    let selection = view.getSelection();
-	    if (selection.length < 1) return;
+	    if (selection.length < 1) {
+		return;
+	    }
 
 	    let id = selection[0].data.id;
 	    Proxmox.Utils.API2Request({
@@ -55,7 +57,9 @@ Ext.define('PBS.HostBackupJobView', {
 	editJob: function() {
 	    let view = this.getView();
 	    let selection = view.getSelection();
-	    if (selection.length < 1) return;
+	    if (selection.length < 1) {
+		return;
+	    }
 	    Ext.create('PBS.window.HostBackupJobEdit', {
 		host: view.host,
 		id: selection[0].data.id,

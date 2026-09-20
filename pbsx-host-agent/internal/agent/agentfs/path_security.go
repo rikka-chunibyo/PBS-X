@@ -21,6 +21,11 @@ func canonicalRelativePath(value string) (string, error) {
 	}
 
 	slash := strings.ReplaceAll(value, `\\`, "/")
+	// PXAR and legacy agentfs peers use exactly "/" to address the configured
+	// snapshot root. Other absolute paths remain forbidden.
+	if slash == "/" {
+		return ".", nil
+	}
 	lower := strings.ToLower(slash)
 	if strings.HasPrefix(slash, "/") || strings.HasPrefix(slash, "//") ||
 		strings.HasPrefix(lower, "//?/") || strings.HasPrefix(lower, "/??/") {

@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use proxmox_schema::{api, Schema, StringSchema, Updater};
+use proxmox_schema::{Schema, StringSchema, Updater, api};
 
 use pbs_api_types::{
-    BackupNamespace, BACKUP_NAMESPACE_SCHEMA, BACKUP_TIME_SCHEMA, DATASTORE_SCHEMA, JOB_ID_SCHEMA,
+    BACKUP_NAMESPACE_SCHEMA, BACKUP_TIME_SCHEMA, BackupNamespace, DATASTORE_SCHEMA, JOB_ID_SCHEMA,
     PROXMOX_SAFE_ID_FORMAT, SINGLE_LINE_COMMENT_SCHEMA,
 };
 
@@ -174,13 +174,16 @@ pub struct HostFilesystemInfo {
         capabilities: {
             type: Array,
             optional: true,
+            description: "Feature identifiers advertised by the agent.",
             items: {
                 type: String,
+                description: "Agent capability identifier.",
             },
         },
         disks: {
             type: Array,
             optional: true,
+            description: "Disk inventory reported by the agent.",
             items: {
                 type: HostDiskInfo,
             },
@@ -188,6 +191,7 @@ pub struct HostFilesystemInfo {
         filesystems: {
             type: Array,
             optional: true,
+            description: "Filesystem inventory reported by the agent.",
             items: {
                 type: HostFilesystemInfo,
             },
@@ -251,7 +255,6 @@ pub struct HostListItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<HostAgentStatus>,
 }
-
 
 #[api(
     properties: {
@@ -322,19 +325,21 @@ pub struct HostBootstrapResponse {
     pub backup_secret: String,
 }
 
-pub const HOST_BACKUP_SCHEDULE_SCHEMA: Schema = StringSchema::new("Run host backup job at specified schedule.")
-    .format(&proxmox_schema::ApiStringFormat::VerifyFn(
-        proxmox_time::verify_calendar_event,
-    ))
-    .type_text("<calendar-event>")
-    .schema();
+pub const HOST_BACKUP_SCHEDULE_SCHEMA: Schema =
+    StringSchema::new("Run host backup job at specified schedule.")
+        .format(&proxmox_schema::ApiStringFormat::VerifyFn(
+            proxmox_time::verify_calendar_event,
+        ))
+        .type_text("<calendar-event>")
+        .schema();
 
 #[api]
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 /// How PBS-X should obtain a consistent view of a host source.
 pub enum HostSnapshotMode {
     /// Select the best available provider (VSS, ZFS, Btrfs, LVM, then direct fallback).
+    #[default]
     Auto,
     /// Require a point-in-time snapshot provider and fail if one is unavailable.
     Snapshot,
@@ -342,29 +347,18 @@ pub enum HostSnapshotMode {
     Direct,
 }
 
-impl Default for HostSnapshotMode {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
-
 #[api]
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 /// Change detection policy passed to the first-generation server-side PBS client.
 pub enum HostChangeDetectionMode {
     /// Reuse files based on metadata where possible.
+    #[default]
     Metadata,
     /// Compare file data before deciding whether content changed.
     Data,
     /// Use the legacy PBS client behavior.
     Legacy,
-}
-
-impl Default for HostChangeDetectionMode {
-    fn default() -> Self {
-        Self::Metadata
-    }
 }
 
 #[api(
@@ -384,6 +378,7 @@ impl Default for HostChangeDetectionMode {
         },
         sources: {
             type: Array,
+            description: "Agent-visible filesystem, volume, or path sources to protect.",
             items: {
                 type: String,
                 description: "Agent-visible filesystem, volume or path to protect.",
@@ -392,6 +387,7 @@ impl Default for HostChangeDetectionMode {
         excludes: {
             type: Array,
             optional: true,
+            description: "Source subtrees excluded from this backup job.",
             items: {
                 type: String,
                 description: "Absolute or source-relative subtree path to exclude.",
@@ -404,17 +400,16 @@ impl Default for HostChangeDetectionMode {
         "snapshot-mode": {
             type: HostSnapshotMode,
             optional: true,
-            default: "auto",
         },
         "change-detection-mode": {
             type: HostChangeDetectionMode,
             optional: true,
-            default: "metadata",
         },
         enable: {
             type: bool,
             optional: true,
             default: true,
+            description: "Whether this host backup job is enabled.",
         },
         comment: {
             optional: true,
@@ -435,6 +430,7 @@ pub struct HostBackupJobConfig {
     #[serde(default)]
     pub sources: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[updater(serde(skip_serializing_if = "Option::is_none"))]
     pub excludes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
@@ -463,7 +459,6 @@ impl HostBackupJobConfig {
     }
 }
 
-
 #[api(
     properties: {
         "run-id": {
@@ -479,12 +474,20 @@ impl HostBackupJobConfig {
         },
         sources: {
             type: Array,
-            items: { type: String },
+            description: "Agent-visible sources included in this backup run.",
+            items: {
+                type: String,
+                description: "Agent-visible source path to protect.",
+            },
         },
         excludes: {
             type: Array,
             optional: true,
-            items: { type: String },
+            description: "Source subtrees excluded from this backup run.",
+            items: {
+                type: String,
+                description: "Absolute or source-relative subtree path to exclude.",
+            },
         },
         "snapshot-mode": { type: HostSnapshotMode },
         "change-detection-mode": { type: HostChangeDetectionMode },
@@ -520,31 +523,43 @@ pub struct HostBackupRunCommand {
 #[api(
     properties: {
         "host-id": { schema: HOST_ID_SCHEMA },
-        "run-id": { type: String },
-        success: { type: bool },
+        "run-id": {
+            type: String,
+            description: "Unique PBS-X host backup run identifier.",
+        },
+        success: {
+            type: bool,
+            description: "Whether the host backup run completed successfully.",
+        },
         error: {
             optional: true,
             type: String,
+            description: "Failure message reported by the agent.",
         },
         "backup-time": {
             optional: true,
             type: i64,
+            description: "PBS snapshot timestamp produced by the completed run.",
         },
         files: {
             optional: true,
             type: u64,
+            description: "Number of files processed by the completed run.",
         },
         directories: {
             optional: true,
             type: u64,
+            description: "Number of directories processed by the completed run.",
         },
         "logical-bytes": {
             optional: true,
             type: u64,
+            description: "Logical bytes processed by the completed run.",
         },
         "duration-ms": {
             optional: true,
             type: u64,
+            description: "Run duration in milliseconds.",
         },
     },
 )]
@@ -569,30 +584,61 @@ pub struct HostBackupRunResult {
     pub duration_ms: Option<u64>,
 }
 
-
 #[api]
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 /// PBS-X host backup orchestration state. Datastore snapshots remain the backup truth.
 pub enum HostBackupRunState {
+    /// The run is waiting for an enrolled agent to claim it.
     Queued,
+    /// An enrolled agent has claimed and is executing the run.
     Running,
+    /// The run has completed and its result is in history.
     Finished,
 }
 
 #[api(
     properties: {
         "host-id": { schema: HOST_ID_SCHEMA },
-        "run-id": { type: String },
+        "run-id": {
+            type: String,
+            description: "Unique PBS-X host backup run identifier.",
+        },
         stage: {
             optional: true,
             type: String,
+            description: "Current agent-reported backup stage.",
         },
-        "processed-bytes": { type: u64, optional: true, default: 0 },
-        "uploaded-bytes": { type: u64, optional: true, default: 0 },
-        "processed-chunks": { type: u64, optional: true, default: 0 },
-        "uploaded-chunks": { type: u64, optional: true, default: 0 },
-        files: { type: u64, optional: true, default: 0 },
+        "processed-bytes": {
+            type: u64,
+            optional: true,
+            default: 0,
+            description: "Logical bytes processed so far.",
+        },
+        "uploaded-bytes": {
+            type: u64,
+            optional: true,
+            default: 0,
+            description: "Bytes uploaded so far.",
+        },
+        "processed-chunks": {
+            type: u64,
+            optional: true,
+            default: 0,
+            description: "Chunks processed so far.",
+        },
+        "uploaded-chunks": {
+            type: u64,
+            optional: true,
+            default: 0,
+            description: "Chunks uploaded so far.",
+        },
+        files: {
+            type: u64,
+            optional: true,
+            default: 0,
+            description: "Files processed so far.",
+        },
     },
 )]
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -617,28 +663,34 @@ pub struct HostBackupRunProgress {
 
 #[api(
     properties: {
-        "run-id": { type: String },
+        "run-id": {
+            type: String,
+            description: "Unique PBS-X host backup run identifier.",
+        },
         "job-id": { schema: JOB_ID_SCHEMA },
         "host-id": { schema: HOST_ID_SCHEMA },
         state: { type: HostBackupRunState },
         store: { schema: DATASTORE_SCHEMA },
         ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
-        "requested-at": { type: i64 },
+        "requested-at": {
+            type: i64,
+            description: "Unix timestamp when PBS-X queued this run.",
+        },
         "backup-time": { schema: BACKUP_TIME_SCHEMA },
-        "started-at": { optional: true, type: i64 },
-        "updated-at": { optional: true, type: i64 },
-        "finished-at": { optional: true, type: i64 },
-        success: { optional: true, type: bool },
-        error: { optional: true, type: String },
-        stage: { optional: true, type: String },
-        "processed-bytes": { type: u64 },
-        "uploaded-bytes": { type: u64 },
-        "processed-chunks": { type: u64 },
-        "uploaded-chunks": { type: u64 },
-        files: { type: u64 },
-        directories: { type: u64 },
-        "logical-bytes": { type: u64 },
-        "duration-ms": { type: u64 },
+        "started-at": { optional: true, type: i64, description: "Unix timestamp when the agent claimed this run." },
+        "updated-at": { optional: true, type: i64, description: "Unix timestamp of the latest progress update." },
+        "finished-at": { optional: true, type: i64, description: "Unix timestamp when the run finished." },
+        success: { optional: true, type: bool, description: "Whether the finished run succeeded." },
+        error: { optional: true, type: String, description: "Failure message for an unsuccessful run." },
+        stage: { optional: true, type: String, description: "Latest agent-reported backup stage." },
+        "processed-bytes": { type: u64, description: "Logical bytes processed so far." },
+        "uploaded-bytes": { type: u64, description: "Bytes uploaded so far." },
+        "processed-chunks": { type: u64, description: "Chunks processed so far." },
+        "uploaded-chunks": { type: u64, description: "Chunks uploaded so far." },
+        files: { type: u64, description: "Files processed so far." },
+        directories: { type: u64, description: "Directories processed so far." },
+        "logical-bytes": { type: u64, description: "Logical bytes in the completed backup." },
+        "duration-ms": { type: u64, description: "Run duration in milliseconds." },
     },
 )]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -691,13 +743,16 @@ pub struct HostBackupRunInfo {
         comment: {
             optional: true,
             type: String,
+            description: "Snapshot comment, if present.",
         },
         size: {
             optional: true,
             type: u64,
+            description: "Snapshot size in bytes, if known.",
         },
         protected: {
             type: bool,
+            description: "Whether the snapshot is protected from pruning.",
         },
     },
 )]
@@ -738,39 +793,44 @@ pub enum PbsxZfsRaidLevel {
 }
 
 #[api]
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 /// Metadata behavior for a PBS-X host restore.
 pub enum HostRestoreMode {
     /// Restore content and supported filesystem metadata.
+    #[default]
     Normal,
     /// Restore content only, without applying archived metadata.
     NoAttr,
 }
 
-impl Default for HostRestoreMode {
-    fn default() -> Self {
-        Self::Normal
-    }
-}
-
 #[api(
     properties: {
-        "run-id": { type: String },
+        "run-id": {
+            type: String,
+            description: "Unique PBS-X host restore run identifier.",
+        },
         "host-id": { schema: HOST_ID_SCHEMA },
         store: { schema: DATASTORE_SCHEMA },
         ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
         "backup-time": { schema: BACKUP_TIME_SCHEMA },
         sources: {
             type: Array,
-            items: { type: String },
+            description: "Archive paths selected for this restore.",
+            items: {
+                type: String,
+                description: "Archive path selected for restore.",
+            },
         },
         destination: {
             type: String,
             description: "Destination directory on the protected host.",
         },
         mode: { type: HostRestoreMode },
-        "requested-at": { type: i64 },
+        "requested-at": {
+            type: i64,
+            description: "Unix timestamp when PBS-X queued this restore.",
+        },
     },
 )]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -793,9 +853,9 @@ pub struct HostRestoreRunCommand {
 #[api(
     properties: {
         "host-id": { schema: HOST_ID_SCHEMA },
-        "run-id": { type: String },
-        success: { type: bool },
-        error: { optional: true, type: String },
+        "run-id": { type: String, description: "Unique PBS-X host restore run identifier." },
+        success: { type: bool, description: "Whether the host restore completed successfully." },
+        error: { optional: true, type: String, description: "Failure message reported by the agent." },
     },
 )]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -814,18 +874,21 @@ pub struct HostRestoreRunResult {
 #[serde(rename_all = "lowercase")]
 /// PBS-X native host restore orchestration state.
 pub enum HostRestoreRunState {
+    /// The restore is waiting for an enrolled agent to claim it.
     Queued,
+    /// An enrolled agent has claimed and is executing the restore.
     Running,
+    /// The restore has completed and its result is in history.
     Finished,
 }
 
 #[api(
     properties: {
         "host-id": { schema: HOST_ID_SCHEMA },
-        "run-id": { type: String },
-        stage: { optional: true, type: String },
-        "processed-bytes": { type: u64, optional: true, default: 0 },
-        files: { type: u64, optional: true, default: 0 },
+        "run-id": { type: String, description: "Unique PBS-X host restore run identifier." },
+        stage: { optional: true, type: String, description: "Current agent-reported restore stage." },
+        "processed-bytes": { type: u64, optional: true, default: 0, description: "Logical bytes restored so far." },
+        files: { type: u64, optional: true, default: 0, description: "Files restored so far." },
     },
 )]
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -844,25 +907,29 @@ pub struct HostRestoreRunProgress {
 
 #[api(
     properties: {
-        "run-id": { type: String },
+        "run-id": { type: String, description: "Unique PBS-X host restore run identifier." },
         "host-id": { schema: HOST_ID_SCHEMA },
         state: { type: HostRestoreRunState },
         store: { schema: DATASTORE_SCHEMA },
         ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
         "backup-time": { schema: BACKUP_TIME_SCHEMA },
-        sources: { type: Array, items: { type: String } },
-        destination: { type: String },
+        sources: {
+            type: Array,
+            description: "Archive paths selected for this restore.",
+            items: { type: String, description: "Archive path selected for restore." },
+        },
+        destination: { type: String, description: "Destination directory on the protected host." },
         mode: { type: HostRestoreMode },
-        "requested-at": { type: i64 },
-        "started-at": { optional: true, type: i64 },
-        "updated-at": { optional: true, type: i64 },
-        "finished-at": { optional: true, type: i64 },
-        success: { optional: true, type: bool },
-        error: { optional: true, type: String },
-        stage: { optional: true, type: String },
-        "processed-bytes": { type: u64 },
-        files: { type: u64 },
-        "duration-ms": { type: u64 },
+        "requested-at": { type: i64, description: "Unix timestamp when PBS-X queued this restore." },
+        "started-at": { optional: true, type: i64, description: "Unix timestamp when the agent claimed this restore." },
+        "updated-at": { optional: true, type: i64, description: "Unix timestamp of the latest restore progress update." },
+        "finished-at": { optional: true, type: i64, description: "Unix timestamp when the restore finished." },
+        success: { optional: true, type: bool, description: "Whether the finished restore succeeded." },
+        error: { optional: true, type: String, description: "Failure message for an unsuccessful restore." },
+        stage: { optional: true, type: String, description: "Latest agent-reported restore stage." },
+        "processed-bytes": { type: u64, description: "Logical bytes restored so far." },
+        files: { type: u64, description: "Files restored so far." },
+        "duration-ms": { type: u64, description: "Restore duration in milliseconds." },
     },
 )]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]

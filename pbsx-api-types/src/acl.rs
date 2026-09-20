@@ -4,7 +4,6 @@
 //! deliberately reserves three high bits for host management so it can extend ACLs without
 //! forking the separately packaged `pbs-api-types` crate.
 
-
 use serde::{Deserialize, Serialize};
 
 use proxmox_schema::api;
