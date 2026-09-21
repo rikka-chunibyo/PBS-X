@@ -157,7 +157,7 @@ Ext.define('PBS.HostAgentView', {
     reload: function() {
 	let me = this;
 	Proxmox.Utils.API2Request({
-	    url: `/api2/json/admin/host/${encodeURIComponent(me.host)}`,
+	    url: `/admin/host/${encodeURIComponent(me.host)}`,
 	    success: function(response) {
 		let host = response.result.data || {};
 		let status = host.status || {};
