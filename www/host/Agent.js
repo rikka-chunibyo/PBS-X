@@ -47,10 +47,9 @@ Ext.define('PBS.HostAgentView', {
 				labelWidth: 150,
 			    },
 			    items: [{
-				xtype: 'textfield',
+				xtype: 'displayfield',
 				fieldLabel: gettext('ID'),
 				value: view.host,
-				readOnly: true,
 			    }, {
 				xtype: 'textfield',
 				itemId: 'serverField',
@@ -63,27 +62,23 @@ Ext.define('PBS.HostAgentView', {
 				    },
 				},
 			    }, {
-				xtype: 'textfield',
+				xtype: 'displayfield',
 				fieldLabel: gettext('Token'),
 				value: data.token,
-				readOnly: true,
 			    }, {
-				xtype: 'textfield',
+				xtype: 'displayfield',
 				fieldLabel: gettext('Fingerprint'),
 				value: data['server-fingerprint'],
-				readOnly: true,
 			    }, {
 				xtype: 'displayfield',
 				fieldLabel: gettext('Run'),
-				value: 'pbsx-host-agent-windows-amd64.exe enroll &lt;enrollment-code&gt;',
+				value: '&lt;agent_executable&gt; enroll &lt;enrollment_code&gt;',
 			    }, {
-				xtype: 'textarea',
+				xtype: 'displayfield',
 				itemId: 'enrollmentCode',
 				fieldLabel: gettext('Enrollment Code'),
 				value: initialCode,
-				readOnly: true,
-				height: 110,
-				fieldStyle: 'font-family: monospace',
+				fieldStyle: 'font-family: monospace; word-break: break-all; white-space: normal',
 			    }],
 			}],
 			buttons: [{
@@ -94,9 +89,19 @@ Ext.define('PBS.HostAgentView', {
 				let area = win.down('#enrollmentCode');
 				let value = area.getValue();
 				if (navigator.clipboard) {
-				    navigator.clipboard.writeText(value).catch(() => area.selectText());
+				    navigator.clipboard.writeText(value).catch(() => {
+					let selection = window.getSelection();
+					let range = document.createRange();
+					range.selectNodeContents(area.el.dom);
+					selection.removeAllRanges();
+					selection.addRange(range);
+				    });
 				} else {
-				    area.selectText();
+				    let selection = window.getSelection();
+				    let range = document.createRange();
+				    range.selectNodeContents(area.el.dom);
+				    selection.removeAllRanges();
+				    selection.addRange(range);
 				    document.execCommand('copy');
 				}
 			    },
