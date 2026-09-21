@@ -20,7 +20,6 @@ import (
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativerestore"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/updater"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
-	"github.com/pbs-x/pbsx-host-agent/internal/crypto"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 	"golang.org/x/sys/windows"
 
@@ -189,11 +188,6 @@ func main() {
 	}
 
 	cli.Entry()
-
-	if err := crypto.AssertFIPS(); err != nil {
-		log.Error(err, "FIPS assertion failed")
-		os.Exit(1)
-	}
 
 	svcConfig := &service.Config{
 		Name: "PBSXAgent", DisplayName: "PBS-X Agent",

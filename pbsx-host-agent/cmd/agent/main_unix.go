@@ -204,11 +204,6 @@ func main() {
 		}()
 	}
 
-	if err := crypto.AssertFIPS(); err != nil {
-		log.Error(err, "FIPS assertion failed")
-		os.Exit(1)
-	}
-
 	// This is best-effort; if it fails due to permissions, the agent will fall back
 	// to using the legacy paths automatically via initPaths() in conf package.
 	_ = migration.TryMigrate()

@@ -3,7 +3,6 @@ package crypto
 import (
 	"crypto/fips140"
 	"crypto/tls"
-	"fmt"
 )
 
 func FIPSServerTLSConfig() *tls.Config {
@@ -30,13 +29,6 @@ func FIPSClientTLSConfig(minVersion uint16) *tls.Config {
 		cfg.CurvePreferences = FIPSAllowedCurvePreferences
 	}
 	return cfg
-}
-
-func AssertFIPS() error {
-	if fips140.Enabled() {
-		return nil
-	}
-	return fmt.Errorf("crypto: FIPS 140-3 mode is not active — set GODEBUG=fips140=on or GODEBUG=fips140=only before starting the process")
 }
 
 var FIPSAllowedCipherSuites = []uint16{

@@ -33,7 +33,6 @@ func TestEnrollmentEnvironmentReplacesExistingValues(t *testing.T) {
 	environment := enrollmentEnvironment([]string{
 		"PATH=/bin",
 		"PBSX_HOST_ID=old-host",
-		"GODEBUG=old-value",
 	}, values)
 	joined := strings.Join(environment, "\n")
 	for _, expected := range []string{
@@ -42,14 +41,13 @@ func TestEnrollmentEnvironmentReplacesExistingValues(t *testing.T) {
 		"PBSX_INIT_SERVER_URL=https://pbs.example:8007",
 		"PBSX_INIT_BOOTSTRAP_TOKEN=new-token",
 		"PBSX_INIT_SERVER_CA_FINGERPRINT=aa:bb",
-		"GODEBUG=fips140=on",
 		"PBSX_STDOUT_ONLY=true",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("environment is missing %q: %q", expected, joined)
 		}
 	}
-	if strings.Contains(joined, "old-host") || strings.Contains(joined, "old-value") {
+	if strings.Contains(joined, "old-host") {
 		t.Fatalf("stale environment value survived: %q", joined)
 	}
 }

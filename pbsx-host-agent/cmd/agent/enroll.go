@@ -76,7 +76,6 @@ func enrollmentEnvironment(base []string, values enrollment.Values) []string {
 		"PBSX_INIT_SERVER_URL":            values.ServerURL,
 		"PBSX_INIT_BOOTSTRAP_TOKEN":       values.BootstrapToken,
 		"PBSX_INIT_SERVER_CA_FINGERPRINT": values.ServerCAFingerprint,
-		"GODEBUG":                         "fips140=on",
 		"PBSX_STDOUT_ONLY":                "true",
 	}
 	result := make([]string, 0, len(base)+len(updates))
