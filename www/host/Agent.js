@@ -130,7 +130,11 @@ Ext.define('PBS.HostAgentView', {
     }],
 
     rows: {
+	name: { header: gettext('Host ID'), required: true },
+	hostname: { header: gettext('Hostname') },
 	online: { header: gettext('Connected'), renderer: Proxmox.Utils.format_boolean },
+	'operating-system': { header: gettext('Operating System') },
+	architecture: { header: gettext('Architecture') },
 	'last-seen': { header: gettext('Last Seen'), renderer: Proxmox.Utils.render_timestamp },
 	'agent-version': { header: gettext('Version') },
 	capabilities: { header: gettext('Capabilities'), renderer: value => Ext.isArray(value) ? value.join(', ') : '' },
@@ -139,14 +143,19 @@ Ext.define('PBS.HostAgentView', {
     initComponent: function() {
 	let me = this;
 	me.url = `/api2/json/admin/host/${encodeURIComponent(me.host)}`;
+	me.rstore = Ext.create('Proxmox.data.ObjectStore', {
+	    interval: me.interval,
+	    rows: me.rows,
+	    proxy: {
+		type: 'proxmox',
+		url: me.url,
+		reader: {
+		    type: 'pbsxhostobject',
+		    rows: me.rows,
+		    rootProperty: 'data',
+		},
+	    },
+	});
 	me.callParent();
-    },
-
-    updateValues: function(values) {
-	let status = values.status || {};
-	values['last-seen'] = status['last-seen'];
-	values['agent-version'] = status['agent-version'];
-	values.capabilities = status.capabilities || [];
-	this.callParent([values]);
     },
 });

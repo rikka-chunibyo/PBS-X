@@ -1,3 +1,23 @@
+Ext.define('PBS.data.reader.HostObject', {
+    extend: 'Proxmox.data.reader.JsonObject',
+    alias: 'reader.pbsxhostobject',
+
+    getResponseData: function(response) {
+	let original = response.responseText;
+	let payload = Ext.decode(original);
+	let host = payload.data || {};
+	let flattened = Ext.apply({}, host.status || {});
+	Ext.apply(flattened, host);
+	payload.data = flattened;
+	response.responseText = Ext.encode(payload);
+	try {
+	    return this.callParent([response]);
+	} finally {
+	    response.responseText = original;
+	}
+    },
+});
+
 Ext.define('PBS.HostSummary', {
     extend: 'Proxmox.grid.ObjectGrid',
     alias: 'widget.pbsHostSummary',
@@ -25,17 +45,19 @@ Ext.define('PBS.HostSummary', {
     initComponent: function() {
 	let me = this;
 	me.url = `/api2/json/admin/host/${encodeURIComponent(me.host)}`;
+	me.rstore = Ext.create('Proxmox.data.ObjectStore', {
+	    interval: me.interval,
+	    rows: me.rows,
+	    proxy: {
+		type: 'proxmox',
+		url: me.url,
+		reader: {
+		    type: 'pbsxhostobject',
+		    rows: me.rows,
+		    rootProperty: 'data',
+		},
+	    },
+	});
 	me.callParent();
-    },
-
-    updateValues: function(values) {
-	let status = values.status || {};
-	values.hostname = status.hostname;
-	values['operating-system'] = status['operating-system'];
-	values['os-version'] = status['os-version'];
-	values.architecture = status.architecture;
-	values['agent-version'] = status['agent-version'];
-	values['last-seen'] = status['last-seen'];
-	this.callParent([values]);
     },
 });

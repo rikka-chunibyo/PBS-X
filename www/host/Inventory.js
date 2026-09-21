@@ -14,10 +14,11 @@ Ext.define('PBS.HostInventoryView', {
 	let me = this;
 	Proxmox.Utils.API2Request({
 	    url: `/api2/json/admin/host/${encodeURIComponent(me.host)}`,
-	    success: function({ result }) {
-		let status = result.data.status || {};
-		me.down('[reference=diskgrid]').getStore().loadData(status.disks || []);
-		me.down('[reference=fsgrid]').getStore().loadData(status.filesystems || []);
+	    waitMsgTarget: me,
+	    success: function(response) {
+		let status = response.result.data.status || {};
+		me.down('#diskgrid').getStore().loadData(status.disks || []);
+		me.down('#fsgrid').getStore().loadData(status.filesystems || []);
 	    },
 	});
     },
@@ -25,7 +26,7 @@ Ext.define('PBS.HostInventoryView', {
     items: [
 	{
 	    xtype: 'grid',
-	    reference: 'diskgrid',
+	    itemId: 'diskgrid',
 	    title: gettext('Disks'),
 	    flex: 1,
 	    store: { fields: ['name', 'size', 'model', 'serial', 'rotational'], data: [] },
@@ -38,7 +39,7 @@ Ext.define('PBS.HostInventoryView', {
 	},
 	{
 	    xtype: 'grid',
-	    reference: 'fsgrid',
+	    itemId: 'fsgrid',
 	    title: gettext('Filesystems / Volumes'),
 	    flex: 1,
 	    store: { fields: ['mountpoint', 'file-system', 'source', 'total', 'available'], data: [] },
