@@ -37,6 +37,24 @@ func preprocessValue(value string, isSecret bool) string {
 	return value
 }
 
+// normalizeStoredSecret unwraps legacy base64/DER certificate material while
+// leaving opaque secrets, such as PBS API token secrets, unchanged.
+func normalizeStoredSecret(value string, key string) (string, error) {
+	switch strings.ToLower(key) {
+	case "cert", "priv", "key", "serverca", "legacyserverca":
+		normalized, err := unwrapBase64Layers(value, key)
+		if err != nil {
+			return value, err
+		}
+		if isPEMData(normalized) {
+			normalized = normalizePEMData(normalized)
+		}
+		return normalized, nil
+	default:
+		return value, nil
+	}
+}
+
 func unwrapBase64Layers(val string, key string) (string, error) {
 	if isPEMData(val) {
 		return val, nil

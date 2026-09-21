@@ -129,7 +129,7 @@ func GetEntry(path string, key string, isSecret bool) (*RegistryEntry, error) {
 			}
 			val = decrypted
 
-			unwrapped, unwrapErr := unwrapBase64Layers(val, key)
+			unwrapped, unwrapErr := normalizeStoredSecret(val, key)
 			if unwrapErr != nil {
 				log.Error(unwrapErr, "GetEntry: unwrapBase64Layers", "path", path, "key", key)
 			} else {

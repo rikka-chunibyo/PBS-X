@@ -211,6 +211,29 @@ func TestUnwrapBase64Layers_NotBase64(t *testing.T) {
 	}
 }
 
+func TestNormalizeStoredSecretKeepsOpaqueToken(t *testing.T) {
+	const token = "pbs!opaque-token-secret"
+	result, err := normalizeStoredSecret(token, "BackupSecret")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != token {
+		t.Fatalf("opaque token changed: got %q, want %q", result, token)
+	}
+}
+
+func TestNormalizeStoredSecretUnwrapsCertificate(t *testing.T) {
+	certPEM, _, _, _ := generateTestCertPEM(t)
+	encoded := base64.StdEncoding.EncodeToString([]byte(certPEM))
+	result, err := normalizeStoredSecret(encoded, "Cert")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isPEMData(result) {
+		t.Fatal("expected normalized PEM certificate")
+	}
+}
+
 func TestUnwrapBase64Layers_PEMWithCRLF(t *testing.T) {
 	certPEM, _, _, _ := generateTestCertPEM(t)
 	crlfPEM := "\r\n" + certPEM + "\r\nextra\r\n"

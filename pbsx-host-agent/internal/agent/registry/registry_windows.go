@@ -113,7 +113,7 @@ func migrateFromFileSecretsToRegistry() error {
 			continue
 		}
 
-		normalized, err := unwrapBase64Layers(val, parts[1])
+		normalized, err := normalizeStoredSecret(val, parts[1])
 		if err != nil {
 			failed++
 			continue
@@ -182,7 +182,7 @@ func GetEntry(path string, key string, isSecret bool) (*RegistryEntry, error) {
 		}
 		val = plain
 
-		unwrapped, err := unwrapBase64Layers(val, key)
+		unwrapped, err := normalizeStoredSecret(val, key)
 		if err != nil {
 			log.Error(err, "GetEntry: unwrapBase64Layers", "path", path, "key", key)
 		} else {
