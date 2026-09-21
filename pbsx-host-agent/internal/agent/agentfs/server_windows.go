@@ -15,7 +15,10 @@ import (
 )
 
 func (s *Server) abs(filename string) string {
-	path := Join(s.snapshot.Path, filename)
+	path := s.snapshot.Path
+	if filename != "" && filename != "." && filename != "/" {
+		path = Join(path, filename)
+	}
 	if strings.HasPrefix(path, `\\?\`) || strings.HasPrefix(path, `\??\`) {
 		return path
 	}
