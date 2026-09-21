@@ -97,7 +97,12 @@ Ext.define('PBS.HostBackupSnapshotView', {
 		listeners: {
 		    destroy: function(win) {
 			if (win.result) {
-			    Ext.Msg.alert(gettext('Restore queued'), gettext('The restore was queued for this host.'));
+			    Ext.Msg.show({
+				title: gettext('Restore queued'),
+				icon: Ext.Msg.INFO,
+				message: gettext('The restore was queued for this host.'),
+				buttons: Ext.Msg.OK,
+			    });
 			}
 		    },
 		},

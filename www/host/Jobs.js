@@ -43,10 +43,15 @@ Ext.define('PBS.HostBackupJobView', {
 		params: { id },
 		success: function(response) {
 		    let runId = response.result.data['run-id'];
-		    Ext.Msg.alert(
-			gettext('Backup queued'),
-			Ext.String.format(gettext('Run {0} was queued for this host.'), Ext.String.htmlEncode(runId)),
-		    );
+		    Ext.Msg.show({
+			title: gettext('Backup queued'),
+			icon: Ext.Msg.INFO,
+			message: Ext.String.format(
+			    gettext('Run {0} was queued for this host.'),
+			    Ext.String.htmlEncode(runId),
+			),
+			buttons: Ext.Msg.OK,
+		    });
 		},
 		failure: function(response) {
 		    Ext.Msg.alert(gettext('Error'), response.htmlStatus);
