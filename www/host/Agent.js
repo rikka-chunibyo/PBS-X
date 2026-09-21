@@ -1,10 +1,9 @@
 Ext.define('PBS.HostAgentView', {
-    extend: 'Proxmox.grid.ObjectGrid',
+    extend: 'Ext.grid.Panel',
     alias: 'widget.pbsHostAgentView',
 
     title: gettext('Agent'),
     iconCls: 'fa fa-exchange',
-    interval: 15 * 1000,
 
     controller: {
 	xclass: 'Ext.app.ViewController',
@@ -129,33 +128,81 @@ Ext.define('PBS.HostAgentView', {
 	handler: 'generateEnrollmentToken',
     }],
 
-    rows: {
-	name: { header: gettext('Host ID'), required: true },
-	hostname: { header: gettext('Hostname') },
-	online: { header: gettext('Connected'), renderer: Proxmox.Utils.format_boolean },
-	'operating-system': { header: gettext('Operating System') },
-	architecture: { header: gettext('Architecture') },
-	'last-seen': { header: gettext('Last Seen'), renderer: Proxmox.Utils.render_timestamp },
-	'agent-version': { header: gettext('Version') },
-	capabilities: { header: gettext('Capabilities'), renderer: value => Ext.isArray(value) ? value.join(', ') : '' },
+    viewConfig: {
+	enableTextSelection: true,
     },
 
-    initComponent: function() {
+    columns: [{
+	text: gettext('Name'),
+	dataIndex: 'label',
+	width: 220,
+    }, {
+	text: gettext('Value'),
+	dataIndex: 'value',
+	flex: 1,
+	renderer: function(value, metaData, record) {
+	    switch (record.get('key')) {
+		case 'online':
+		    return Ext.isBoolean(value) ? Proxmox.Utils.format_boolean(value) : '-';
+		case 'last-seen':
+		    return value ? Proxmox.Utils.render_timestamp(value) : '-';
+		case 'capabilities':
+		    return Ext.isArray(value) ? value.join(', ') : '-';
+		default:
+		    return value === undefined || value === null || value === '' ? '-' : value;
+	    }
+	},
+    }],
+
+    reload: function() {
 	let me = this;
-	me.url = `/api2/json/admin/host/${encodeURIComponent(me.host)}`;
-	me.rstore = Ext.create('Proxmox.data.ObjectStore', {
-	    interval: me.interval,
-	    rows: me.rows,
-	    proxy: {
-		type: 'proxmox',
-		url: me.url,
-		reader: {
-		    type: 'pbsxhostobject',
-		    rows: me.rows,
-		    rootProperty: 'data',
-		},
+	Proxmox.Utils.API2Request({
+	    url: `/api2/json/admin/host/${encodeURIComponent(me.host)}`,
+	    success: function(response) {
+		let host = response.result.data || {};
+		let status = host.status || {};
+		let getValue = key => Object.hasOwn(host, key) ? host[key] : status[key];
+		me.getStore().loadData([
+		    { key: 'name', label: gettext('Host ID'), value: getValue('name') },
+		    { key: 'hostname', label: gettext('Hostname'), value: getValue('hostname') },
+		    { key: 'online', label: gettext('Connected'), value: getValue('online') },
+		    { key: 'operating-system', label: gettext('Operating System'), value: getValue('operating-system') },
+		    { key: 'architecture', label: gettext('Architecture'), value: getValue('architecture') },
+		    { key: 'last-seen', label: gettext('Last Seen'), value: getValue('last-seen') },
+		    { key: 'agent-version', label: gettext('Version'), value: getValue('agent-version') },
+		    { key: 'capabilities', label: gettext('Capabilities'), value: getValue('capabilities') },
+		]);
+	    },
+	    failure: function(response) {
+		Ext.Msg.alert(gettext('Error'), response.htmlStatus);
 	    },
 	});
-	me.callParent();
+    },
+
+    listeners: {
+	activate: function(view) {
+	    view.reload();
+	    if (!view.refreshTask) {
+		view.refreshTask = Ext.TaskManager.start({
+		    run: () => {
+			if (view.isVisible(true)) {
+			    view.reload();
+			}
+		    },
+		    interval: 15 * 1000,
+		});
+	    }
+	},
+	destroy: function(view) {
+	    if (view.refreshTask) {
+		Ext.TaskManager.stop(view.refreshTask);
+		view.refreshTask = undefined;
+	    }
+	},
+    },
+
+    store: {
+	fields: ['key', 'label', 'value'],
+	data: [],
     },
 });

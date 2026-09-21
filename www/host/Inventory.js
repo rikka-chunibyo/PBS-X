@@ -14,22 +14,34 @@ Ext.define('PBS.HostInventoryView', {
 	let me = this;
 	Proxmox.Utils.API2Request({
 	    url: `/api2/json/admin/host/${encodeURIComponent(me.host)}`,
-	    waitMsgTarget: me,
 	    success: function(response) {
-		let status = response.result.data.status || {};
-		me.down('#diskgrid').getStore().loadData(status.disks || []);
-		me.down('#fsgrid').getStore().loadData(status.filesystems || []);
+		let host = response.result.data || {};
+		let status = host.status || {};
+		me.diskStore.loadData(Ext.isArray(status.disks) ? status.disks : []);
+		me.filesystemStore.loadData(Ext.isArray(status.filesystems) ? status.filesystems : []);
+	    },
+	    failure: function(response) {
+		Ext.Msg.alert(gettext('Error'), response.htmlStatus);
 	    },
 	});
     },
 
-    items: [
-	{
+    initComponent: function() {
+	let me = this;
+	me.diskStore = Ext.create('Ext.data.Store', {
+	    fields: ['name', 'size', 'model', 'serial', 'rotational'],
+	    data: [],
+	});
+	me.filesystemStore = Ext.create('Ext.data.Store', {
+	    fields: ['mountpoint', 'file-system', 'source', 'total', 'available'],
+	    data: [],
+	});
+	me.items = [{
 	    xtype: 'grid',
 	    itemId: 'diskgrid',
 	    title: gettext('Disks'),
 	    flex: 1,
-	    store: { fields: ['name', 'size', 'model', 'serial', 'rotational'], data: [] },
+	    store: me.diskStore,
 	    columns: [
 		{ text: gettext('Device'), dataIndex: 'name', width: 180 },
 		{ text: gettext('Model'), dataIndex: 'model', flex: 1 },
@@ -42,7 +54,7 @@ Ext.define('PBS.HostInventoryView', {
 	    itemId: 'fsgrid',
 	    title: gettext('Filesystems / Volumes'),
 	    flex: 1,
-	    store: { fields: ['mountpoint', 'file-system', 'source', 'total', 'available'], data: [] },
+	    store: me.filesystemStore,
 	    columns: [
 		{ text: gettext('Mount / Volume'), dataIndex: 'mountpoint', width: 190 },
 		{ text: gettext('Filesystem'), dataIndex: 'file-system', width: 120 },
@@ -50,6 +62,7 @@ Ext.define('PBS.HostInventoryView', {
 		{ text: gettext('Total'), dataIndex: 'total', width: 120, renderer: value => value ? Proxmox.Utils.format_size(value) : '-' },
 		{ text: gettext('Available'), dataIndex: 'available', width: 120, renderer: value => value ? Proxmox.Utils.format_size(value) : '-' },
 	    ],
-	},
-    ],
+	}];
+	me.callParent();
+    },
 });
