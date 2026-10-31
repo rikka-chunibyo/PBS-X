@@ -18,4 +18,19 @@ PBS-X Agent
 
 The backup job ID is never used as the PBS backup group ID.
 
-The Linux path has completed an end-to-end backup/restore round trip against PBS-X, including symlinks and sparse files. Windows builds and Windows-specific packages cross-compile, but the current native Windows path still needs a live end-to-end validation pass.
+The Linux path has completed an end-to-end backup/restore round trip against PBS-X, including symlinks and sparse files. The Windows agent builds and its full Go module suite runs natively on Windows. The VSS provider has also completed a live point-in-time consistency and cleanup test, while a complete Windows-to-PBS backup/restore round trip remains to be validated.
+
+## Windows VSS integration test
+
+The snapshot package includes an opt-in test that creates a real VSS shadow
+copy, verifies that its contents remain point-in-time consistent after the live
+file changes, and removes the shadow copy. Run it from an elevated PowerShell
+session on a disposable Windows test host:
+
+```powershell
+$env:PBSX_WINDOWS_VSS_INTEGRATION = "1"
+go test -v -count=1 -run '^TestNTFSSnapshotLive$' ./internal/agent/snapshots
+```
+
+The test is skipped during ordinary unit-test runs because VSS requires an
+elevated Windows host and temporarily creates system snapshot state.
