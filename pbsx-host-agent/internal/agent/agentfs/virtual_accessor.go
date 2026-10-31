@@ -14,6 +14,7 @@ import (
 	"github.com/pbs-plus/pxar/backupproxy"
 	"github.com/pbs-plus/pxar/format"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/snapshots"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/winpath"
 )
 
 // VirtualSource is one configured host-backup source exposed below the virtual
@@ -21,9 +22,17 @@ import (
 type VirtualSource struct {
 	Alias    string
 	Snapshot snapshots.Snapshot
-	Accessor *NativeAccessor
+	Accessor virtualSourceAccessor
 	Excludes []string
 }
+
+type virtualSourceAccessor interface {
+	backupproxy.FSAccessor
+	Close()
+	FileIdentity(path string) (backupproxy.FileIdentity, error)
+}
+
+type virtualAccessorFactory func(jobID, readMode string, snapshot snapshots.Snapshot) virtualSourceAccessor
 
 // VirtualAccessor presents one or more point-in-time source snapshots as a
 // single synthetic filesystem. This keeps one PBS host snapshot per job run
@@ -34,8 +43,17 @@ type VirtualAccessor struct {
 }
 
 func NewVirtualAccessor(jobID, readMode string, snaps []snapshots.Snapshot) (*VirtualAccessor, error) {
+	return newVirtualAccessorWithFactory(jobID, readMode, snaps, func(jobID, readMode string, snapshot snapshots.Snapshot) virtualSourceAccessor {
+		return NewNativeAccessor(jobID, readMode, snapshot)
+	})
+}
+
+func newVirtualAccessorWithFactory(jobID, readMode string, snaps []snapshots.Snapshot, factory virtualAccessorFactory) (*VirtualAccessor, error) {
 	if len(snaps) == 0 {
 		return nil, fmt.Errorf("native backup requires at least one source snapshot")
+	}
+	if factory == nil {
+		return nil, fmt.Errorf("native backup accessor factory is required")
 	}
 	v := &VirtualAccessor{byAlias: make(map[string]*VirtualSource, len(snaps))}
 	used := make(map[string]int)
@@ -46,10 +64,15 @@ func NewVirtualAccessor(jobID, readMode string, snaps []snapshots.Snapshot) (*Vi
 		if used[base] > 1 {
 			alias = fmt.Sprintf("%s-%d", base, used[base])
 		}
+		accessor := factory(jobID, readMode, snap)
+		if accessor == nil {
+			v.Close()
+			return nil, fmt.Errorf("native backup accessor factory returned nil for %q", snap.SourcePath)
+		}
 		source := VirtualSource{
 			Alias:    alias,
 			Snapshot: snap,
-			Accessor: NewNativeAccessor(jobID, readMode, snap),
+			Accessor: accessor,
 			Excludes: normalizeVirtualExcludes(snap.Excludes),
 		}
 		v.sources = append(v.sources, source)
@@ -240,7 +263,15 @@ func (s *VirtualSource) isExcluded(rel string) bool {
 	if rel == "." {
 		rel = ""
 	}
+	windowsSemantics := false
+	if _, err := winpath.ParseAbsolute(s.Snapshot.SourcePath); err == nil {
+		windowsSemantics = true
+		rel = strings.ToLower(rel)
+	}
 	for _, exclude := range s.Excludes {
+		if windowsSemantics {
+			exclude = strings.ToLower(exclude)
+		}
 		if rel == exclude || strings.HasPrefix(rel, exclude+"/") {
 			return true
 		}
@@ -250,6 +281,9 @@ func (s *VirtualSource) isExcluded(rel string) bool {
 
 func sourceAlias(source string) string {
 	clean := strings.TrimSpace(source)
+	if windowsPath, err := winpath.ParseAbsolute(clean); err == nil {
+		return windowsPath.Alias()
+	}
 	if runtime.GOOS == "windows" {
 		volume := filepath.VolumeName(clean)
 		rest := strings.Trim(strings.TrimPrefix(clean, volume), `\\/`)

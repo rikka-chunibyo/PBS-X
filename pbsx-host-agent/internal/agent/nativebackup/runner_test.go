@@ -62,6 +62,36 @@ func TestPlanSourcesRejectsAllExcludedRoots(t *testing.T) {
 	}
 }
 
+func TestPlanWindowsSourcesOnLinux(t *testing.T) {
+	plans, err := planSourcesForGOOS(
+		[]string{`C:\Users\Nyx\Documents`, `D:\Projects`},
+		[]string{
+			`C:\Users\Nyx\Documents\Cache`,
+			`c:\users\nyx\documents\TEMP`,
+			`D:\Projects\node_modules`,
+			`E:\Unrelated`,
+		},
+		"windows",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []sourcePlan{
+		{Source: `C:\Users\Nyx\Documents`, Excludes: []string{"Cache", "TEMP"}},
+		{Source: `D:\Projects`, Excludes: []string{"node_modules"}},
+	}
+	if !reflect.DeepEqual(plans, want) {
+		t.Fatalf("plans = %#v, want %#v", plans, want)
+	}
+}
+
+func TestPlanWindowsSourcesRejectsTraversalOnLinux(t *testing.T) {
+	_, err := planSourcesForGOOS([]string{`C:\Users\Nyx`}, []string{`..\Windows`}, "windows")
+	if err == nil {
+		t.Fatal("Windows parent traversal exclusion was accepted")
+	}
+}
+
 func TestPBSAPIBase(t *testing.T) {
 	tests := []struct {
 		name   string

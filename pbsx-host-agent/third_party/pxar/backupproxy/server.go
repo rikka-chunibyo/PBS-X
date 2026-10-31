@@ -182,10 +182,9 @@ func (s *Server) RunBackup(ctx context.Context, root string, config BackupConfig
 }
 
 // RunSplitBackup executes a full pull backup using the split archive format (v2, data mode).
-// The encoder writes metadata and payload to buffers first, then uploads them
-// sequentially via UploadSplitArchive. This avoids the io.Pipe deadlock that
-// occurs when UploadSplitArchive reads one stream at a time while the encoder
-// writes both simultaneously.
+// The encoder writes metadata and payload simultaneously. UploadSplitArchive
+// must therefore consume both streams concurrently so neither pipe blocks the
+// other before the filesystem walk begins.
 func (s *Server) RunSplitBackup(ctx context.Context, root string, config BackupConfig) (*BackupResult, error) {
 	start := time.Now()
 

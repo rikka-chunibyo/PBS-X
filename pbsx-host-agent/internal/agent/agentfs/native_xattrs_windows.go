@@ -3,8 +3,6 @@
 package agentfs
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -12,23 +10,9 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/fxamacker/cbor/v2"
 	"github.com/pbs-plus/pxar/format"
 	"golang.org/x/sys/windows"
 )
-
-const (
-	nativeADSChunkSize     = 60 << 10
-	nativeADSMaxStreamSize = 32 << 20
-	nativeADSMaxFileTotal  = 64 << 20
-)
-
-type nativeADSManifestEntry struct {
-	Name   string `cbor:"name"`
-	Size   int64  `cbor:"size"`
-	Digest []byte `cbor:"digest"`
-	Chunks int    `cbor:"chunks"`
-}
 
 type win32FindStreamData struct {
 	StreamSize int64
@@ -61,47 +45,15 @@ func nativePlatformXAttrs(path string) ([]format.XAttr, error) {
 		return nil, nil
 	}
 
-	attrs := make([]format.XAttr, 0, len(streams)+4)
-	manifest := make([]nativeADSManifestEntry, 0, len(streams))
-	totalADSBytes := 0
-	for streamIndex, stream := range streams {
+	encodedStreams := make([]nativeAlternateDataStream, 0, len(streams))
+	for _, stream := range streams {
 		data, err := readAlternateDataStream(path, stream)
 		if err != nil {
 			return nil, fmt.Errorf("read alternate data stream %q: %w", stream, err)
 		}
-		if len(data) > nativeADSMaxStreamSize {
-			return nil, fmt.Errorf("alternate data stream %q is %d bytes; streams larger than %d bytes require the future ADS payload archive", stream, len(data), nativeADSMaxStreamSize)
-		}
-		totalADSBytes += len(data)
-		if totalADSBytes > nativeADSMaxFileTotal {
-			return nil, fmt.Errorf("alternate data streams on %q exceed the %d byte metadata safety limit", path, nativeADSMaxFileTotal)
-		}
-		digest := sha256.Sum256(data)
-		chunks := 0
-		if len(data) > 0 {
-			chunks = (len(data) + nativeADSChunkSize - 1) / nativeADSChunkSize
-		}
-		manifest = append(manifest, nativeADSManifestEntry{
-			Name:   stream,
-			Size:   int64(len(data)),
-			Digest: append([]byte(nil), digest[:]...),
-			Chunks: chunks,
-		})
-		digestTag := hex.EncodeToString(digest[:8])
-		for chunkIndex := 0; chunkIndex < chunks; chunkIndex++ {
-			start := chunkIndex * nativeADSChunkSize
-			end := min(start+nativeADSChunkSize, len(data))
-			key := fmt.Sprintf("%s%04x.%s.%06x", nativeXAttrADSPrefix, streamIndex, digestTag, chunkIndex)
-			attrs = append(attrs, format.NewXAttr([]byte(key), data[start:end]))
-		}
+		encodedStreams = append(encodedStreams, nativeAlternateDataStream{Name: stream, Data: data})
 	}
-
-	encoded, err := cbor.Marshal(manifest)
-	if err != nil {
-		return nil, fmt.Errorf("encode ADS manifest: %w", err)
-	}
-	attrs = append(attrs, format.NewXAttr([]byte(nativeXAttrADSManifest), encoded))
-	return attrs, nil
+	return encodeNativeADS(encodedStreams)
 }
 
 func nativePlatformFCaps(string) ([]byte, error) { return nil, nil }

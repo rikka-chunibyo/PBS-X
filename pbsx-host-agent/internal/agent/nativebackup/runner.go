@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/agentfs"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/snapshots"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/winpath"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
 
@@ -201,6 +203,17 @@ type sourcePlan struct {
 }
 
 func planSources(sources, excludes []string) ([]sourcePlan, error) {
+	return planSourcesForGOOS(sources, excludes, runtime.GOOS)
+}
+
+func planSourcesForGOOS(sources, excludes []string, goos string) ([]sourcePlan, error) {
+	if goos == "windows" {
+		return planWindowsSources(sources, excludes)
+	}
+	return planNativeSources(sources, excludes)
+}
+
+func planNativeSources(sources, excludes []string) ([]sourcePlan, error) {
 	plans := make([]sourcePlan, 0, len(sources))
 	for index, rawSource := range sources {
 		source := strings.TrimSpace(rawSource)
@@ -247,6 +260,79 @@ func planSources(sources, excludes []string) ([]sourcePlan, error) {
 			if _, ok := seen[rel]; !ok {
 				seen[rel] = struct{}{}
 				plan.Excludes = append(plan.Excludes, rel)
+			}
+		}
+		if excludeRoot {
+			log.Info("backup source excluded by job", "source", source)
+			continue
+		}
+		plans = append(plans, plan)
+	}
+	if len(plans) == 0 {
+		return nil, fmt.Errorf("all configured backup sources are excluded")
+	}
+	return plans, nil
+}
+
+func planWindowsSources(sources, excludes []string) ([]sourcePlan, error) {
+	plans := make([]sourcePlan, 0, len(sources))
+	for index, rawSource := range sources {
+		source := strings.TrimSpace(rawSource)
+		if source == "" {
+			return nil, fmt.Errorf("backup source %d is empty", index)
+		}
+		absoluteSource := source
+		parsedSource, err := winpath.ParseAbsolute(absoluteSource)
+		if err != nil && runtime.GOOS == "windows" {
+			absoluteSource, err = filepath.Abs(source)
+			if err == nil {
+				parsedSource, err = winpath.ParseAbsolute(absoluteSource)
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("resolve Windows backup source %q: %w", source, err)
+		}
+
+		plan := sourcePlan{Source: source}
+		seen := make(map[string]struct{})
+		excludeRoot := false
+		for _, rawExclude := range excludes {
+			exclude := strings.TrimSpace(rawExclude)
+			if exclude == "" {
+				continue
+			}
+
+			var relative string
+			var inside bool
+			if parsedExclude, parseErr := winpath.ParseAbsolute(exclude); parseErr == nil {
+				relative, inside = winpath.RelativeTo(parsedSource, parsedExclude)
+				if !inside {
+					continue
+				}
+			} else if strings.HasPrefix(exclude, `\`) || strings.HasPrefix(exclude, "/") {
+				parsedExclude, rootErr := winpath.WithRootRelative(parsedSource, exclude)
+				if rootErr != nil {
+					return nil, fmt.Errorf("resolve Windows exclusion %q: %w", exclude, rootErr)
+				}
+				relative, inside = winpath.RelativeTo(parsedSource, parsedExclude)
+				if !inside {
+					continue
+				}
+			} else {
+				relative, err = winpath.CleanRelative(exclude)
+				if err != nil {
+					return nil, fmt.Errorf("invalid source-relative exclusion %q: %w", exclude, err)
+				}
+			}
+
+			if relative == "" {
+				excludeRoot = true
+				break
+			}
+			key := strings.ToLower(relative)
+			if _, ok := seen[key]; !ok {
+				seen[key] = struct{}{}
+				plan.Excludes = append(plan.Excludes, relative)
 			}
 		}
 		if excludeRoot {

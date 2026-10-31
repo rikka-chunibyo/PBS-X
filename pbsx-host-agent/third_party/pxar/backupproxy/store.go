@@ -268,6 +268,7 @@ type localSession struct {
 	store         *datastore.ChunkStore
 	baseDir       string
 	files         []datastore.BackupFileInfo
+	filesMu       sync.Mutex
 	config        BackupConfig
 	chunkConfig   buzhash.Config
 	compress      bool
@@ -378,25 +379,34 @@ func (s *localSession) UploadArchive(_ context.Context, name string, data io.Rea
 		return nil, fmt.Errorf("write index: %w", err)
 	}
 	result := &UploadResult{Filename: name, Size: totalOffset, Digest: indexDigest}
-	addFileInfo(&s.files, name, totalOffset, indexDigest, string(s.config.CryptMode))
+	s.addFileInfo(name, totalOffset, indexDigest)
 	return result, nil
 }
 
 func (s *localSession) UploadSplitArchive(ctx context.Context, metadataName string, metadataData io.Reader, payloadName string, payloadData io.Reader) (*SplitArchiveResult, error) {
-	metaResult, err := s.UploadArchive(ctx, metadataName, metadataData)
-	if err != nil {
-		return nil, fmt.Errorf("metadata archive: %w", err)
+	type result struct {
+		value *UploadResult
+		err   error
 	}
-
-	payloadResult, err := s.UploadArchive(ctx, payloadName, payloadData)
-	if err != nil {
-		return nil, fmt.Errorf("payload archive: %w", err)
+	metaCh := make(chan result, 1)
+	payloadCh := make(chan result, 1)
+	go func() {
+		value, err := s.UploadArchive(ctx, metadataName, metadataData)
+		metaCh <- result{value: value, err: err}
+	}()
+	go func() {
+		value, err := s.UploadArchive(ctx, payloadName, payloadData)
+		payloadCh <- result{value: value, err: err}
+	}()
+	meta := <-metaCh
+	payload := <-payloadCh
+	if meta.err != nil {
+		return nil, fmt.Errorf("metadata archive: %w", meta.err)
 	}
-
-	return &SplitArchiveResult{
-		MetadataResult: metaResult,
-		PayloadResult:  payloadResult,
-	}, nil
+	if payload.err != nil {
+		return nil, fmt.Errorf("payload archive: %w", payload.err)
+	}
+	return &SplitArchiveResult{MetadataResult: meta.value, PayloadResult: payload.value}, nil
 }
 
 func (s *localSession) UploadBlob(_ context.Context, name string, data []byte) error {
@@ -420,7 +430,7 @@ func (s *localSession) UploadBlob(_ context.Context, name string, data []byte) e
 	}
 
 	digest := sha256.Sum256(blobData)
-	addFileInfo(&s.files, name, uint64(len(blobData)), digest, string(s.config.CryptMode))
+	s.addFileInfo(name, uint64(len(blobData)), digest)
 
 	return nil
 }
@@ -485,7 +495,7 @@ func (s *localSession) PublishDynamicIndex(ctx context.Context, name, sourcePath
 		return nil, fmt.Errorf("publish target index: %w", err)
 	}
 	result := &UploadResult{Filename: name, Size: totalSize, Digest: indexDigest}
-	addFileInfo(&s.files, name, totalSize, indexDigest, string(s.config.CryptMode))
+	s.addFileInfo(name, totalSize, indexDigest)
 	return result, nil
 }
 
@@ -523,7 +533,7 @@ func (s *localSession) UploadPayloadInterleaved(ctx context.Context, name string
 		return nil, fmt.Errorf("write index: %w", err)
 	}
 	result := &UploadResult{Filename: name, Size: totalSize, Digest: indexDigest}
-	addFileInfo(&s.files, name, totalSize, indexDigest, string(s.config.CryptMode))
+	s.addFileInfo(name, totalSize, indexDigest)
 	return result, nil
 }
 
@@ -702,6 +712,12 @@ func (s *localPayloadSink) reportProgress(processed, uploaded uint64) {
 	if onProgress := s.session.config.OnUploadProgress; onProgress != nil {
 		onProgress(s.progress)
 	}
+}
+
+func (s *localSession) addFileInfo(name string, size uint64, digest [32]byte) {
+	s.filesMu.Lock()
+	defer s.filesMu.Unlock()
+	addFileInfo(&s.files, name, size, digest, string(s.config.CryptMode))
 }
 
 func (s *localSession) Finish(_ context.Context) (*datastore.Manifest, error) {

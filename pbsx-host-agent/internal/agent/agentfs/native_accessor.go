@@ -148,48 +148,8 @@ func (a *NativeAccessor) GetXAttrs(path string) ([]format.XAttr, error) {
 		return nil, err
 	}
 
-	upsert := func(name string, value []byte) {
-		if len(value) == 0 {
-			return
-		}
-		for i := range attrs {
-			if string(attrs[i].Name()) == name {
-				attrs[i] = format.NewXAttr([]byte(name), value)
-				return
-			}
-		}
-		attrs = append(attrs, format.NewXAttr([]byte(name), value))
-	}
-
-	if xinfo.Owner != "" {
-		upsert(nativeXAttrOwner, []byte(xinfo.Owner))
-	}
-	if xinfo.Group != "" {
-		upsert(nativeXAttrGroup, []byte(xinfo.Group))
-	}
-	if xinfo.CreationTime > 0 {
-		upsert(nativeXAttrCreationTime, []byte(strconv.FormatInt(xinfo.CreationTime, 10)))
-	}
-	if xinfo.LastAccessTime > 0 {
-		upsert(nativeXAttrLastAccessTime, []byte(strconv.FormatInt(xinfo.LastAccessTime, 10)))
-	}
-	if xinfo.LastWriteTime > 0 {
-		upsert(nativeXAttrLastWriteTime, []byte(strconv.FormatInt(xinfo.LastWriteTime, 10)))
-	}
-	if len(xinfo.FileAttributes) != 0 {
-		if data, err := cbor.Marshal(xinfo.FileAttributes); err == nil {
-			upsert(nativeXAttrFileAttributes, data)
-		}
-	}
-	switch {
-	case xinfo.WinACLs != nil:
-		if data, err := cbor.Marshal(xinfo.WinACLs); err == nil {
-			upsert(nativeXAttrACLs, data)
-		}
-	case xinfo.PosixACLs != nil:
-		if data, err := cbor.Marshal(xinfo.PosixACLs); err == nil {
-			upsert(nativeXAttrACLs, data)
-		}
+	for _, attr := range nativeMetadataXAttrs(xinfo) {
+		attrs = upsertNativeXAttr(attrs, string(attr.Name()), attr.Value())
 	}
 
 	sparseAttrs, sparseErr := nativeSparseXAttrs(abs)
@@ -197,10 +157,58 @@ func (a *NativeAccessor) GetXAttrs(path string) ([]format.XAttr, error) {
 		return nil, sparseErr
 	}
 	for _, attr := range sparseAttrs {
-		upsert(string(attr.Name()), attr.Value())
+		attrs = upsertNativeXAttr(attrs, string(attr.Name()), attr.Value())
 	}
 
 	return attrs, nil
+}
+
+func upsertNativeXAttr(attrs []format.XAttr, name string, value []byte) []format.XAttr {
+	if len(value) == 0 {
+		return attrs
+	}
+	for i := range attrs {
+		if string(attrs[i].Name()) == name {
+			attrs[i] = format.NewXAttr([]byte(name), value)
+			return attrs
+		}
+	}
+	return append(attrs, format.NewXAttr([]byte(name), value))
+}
+
+func nativeMetadataXAttrs(xinfo fswire.AgentFileInfo) []format.XAttr {
+	var attrs []format.XAttr
+	if xinfo.Owner != "" {
+		attrs = upsertNativeXAttr(attrs, nativeXAttrOwner, []byte(xinfo.Owner))
+	}
+	if xinfo.Group != "" {
+		attrs = upsertNativeXAttr(attrs, nativeXAttrGroup, []byte(xinfo.Group))
+	}
+	if xinfo.CreationTime > 0 {
+		attrs = upsertNativeXAttr(attrs, nativeXAttrCreationTime, []byte(strconv.FormatInt(xinfo.CreationTime, 10)))
+	}
+	if xinfo.LastAccessTime > 0 {
+		attrs = upsertNativeXAttr(attrs, nativeXAttrLastAccessTime, []byte(strconv.FormatInt(xinfo.LastAccessTime, 10)))
+	}
+	if xinfo.LastWriteTime > 0 {
+		attrs = upsertNativeXAttr(attrs, nativeXAttrLastWriteTime, []byte(strconv.FormatInt(xinfo.LastWriteTime, 10)))
+	}
+	if len(xinfo.FileAttributes) != 0 {
+		if data, err := cbor.Marshal(xinfo.FileAttributes); err == nil {
+			attrs = upsertNativeXAttr(attrs, nativeXAttrFileAttributes, data)
+		}
+	}
+	switch {
+	case xinfo.WinACLs != nil:
+		if data, err := cbor.Marshal(xinfo.WinACLs); err == nil {
+			attrs = upsertNativeXAttr(attrs, nativeXAttrACLs, data)
+		}
+	case xinfo.PosixACLs != nil:
+		if data, err := cbor.Marshal(xinfo.PosixACLs); err == nil {
+			attrs = upsertNativeXAttr(attrs, nativeXAttrACLs, data)
+		}
+	}
+	return attrs
 }
 
 func (a *NativeAccessor) GetACL(path string) (pxarlib.ACL, error) {

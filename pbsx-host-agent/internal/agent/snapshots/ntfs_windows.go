@@ -30,15 +30,12 @@ func (w *NtfsSnapshotHandler) CreateSnapshot(jobID string, sourcePath string) (S
 	if err != nil {
 		return Snapshot{}, err
 	}
-	volName := filepath.VolumeName(absSource)
-	if volName == "" {
-		return Snapshot{}, fmt.Errorf("source path %q has no Windows volume", sourcePath)
-	}
-	volumeRoot := volName + `\`
-	rel, err := filepath.Rel(volumeRoot, absSource)
+	source, err := planWindowsSnapshotSource(absSource)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, fmt.Errorf("source path %q has no Windows volume: %w", sourcePath, err)
 	}
+	volName := source.Volume
+	rel := source.Relative
 
 	vssFolder, err := getVSSFolder()
 	if err != nil {
@@ -68,7 +65,7 @@ func (w *NtfsSnapshotHandler) CreateSnapshot(jobID string, sourcePath string) (S
 	}
 
 	root := snapshotPath
-	if rel != "." && rel != "" {
+	if rel != "" {
 		root = filepath.Join(snapshotPath, rel)
 	}
 	return Snapshot{

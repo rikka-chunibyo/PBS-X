@@ -27,6 +27,16 @@ func nativeSparseXAttrs(path string) ([]format.XAttr, error) {
 	if err != nil || len(holes) == 0 {
 		return nil, err
 	}
+	return encodeSparseXAttrs(size, holes)
+}
+
+// encodeSparseXAttrs is deliberately platform-neutral. Windows mock-pipeline
+// tests can therefore validate the exact metadata stored by the production
+// native accessor without requiring NTFS sparse-file APIs.
+func encodeSparseXAttrs(size uint64, holes []sparseRange) ([]format.XAttr, error) {
+	if len(holes) == 0 {
+		return nil, nil
+	}
 
 	encoded, err := cbor.Marshal(holes)
 	if err != nil {
