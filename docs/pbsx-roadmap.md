@@ -15,17 +15,20 @@ Implemented in the current PBS-X source checkpoint:
 - native host backup-job configuration tied to PBS datastores/namespaces;
 - snapshot listing that maps the registered host to normal PBS `host/<host-id>` snapshots;
 - a server-side backup-client argument builder which enforces `--backup-type host --backup-id <host-id>`;
-- an attributed PBS Plus-derived host-agent port containing the agent-side snapshot, ACL, aRPC, mTLS and restore foundations.
+- an attributed PBS Plus-derived host-agent port containing the agent-side snapshot, ACL, aRPC, mTLS and restore foundations;
+- PBS-X-native one-time enrollment with host-scoped upload credentials;
+- scheduled and on-demand agent job dispatch with durable run/progress history;
+- native agent-side PXAR/chunk upload into ordinary PBS host snapshots;
+- direct agent-side restore from PBS snapshots, including progress and sparse-file handling.
 
 Not wired yet:
 
-- PBS-X-native agent enrollment/mTLS certificate issuance;
-- the native agent-side PXAR/chunk upload path and PBS-X control service;
-- scheduled/on-demand host job execution;
-- restore and file browsing from the Host UI;
+- file browsing from the Host UI;
+- production packaging and upgrade delivery for the cross-platform host agent;
+- a current Windows end-to-end validation pass for the native path;
 - image backups and bare-metal recovery.
 
-The current environment cannot compile the Rust tree because Rust/Cargo are unavailable, and it cannot fetch rustup due blocked outbound DNS. The PBS Plus-derived agent declares Go 1.27 while the local toolchain is Go 1.23.2, so that port also needs build cleanup in a current toolchain environment. The small API-token control-plane agent still builds and tests locally.
+The Linux native path has been validated end to end in the PBS-X VM environment: one-time enrollment, heartbeat/inventory, on-demand dispatch, PXAR/chunk upload, normal `host/<host-id>` snapshot commit, direct restore, file/symlink fidelity and sparse-file preservation. The Rust host/config crates and Go control/agent packages pass their current tests with Rust 1.94 and Go 1.27; the Windows agent and Windows-specific test packages cross-compile successfully. A live Windows round trip remains required before treating that platform as validated.
 
 ## Product model
 

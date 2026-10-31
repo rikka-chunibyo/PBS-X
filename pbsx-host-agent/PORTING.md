@@ -25,17 +25,8 @@ Only packages reachable from `cmd/agent` were imported. PBS Plus server UI, data
 
 ## Current port state
 
-The internal Go import path has been changed to `github.com/pbs-x/pbsx-host-agent`, and obvious product/service names have been changed to PBS-X. Protocol URLs, certificate bootstrap, configuration storage and several `PBS Plus` protocol identifiers still need to be adapted to PBS-X.
+The internal Go import path is `github.com/pbs-x/pbsx-host-agent`, configuration and service state use PBS-X paths, and PBS-X Host ID is the canonical agent and backup-group identity. The native server issues one-time enrollment codes and narrowly scoped upload credentials, while the agent polls PBS-X for durable backup and restore commands.
 
-Do not treat this binary as integrated yet. The intended integration order is:
+Bulk backup data no longer follows the imported PBS Plus FUSE design. The agent snapshots and scans locally, builds PXAR/chunk streams, and uploads normal PBS manifests and indexes directly into `host/<host-id>/<snapshot-time>`. Restore reads those archives directly from PBS and writes them on the registered host. Legacy aRPC remains optional plumbing for future control features rather than the backup data path.
 
-1. make PBS-X Host ID the canonical agent identity;
-2. replace the PBS Plus sidecar bootstrap endpoint with a PBS-X native enrollment endpoint;
-3. bind issued credentials to `/host/<host-id>` and the `Host.Agent` privilege;
-4. connect the aRPC agent manager to the PBS-X internal host service;
-5. wire backup jobs to request a snapshot/source from the agent;
-6. mount the agent filesystem on the PBS-X server;
-7. invoke `proxmox-backup-client` with `--backup-type host --backup-id <host-id>`;
-8. wire restore and file browsing into the Host UI.
-
-The current environment has Go 1.23.2 while upstream PBS Plus declares Go 1.27.0, and outbound module/toolchain downloads are blocked. Build cleanup is therefore deferred until the source is tested in a current Go environment.
+The Linux path has been exercised end to end against a PBS-X datastore, including enrollment, inventory, job dispatch, backup commit, restore, symlink fidelity and sparse-file preservation. Go 1.27 builds and tests the control and agent packages, and the Windows agent plus Windows-specific test packages cross-compile. Remaining integration work includes live Windows backup/restore validation, agent packaging/upgrades, Host UI file browsing, and later image/bare-metal support.
