@@ -39,9 +39,6 @@ func TestCanonicalRelativePath(t *testing.T) {
 }
 
 func TestResolvedParentConfinement(t *testing.T) {
-	if filepath.Separator == '\\' {
-		t.Skip("covered by Windows integration tests")
-	}
 	root := t.TempDir()
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {

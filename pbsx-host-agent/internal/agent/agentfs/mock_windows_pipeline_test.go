@@ -145,11 +145,13 @@ func (a *mockWindowsAccessor) FileIdentity(name string) (backupproxy.FileIdentit
 func TestMockWindowsPipelineOnLinux(t *testing.T) {
 	t.Parallel()
 
+	daclProtected := true
 	metadata := fswire.AgentFileInfo{
 		Owner: "S-1-5-21-1000", Group: "S-1-5-32-545",
 		CreationTime: 1710000001, LastAccessTime: 1710000002, LastWriteTime: 1710000003,
 		FileAttributes: map[string]bool{"archive": true, "hidden": true},
 		WinACLs:        []fswire.WinACL{{SID: "S-1-5-21-1000", AccessMask: 0x1f01ff, Type: 0, Flags: 3}},
+		DACLProtected:  &daclProtected,
 	}
 	resumeAttrs := nativeMetadataXAttrs(metadata)
 	adsAttrs, err := encodeNativeADS([]nativeAlternateDataStream{
@@ -239,7 +241,7 @@ func TestMockWindowsPipelineOnLinux(t *testing.T) {
 	}
 	xattrs := pxarlib.EntryXAttrs(resume)
 	for _, name := range []string{
-		nativeXAttrOwner, nativeXAttrGroup, nativeXAttrACLs, nativeXAttrFileAttributes,
+		nativeXAttrOwner, nativeXAttrGroup, nativeXAttrACLs, nativeXAttrDACLProtected, nativeXAttrFileAttributes,
 		nativeXAttrCreationTime, nativeXAttrLastAccessTime, nativeXAttrLastWriteTime,
 		nativeXAttrADSManifest, nativeXAttrSparseManifest,
 	} {
@@ -249,6 +251,9 @@ func TestMockWindowsPipelineOnLinux(t *testing.T) {
 	}
 	if got := string(xattrs[nativeXAttrOwner]); got != metadata.Owner {
 		t.Errorf("owner = %q, want %q", got, metadata.Owner)
+	}
+	if got := string(xattrs[nativeXAttrDACLProtected]); got != "1" {
+		t.Errorf("DACL protection = %q, want 1", got)
 	}
 	var restoredACLs []fswire.WinACL
 	if err := cbor.Unmarshal(xattrs[nativeXAttrACLs], &restoredACLs); err != nil {

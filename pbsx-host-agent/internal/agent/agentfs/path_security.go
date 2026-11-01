@@ -68,16 +68,14 @@ func (s *Server) safeAbs(value string) (string, error) {
 }
 
 func ensureResolvedParentWithinRoot(root, full string) error {
-	root = securityFilesystemPath(root)
-	full = securityFilesystemPath(full)
-	rootResolved, err := filepath.EvalSymlinks(root)
+	rootResolved, err := resolveSecurityPath(root)
 	if err != nil {
-		rootResolved, err = filepath.Abs(root)
+		rootResolved, err = filepath.Abs(securityFilesystemPath(root))
 		if err != nil {
 			return err
 		}
 	}
-	parentResolved, err := filepath.EvalSymlinks(filepath.Dir(full))
+	parentResolved, err := resolveSecurityPath(filepath.Dir(full))
 	if err != nil {
 		return fmt.Errorf("resolve snapshot path parent: %w", err)
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	pxar "github.com/pbs-plus/pxar"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/agentfs"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/agentfs/fswire"
 	"golang.org/x/sys/windows"
 )
@@ -131,6 +132,120 @@ func TestBuildDACLFromACEsEmptySlice(t *testing.T) {
 	if acl != nil || sids != nil || err != nil {
 		t.Fatalf("empty slice: got acl=%v sids=%d err=%v, want nil,nil,nil", acl, len(sids), err)
 	}
+}
+
+func TestBuiltDACLCanBeApplied(t *testing.T) {
+	path := newTestPath(t)
+	handle, err := openRestoreSecurityHandle(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(handle)
+
+	acl, _, err := buildDACLFromACEs([]fswire.WinACL{{
+		SID: "S-1-1-0", AccessMask: windows.GENERIC_ALL, Type: windows.GRANT_ACCESS,
+	}})
+	if err != nil {
+		t.Fatalf("build DACL: %v", err)
+	}
+	defer localFreePtr(aclPtr(acl))
+	if err := setSecurityInfoPart(handle, windows.DACL_SECURITY_INFORMATION, nil, nil, acl); err != nil {
+		t.Fatalf("apply built DACL: %v", err)
+	}
+}
+
+func TestCapturedDACLCanBeApplied(t *testing.T) {
+	source := newTestPath(t)
+	sourceHandle, err := openRestoreSecurityHandle(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, entries, err := agentfs.GetWinACLsHandle(sourceHandle)
+	windows.CloseHandle(sourceHandle)
+	if err != nil {
+		t.Fatalf("capture source DACL: %v", err)
+	}
+
+	target := newTestPath(t)
+	targetHandle, err := openRestoreSecurityHandle(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(targetHandle)
+	acl, _, err := buildDACLFromACEs(entries)
+	if err != nil {
+		t.Fatalf("rebuild captured DACL: %v", err)
+	}
+	if acl == nil {
+		t.Skip("captured DACL contains no explicit entries")
+	}
+	defer localFreePtr(aclPtr(acl))
+	if err := setSecurityInfoPart(targetHandle, windows.DACL_SECURITY_INFORMATION, nil, nil, acl); err != nil {
+		t.Fatalf("apply captured DACL: %v (entries: %#v)", err, entries)
+	}
+}
+
+func TestFixtureCapturedDACLCanBeApplied(t *testing.T) {
+	source := os.Getenv("PBSX_WINDOWS_ACL_PROBE_PATH")
+	if source == "" {
+		t.Skip("set PBSX_WINDOWS_ACL_PROBE_PATH to probe a real Windows ACL")
+	}
+	sourceHandle, err := openRestoreSecurityHandle(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, group, entries, err := agentfs.GetWinACLsHandle(sourceHandle)
+	windows.CloseHandle(sourceHandle)
+	if err != nil {
+		t.Fatalf("capture source DACL: %v", err)
+	}
+	t.Logf("owner=%s group=%s entries=%#v", owner, group, entries)
+
+	target := filepath.Join(t.TempDir(), "target")
+	info, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.IsDir() {
+		err = os.Mkdir(target, 0o700)
+	} else {
+		err = os.WriteFile(target, nil, 0o600)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetHandle, err := openRestoreSecurityHandle(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(targetHandle)
+	acl, _, err := buildDACLFromACEs(entries)
+	if err != nil {
+		t.Fatalf("rebuild captured DACL: %v", err)
+	}
+	if acl == nil {
+		t.Skip("captured DACL contains no explicit entries")
+	}
+	defer localFreePtr(aclPtr(acl))
+	if err := setSecurityInfoPart(targetHandle, windows.DACL_SECURITY_INFORMATION, nil, nil, acl); err != nil {
+		t.Fatalf("apply captured DACL: %v", err)
+	}
+}
+
+func openRestoreSecurityHandle(path string) (windows.Handle, error) {
+	ptr, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	return windows.CreateFile(
+		ptr,
+		restoreSecurityAccess,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS,
+		0,
+	)
 }
 
 // TestBuildDACLFromACEsAllInvalidSIDs verifies that when every ACE carries
@@ -287,18 +402,19 @@ func TestWriteAlternateDataStreamsCanonicalKeysSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	xattrs := map[string][]byte{
-		"user.owner":          []byte("S-1-1-0"),
-		"user.group":          []byte("S-1-1-0"),
-		"user.acls":           []byte("..."),
-		"user.fileattributes": []byte("..."),
-		"user.creationtime":   []byte("123"),
-		"user.lastaccesstime": []byte("123"),
-		"user.lastwritetime":  []byte("123"),
+		"user.owner":               []byte("S-1-1-0"),
+		"user.group":               []byte("S-1-1-0"),
+		"user.acls":                []byte("..."),
+		"user.pbsx.dacl.protected": []byte("1"),
+		"user.fileattributes":      []byte("..."),
+		"user.creationtime":        []byte("123"),
+		"user.lastaccesstime":      []byte("123"),
+		"user.lastwritetime":       []byte("123"),
 	}
 	writeAlternateDataStreams(context.Background(), st, f, xattrs)
 	// None of the canonical streams should exist.
 	for _, key := range []string{
-		"user.owner", "user.group", "user.acls", "user.fileattributes",
+		"user.owner", "user.group", "user.acls", "user.pbsx.dacl.protected", "user.fileattributes",
 		"user.creationtime", "user.lastaccesstime", "user.lastwritetime",
 	} {
 		stream := f + ":" + key[5:] // strip "user." prefix

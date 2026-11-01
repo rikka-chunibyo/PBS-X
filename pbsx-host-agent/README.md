@@ -18,7 +18,7 @@ PBS-X Agent
 
 The backup job ID is never used as the PBS backup group ID.
 
-The Linux path has completed an end-to-end backup/restore round trip against PBS-X, including symlinks and sparse files. The Windows agent builds and its full Go module suite runs natively on Windows. The VSS provider has also completed a live point-in-time consistency and cleanup test, while a complete Windows-to-PBS backup/restore round trip remains to be validated.
+The Linux path has completed an end-to-end backup/restore round trip against PBS-X, including symlinks and sparse files. The Windows agent builds and its full Go module suite runs natively on Windows. Windows Server 2025 has completed a VSS-backed PBS-X backup/restore round trip with matching file hashes, Unicode names, exclusions, alternate data streams, sparse allocation ranges, and a protected DACL. See [the validation report](../docs/windows-native-validation.md) for scope and limitations.
 
 ## Windows VSS integration test
 

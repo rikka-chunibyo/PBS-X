@@ -26,6 +26,7 @@ const (
 	nativeXAttrOwner          = "user.owner"
 	nativeXAttrGroup          = "user.group"
 	nativeXAttrACLs           = "user.acls"
+	nativeXAttrDACLProtected  = "user.pbsx.dacl.protected"
 	nativeXAttrFileAttributes = "user.fileattributes"
 	nativeXAttrCreationTime   = "user.creationtime"
 	nativeXAttrLastAccessTime = "user.lastaccesstime"
@@ -202,6 +203,13 @@ func nativeMetadataXAttrs(xinfo fswire.AgentFileInfo) []format.XAttr {
 	case xinfo.WinACLs != nil:
 		if data, err := cbor.Marshal(xinfo.WinACLs); err == nil {
 			attrs = upsertNativeXAttr(attrs, nativeXAttrACLs, data)
+		}
+		if xinfo.DACLProtected != nil {
+			value := []byte("0")
+			if *xinfo.DACLProtected {
+				value = []byte("1")
+			}
+			attrs = upsertNativeXAttr(attrs, nativeXAttrDACLProtected, value)
 		}
 	case xinfo.PosixACLs != nil:
 		if data, err := cbor.Marshal(xinfo.PosixACLs); err == nil {

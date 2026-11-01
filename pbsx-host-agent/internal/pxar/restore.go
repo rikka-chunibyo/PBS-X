@@ -116,6 +116,7 @@ const (
 	XAttrOwner          = "user.owner"
 	XAttrGroup          = "user.group"
 	XAttrACLs           = "user.acls"
+	XAttrDACLProtected  = "user.pbsx.dacl.protected"
 	XAttrFileAttributes = "user.fileattributes"
 	XAttrCreationTime   = "user.creationtime"
 	XAttrLastAccessTime = "user.lastaccesstime"
@@ -128,7 +129,7 @@ const (
 
 func IsCanonicalXAttr(name string) bool {
 	switch name {
-	case XAttrOwner, XAttrGroup, XAttrACLs, XAttrFileAttributes,
+	case XAttrOwner, XAttrGroup, XAttrACLs, XAttrDACLProtected, XAttrFileAttributes,
 		XAttrCreationTime, XAttrLastAccessTime, XAttrLastWriteTime, XAttrADSManifest, XAttrSparseManifest:
 		return true
 	}
