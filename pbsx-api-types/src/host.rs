@@ -811,6 +811,7 @@ pub enum HostRestoreMode {
             description: "Unique PBS-X host restore run identifier.",
         },
         "host-id": { schema: HOST_ID_SCHEMA },
+        "backup-id": { optional: true, schema: HOST_ID_SCHEMA },
         store: { schema: DATASTORE_SCHEMA },
         ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
         "backup-time": { schema: BACKUP_TIME_SCHEMA },
@@ -839,6 +840,9 @@ pub enum HostRestoreMode {
 pub struct HostRestoreRunCommand {
     pub run_id: String,
     pub host_id: String,
+    /// Source PBS host backup group; absent in legacy commands means host_id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_id: Option<String>,
     pub store: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ns: Option<BackupNamespace>,
@@ -910,6 +914,7 @@ pub struct HostRestoreRunProgress {
         "run-id": { type: String, description: "Unique PBS-X host restore run identifier." },
         "host-id": { schema: HOST_ID_SCHEMA },
         state: { type: HostRestoreRunState },
+        "backup-id": { optional: true, schema: HOST_ID_SCHEMA },
         store: { schema: DATASTORE_SCHEMA },
         ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
         "backup-time": { schema: BACKUP_TIME_SCHEMA },
@@ -938,6 +943,9 @@ pub struct HostRestoreRunProgress {
 pub struct HostRestoreRunInfo {
     pub run_id: String,
     pub host_id: String,
+    /// Source backup group, distinct from the destination agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_id: Option<String>,
     pub state: HostRestoreRunState,
     pub store: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -962,4 +970,26 @@ pub struct HostRestoreRunInfo {
     pub processed_bytes: u64,
     pub files: u64,
     pub duration_ms: u64,
+}
+
+#[cfg(test)]
+mod restore_identity_tests {
+    use super::*;
+
+    #[test]
+    fn restore_source_and_destination_are_independent() {
+        let legacy = serde_json::json!({
+            "run-id":"restore-test", "host-id":"destination-host", "store":"backup",
+            "backup-time":123, "sources":["/"], "destination":"/tmp/restore", "requested-at":123
+        });
+        let command: HostRestoreRunCommand = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(command.backup_id, None);
+        let mut cross_host = legacy;
+        cross_host["backup-id"] = "source-host".into();
+        let command: HostRestoreRunCommand = serde_json::from_value(cross_host).unwrap();
+        assert_eq!(command.host_id, "destination-host");
+        assert_eq!(command.backup_id.as_deref(), Some("source-host"));
+        let encoded = serde_json::to_value(command).unwrap();
+        assert_eq!(encoded["backup-id"], "source-host");
+    }
 }

@@ -46,6 +46,9 @@ func runEnrollmentCode(code string) error {
 	if err := agent.ValidateHostID(values.HostID); err != nil {
 		return err
 	}
+	if err := agent.SetStorageCredentials(agent.StorageCredentials{AuthID: values.StorageAuthID, Secret: values.StorageSecret}); err != nil {
+		return fmt.Errorf("save storage credentials: %w", err)
+	}
 	for key, value := range map[string]string{
 		"HostID":              values.HostID,
 		"ServerURL":           values.ServerURL,

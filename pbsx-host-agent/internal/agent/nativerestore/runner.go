@@ -16,6 +16,7 @@ import (
 type Job struct {
 	ID          string                    `json:"run-id"`
 	HostID      string                    `json:"host-id"`
+	BackupID    string                    `json:"backup-id,omitempty"`
 	Datastore   string                    `json:"store"`
 	Namespace   string                    `json:"ns,omitempty"`
 	BackupTime  int64                     `json:"backup-time"`
@@ -32,6 +33,12 @@ func Run(ctx context.Context, job Job) error {
 	}
 	if job.HostID != enrolled {
 		return fmt.Errorf("restore host %q does not match enrolled host %q", job.HostID, enrolled)
+	}
+	if job.BackupID == "" {
+		job.BackupID = job.HostID
+	}
+	if err := agent.ValidateHostID(job.BackupID); err != nil {
+		return fmt.Errorf("invalid source backup ID: %w", err)
 	}
 	if strings.TrimSpace(job.Datastore) == "" || job.BackupTime <= 0 {
 		return fmt.Errorf("restore datastore and backup time are required")
@@ -60,7 +67,7 @@ func Run(ctx context.Context, job Job) error {
 	reader, err := restorepxar.NewPBSArchiveReader(ctx, backupproxy.PBSConfig{
 		BaseURL: baseURL, Datastore: job.Datastore, AuthToken: authToken,
 		Namespace: job.Namespace, TLSConfig: tlsConfig,
-	}, job.HostID, job.BackupTime)
+	}, job.BackupID, job.BackupTime)
 	if err != nil {
 		return err
 	}

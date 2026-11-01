@@ -14,3 +14,6 @@ serde.workspace = true
 proxmox-schema = { workspace = true, features = [ "api-macro" ] }
 proxmox-time.workspace = true
 pbs-api-types.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

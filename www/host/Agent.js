@@ -17,13 +17,19 @@ Ext.define('PBS.HostAgentView', {
 		    let data = response.result.data;
 		    let origin = window.location.origin;
 		    let encodeEnrollment = function(server) {
-			let payload = JSON.stringify({
+			let fields = {
 			    v: 1,
 			    host_id: view.host,
 			    server_url: server,
 			    bootstrap_token: data.token,
 			    server_ca_fingerprint: data['server-fingerprint'],
-			});
+			};
+			let form = view.enrollmentWindow;
+			if (form && form.down('#storageMode').getValue() === 'custom') {
+			    fields.storage_auth_id = form.down('#storageAuthID').getValue().trim();
+			    fields.storage_secret = form.down('#storageSecret').getValue();
+			}
+			let payload = JSON.stringify(fields);
 			let binary = '';
 			for (let byte of new TextEncoder().encode(payload)) {
 			    binary += String.fromCharCode(byte);
@@ -32,11 +38,11 @@ Ext.define('PBS.HostAgentView', {
 		    };
 		    let initialCode = encodeEnrollment(origin);
 
-		    Ext.create('Ext.window.Window', {
+		    view.enrollmentWindow = Ext.create('Ext.window.Window', {
 			title: gettext('Enroll Agent'),
 			modal: true,
 			width: 760,
-			height: 430,
+			height: 620,
 			layout: 'fit',
 			items: [{
 			    xtype: 'form',
@@ -46,6 +52,38 @@ Ext.define('PBS.HostAgentView', {
 				labelWidth: 150,
 			    },
 			    items: [{
+				xtype: 'proxmoxKVComboBox',
+				itemId: 'storageMode',
+				fieldLabel: gettext('Storage credentials'),
+				value: 'auto',
+				comboItems: [['auto', gettext('Automatic device key')], ['custom', gettext('Existing PBS API key')]],
+				listeners: { change: function(field, value) {
+				    let win = field.up('window');
+				    if (!win || !win.down('#enrollmentCode')) { return; }
+				    win.down('#storageAuthID').setDisabled(value !== 'custom');
+				    win.down('#storageSecret').setDisabled(value !== 'custom');
+				    win.down('#enrollmentCode').setValue(encodeEnrollment(win.down('#serverField').getValue().trim()));
+				} },
+			    }, {
+				xtype: 'textfield', itemId: 'storageAuthID', disabled: true, allowBlank: false,
+				fieldLabel: gettext('API token ID'), emptyText: 'user@realm!token',
+				listeners: { change: function(field) {
+				    let win = field.up('window');
+				    if (!win || !win.down('#enrollmentCode')) { return; }
+				    win.down('#enrollmentCode').setValue(encodeEnrollment(win.down('#serverField').getValue().trim()));
+				} },
+			    }, {
+				xtype: 'textfield', itemId: 'storageSecret', inputType: 'password', disabled: true, allowBlank: false,
+				fieldLabel: gettext('API token secret'),
+				listeners: { change: function(field) {
+				    let win = field.up('window');
+				    if (!win || !win.down('#enrollmentCode')) { return; }
+				    win.down('#enrollmentCode').setValue(encodeEnrollment(win.down('#serverField').getValue().trim()));
+				} },
+			    }, {
+				xtype: 'displayfield',
+				value: gettext('Automatic keys remain isolated per device. An existing storage key follows its PBS permissions. Enrollment codes containing a storage key are sensitive.'),
+			    }, {
 				xtype: 'displayfield',
 				fieldLabel: gettext('ID'),
 				value: view.host,
@@ -85,6 +123,7 @@ Ext.define('PBS.HostAgentView', {
 			    iconCls: 'fa fa-clipboard',
 			    handler: function(button) {
 				let win = button.up('window');
+				if (!win.down('form').isValid()) { return; }
 				let area = win.down('#enrollmentCode');
 				let value = area.getValue();
 				if (navigator.clipboard) {
@@ -109,6 +148,7 @@ Ext.define('PBS.HostAgentView', {
 			    handler: function(button) { button.up('window').close(); },
 			}],
 			listeners: {
+			    destroy: function() { view.enrollmentWindow = undefined; },
 			    afterrender: function(win) {
 				win.down('#serverField').focus(true, 100);
 			    },

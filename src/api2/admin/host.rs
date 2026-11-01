@@ -356,14 +356,15 @@ pub fn run_backup(name: String, id: String) -> Result<HostBackupRunCommand, Erro
                 description: "Destination directory on the protected host.",
             },
             mode: { type: HostRestoreMode, optional: true },
+            "target-host": { optional: true, schema: HOST_ID_SCHEMA },
         },
     },
     returns: { type: HostRestoreRunCommand },
     access: {
-        permission: &Permission::Privilege(&["host", "{name}"], PRIV_HOST_MODIFY, false),
+        permission: &Permission::Anybody,
     },
 )]
-/// Queue a restore from one of this host's ordinary PBS snapshots back to the enrolled agent.
+/// Restore this host's backup to a selected agent using that agent's storage credential.
 #[allow(clippy::too_many_arguments)]
 pub fn run_restore(
     name: String,
@@ -373,11 +374,13 @@ pub fn run_restore(
     sources: Option<Vec<String>>,
     destination: String,
     mode: Option<HostRestoreMode>,
+    target_host: Option<String>,
     rpcenv: &mut dyn RpcEnvironment,
 ) -> Result<HostRestoreRunCommand, Error> {
-    let host = get_host_config(&name)?;
+    let target_host = target_host.unwrap_or_else(|| name.clone());
+    let host = get_host_config(&target_host)?;
     if !host.enable {
-        http_bail!(FORBIDDEN, "host '{}' is disabled", name);
+        http_bail!(FORBIDDEN, "host '{}' is disabled", target_host);
     }
 
     // Restoring is a data-read operation. Host.Modify alone must not allow an operator to
@@ -387,6 +390,7 @@ pub fn run_restore(
         .ok_or_else(|| anyhow::format_err!("missing authentication ID"))?
         .parse()?;
     let user_info = CachedUserInfo::new()?;
+    user_info.check_privs(&auth_id, &["host", &target_host], PRIV_HOST_MODIFY, false)?;
     let effective_ns = ns.clone().unwrap_or_else(BackupNamespace::root);
     if let Err(err) = user_info.check_privs(
         &auth_id,
@@ -398,6 +402,7 @@ pub fn run_restore(
     }
 
     crate::server::host::queue_host_restore(
+        &target_host,
         &name,
         &store,
         ns,
