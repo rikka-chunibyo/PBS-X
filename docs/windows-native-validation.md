@@ -57,3 +57,35 @@ Application-writer consistency, large production datasets, all ACL forms,
 empty/null DACL distinctions, inherited permissions under different destination
 parents, EFS, reparse variants, reboot recovery and image/bare-metal restore still
 need dedicated coverage. Existing backups lack the new DACL-protection key.
+
+## Expanded live cases, 2026-11-01
+
+The opt-in `TestWindowsPBSRoundTripCases` suite uses actual enrolled credentials
+and calls the production native backup and restore runners against the test
+datastore. It adds coverage beyond the first queued-service round trip:
+
+- Multiple sources with identical basenames and colliding shortened aliases.
+- Empty files and directories, Unicode content/names, and exclusions with a
+  different case from the real directory name.
+- Real NTFS hardlink identity and relative symbolic-link targets.
+- Paths longer than 260 characters.
+- An exclusively locked source file, readable through its VSS snapshot.
+- A 240,000-byte ADS split across metadata chunks and a zero-length ADS.
+- Read-only/hidden attributes, ADS on a read-only file, and modification time.
+- A metadata-mode incremental snapshot after changing ADS data without changing
+  its size or the file timestamp, adding a file, and deleting another file.
+- A selected-file content-only restore.
+
+All 11 subcases passed. Successful full and incremental snapshots were
+`1793511939` and `1793511943` under `host/pbsx-win-114`. Each source fixture and
+restore directory was removed by test cleanup. Snapshots remain for inspection.
+`TestWindowsPBSRejectsOversizedADS` also passed: a 32 MiB + 1 byte ADS causes an
+explicit backup failure with the size-limit message. No new administrator token
+or ACL grant was needed for this pass.
+
+Two production defects were found and fixed: the restore attribute decoder now
+accepts the native backup's `readOnly`/`hidden` names as well as legacy Windows
+constant names; and `FILE_BASIC_INFO` now has its required 40-byte size and 8-byte
+alignment. Attributes and timestamps are applied after ADS writes so read-only
+state cannot prevent stream creation and stream writes cannot alter the final
+timestamp.

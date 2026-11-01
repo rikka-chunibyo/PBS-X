@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/fxamacker/cbor/v2"
 	pxar "github.com/pbs-plus/pxar"
@@ -111,6 +112,23 @@ func TestBuildFileAttributesUnknownKeys(t *testing.T) {
 	})
 	if attrs != 0 {
 		t.Errorf("unknown keys: got %d, want 0", attrs)
+	}
+}
+
+func TestBuildFileAttributesNativeBackupNames(t *testing.T) {
+	attrs := buildFileAttributes(map[string]bool{"readOnly": true, "hidden": true, "archive": true})
+	want := uint32(windows.FILE_ATTRIBUTE_READONLY | windows.FILE_ATTRIBUTE_HIDDEN | windows.FILE_ATTRIBUTE_ARCHIVE)
+	if attrs != want {
+		t.Fatalf("attributes=%x, want %x", attrs, want)
+	}
+}
+
+func TestFileBasicInfoNativeSize(t *testing.T) {
+	if got := unsafe.Alignof(FILE_BASIC_INFO{}); got != 8 {
+		t.Fatalf("FILE_BASIC_INFO alignment=%d, want 8", got)
+	}
+	if got := unsafe.Sizeof(FILE_BASIC_INFO{}); got != 40 {
+		t.Fatalf("FILE_BASIC_INFO size=%d, want 40", got)
 	}
 }
 

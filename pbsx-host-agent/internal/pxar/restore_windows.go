@@ -33,11 +33,13 @@ var (
 const restoreSecurityAccess = windows.READ_CONTROL | windows.WRITE_DAC | windows.WRITE_OWNER
 
 type FILE_BASIC_INFO struct {
+	_              [0]uint64 // FILETIME fields alone only enforce 4-byte Go alignment.
 	CreationTime   windows.Filetime
 	LastAccessTime windows.Filetime
 	LastWriteTime  windows.Filetime
 	ChangeTime     windows.Filetime
 	FileAttributes uint32
+	_              uint32 // Native FILE_BASIC_INFO has 8-byte alignment and size 40.
 }
 
 func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.FileInfo) error {
@@ -94,22 +96,6 @@ func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.File
 		}
 	}
 
-	if hasAttrs {
-		info := FILE_BASIC_INFO{
-			CreationTime:   c,
-			LastAccessTime: a,
-			LastWriteTime:  w,
-			FileAttributes: attrs,
-		}
-		st.reportErr(ctx, "set basic info", path, setBasicInfo(h, &info))
-	} else {
-		var cp *windows.Filetime
-		if hasCreation {
-			cp = &c
-		}
-		st.reportErr(ctx, "set file time", path, windows.SetFileTime(h, cp, &a, &w))
-	}
-
 	if xattrs != nil {
 		// WRITE_DAC/WRITE_OWNER, which normally causes SetSecurityInfo to
 		if st.fsCap.supportsPersistentACLs {
@@ -120,6 +106,18 @@ func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.File
 		if st.fsCap.supportsXAttrs {
 			writeAlternateDataStreams(ctx, st, path, xattrs)
 		}
+	}
+	// Restore streams before READONLY and timestamps: creating an ADS needs
+	// write access and can update the file's last-write time.
+	if hasAttrs {
+		info := FILE_BASIC_INFO{CreationTime: c, LastAccessTime: a, LastWriteTime: w, FileAttributes: attrs}
+		st.reportErr(ctx, "set basic info", path, setBasicInfo(h, &info))
+	} else {
+		var cp *windows.Filetime
+		if hasCreation {
+			cp = &c
+		}
+		st.reportErr(ctx, "set file time", path, windows.SetFileTime(h, cp, &a, &w))
 	}
 
 	return nil
@@ -375,6 +373,12 @@ func unixToFiletime(unixTime int64) windows.Filetime {
 func buildFileAttributes(fa map[string]bool) uint32 {
 	var r uint32
 	m := map[string]uint32{
+		"readOnly":                windows.FILE_ATTRIBUTE_READONLY,
+		"hidden":                  windows.FILE_ATTRIBUTE_HIDDEN,
+		"system":                  windows.FILE_ATTRIBUTE_SYSTEM,
+		"archive":                 windows.FILE_ATTRIBUTE_ARCHIVE,
+		"temporary":               windows.FILE_ATTRIBUTE_TEMPORARY,
+		"notContentIndexed":       windows.FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
 		"FILE_ATTRIBUTE_READONLY": windows.FILE_ATTRIBUTE_READONLY,
 		"FILE_ATTRIBUTE_HIDDEN":   windows.FILE_ATTRIBUTE_HIDDEN,
 		"FILE_ATTRIBUTE_SYSTEM":   windows.FILE_ATTRIBUTE_SYSTEM,

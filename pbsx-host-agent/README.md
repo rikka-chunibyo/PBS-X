@@ -34,3 +34,18 @@ go test -v -count=1 -run '^TestNTFSSnapshotLive$' ./internal/agent/snapshots
 
 The test is skipped during ordinary unit-test runs because VSS requires an
 elevated Windows host and temporarily creates system snapshot state.
+
+For broader live backup/restore coverage on a disposable enrolled Windows host,
+explicitly select the test datastore and opt in:
+
+```powershell
+$env:PBSX_WINDOWS_PBS_INTEGRATION = "1"
+$env:PBSX_WINDOWS_TEST_DATASTORE = "backup"
+go test -v -count=1 -timeout=15m -run 'TestWindowsPBS' ./internal/agent/nativebackup
+```
+
+These tests use the enrolled host's credentials and write real PBS snapshots.
+Temporary source/restore files are cleaned up; committed snapshots remain for
+inspection. The suite covers multiple sources, hardlinks, symlinks, long paths,
+ADS, attributes, locked files, metadata-mode changes, selected-file restore, and
+explicit oversized-ADS rejection. Both environment flags are required.
