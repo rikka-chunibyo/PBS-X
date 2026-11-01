@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -205,7 +206,10 @@ type PBSConfig struct {
 	// PBS-X uses this for hostname validation plus optional exact certificate
 	// fingerprint pinning. When nil, the upstream SkipTLSVerify behavior is kept
 	// for compatibility with existing callers.
-	TLSConfig     *tls.Config
+	TLSConfig *tls.Config
+	// Dialer optionally binds sockets to a platform-selected network (Android).
+	// Nil preserves the default network behavior for existing desktop agents.
+	Dialer        *net.Dialer
 	SkipTLSVerify bool
 }
 
@@ -227,7 +231,7 @@ func NewPBSStore(config PBSConfig, chunkCfg buzhash.Config, compress bool) *PBSS
 
 // StartSession dials PBS via H2 upgrade and returns a backup session.
 func (ps *PBSStore) StartSession(ctx context.Context, config BackupConfig) (BackupSession, error) {
-	h2Conn, err := dialPBSH2(ctx, ps.config.BaseURL, ps.config.Datastore, ps.config.AuthToken, config, ps.config.TLSConfig, ps.config.SkipTLSVerify)
+	h2Conn, err := dialPBSH2(ctx, ps.config.BaseURL, ps.config.Datastore, ps.config.AuthToken, config, ps.config.TLSConfig, ps.config.SkipTLSVerify, ps.config.Dialer)
 	if err != nil {
 		return nil, fmt.Errorf("PBS H2 connect: %w", err)
 	}

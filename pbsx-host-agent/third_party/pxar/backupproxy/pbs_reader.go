@@ -179,6 +179,7 @@ func dialPBSReaderH2(ctx context.Context, cfg PBSConfig, backupType, backupID st
 	}
 	tlsCfg.NextProtos = []string{"http/1.1"}
 	var d tls.Dialer
+	d.NetDialer = cfg.Dialer
 	d.Config = tlsCfg
 	conn, err := d.DialContext(ctx, "tcp", host)
 	if err != nil {

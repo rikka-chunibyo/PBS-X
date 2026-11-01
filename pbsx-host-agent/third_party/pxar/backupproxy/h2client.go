@@ -125,7 +125,7 @@ func (s *stream) release() {
 
 // ----- connection setup -----
 
-func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg BackupConfig, tlsConfig *tls.Config, skipTLS bool) (*pbsH2Conn, error) {
+func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg BackupConfig, tlsConfig *tls.Config, skipTLS bool, dialer *net.Dialer) (*pbsH2Conn, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse PBS URL: %w", err)
@@ -159,6 +159,7 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 	// Do not let ALPN negotiate h2 before that upgrade request is sent.
 	tlsCfg.NextProtos = []string{"http/1.1"}
 	var d tls.Dialer
+	d.NetDialer = dialer
 	d.Config = tlsCfg
 	conn, err := d.DialContext(ctx, "tcp", host)
 	if err != nil {
