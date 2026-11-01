@@ -955,9 +955,10 @@ pub fn update_host_restore_progress(progress: &HostRestoreRunProgress) -> Result
     )
 }
 
-/// Queue a native restore of one normal PBS host snapshot back to its enrolled host.
+/// Queue a native restore from a PBS host backup group to an enrolled destination.
 pub fn queue_host_restore(
     host: &str,
+    backup_id: &str,
     store: &str,
     ns: Option<pbs_api_types::BackupNamespace>,
     backup_time: i64,
@@ -975,12 +976,8 @@ pub fn queue_host_restore(
     if destination.trim().is_empty() {
         bail!("restore destination must not be empty");
     }
-    let effective_ns = ns
-        .clone()
-        .unwrap_or_else(pbs_api_types::BackupNamespace::root);
-    if !upload_target_allowed(host, store, &effective_ns)? {
-        bail!("datastore/namespace target is not configured for host '{host}'");
-    }
+    // The destination's selected storage credential is checked by the ordinary
+    // PBS reader. Backup-job targets do not define restore authorization.
     let sources = if sources.is_empty() {
         vec!["/".to_string()]
     } else {
@@ -996,6 +993,7 @@ pub fn queue_host_restore(
     let command = HostRestoreRunCommand {
         run_id: run_id.clone(),
         host_id: host.to_string(),
+        backup_id: Some(backup_id.to_string()),
         store: store.to_string(),
         ns,
         backup_time,
@@ -1095,6 +1093,7 @@ pub fn list_host_restore_runs(host: &str) -> Result<Vec<HostRestoreRunInfo>, Err
         let mut info = HostRestoreRunInfo {
             run_id: command.run_id.clone(),
             host_id: command.host_id.clone(),
+            backup_id: command.backup_id.clone(),
             state,
             store: command.store.clone(),
             ns: command.ns.clone(),

@@ -1,7 +1,7 @@
 Ext.define('pbsx-host-restore-runs', {
     extend: 'Ext.data.Model',
     fields: [
-	'run-id', 'host-id', 'state', 'store', 'ns', 'backup-time', 'sources', 'destination', 'mode',
+	'run-id', 'host-id', 'backup-id', 'state', 'store', 'ns', 'backup-time', 'sources', 'destination', 'mode',
 	'requested-at', 'started-at', 'updated-at', 'finished-at', 'success', 'error', 'stage',
 	'processed-bytes', 'files', 'duration-ms',
     ],
@@ -56,6 +56,7 @@ Ext.define('PBS.HostRestoreRunView', {
     ],
 
     columns: [
+	{ header: gettext('Source Host'), dataIndex: 'backup-id', width: 140, renderer: Ext.String.htmlEncode },
 	{ header: gettext('Backup Time'), dataIndex: 'backup-time', width: 165, renderer: Proxmox.Utils.render_timestamp },
 	{ header: gettext('Datastore'), dataIndex: 'store', width: 120 },
 	{ header: gettext('Namespace'), dataIndex: 'ns', width: 110, renderer: value => value || '/' },

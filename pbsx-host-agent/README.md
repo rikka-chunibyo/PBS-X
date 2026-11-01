@@ -18,6 +18,10 @@ PBS-X Agent
 
 The backup job ID is never used as the PBS backup group ID.
 
+Automatic device API keys remain the default. Setup can also use an existing
+PBS storage API key, and restores can target another enrolled host without
+changing host IDs. See [storage credentials and restore permissions](../docs/host-storage-credentials.md).
+
 The Linux path has completed an end-to-end backup/restore round trip against PBS-X, including symlinks and sparse files. The Windows agent builds and its full Go module suite runs natively on Windows. Windows Server 2025 has completed a VSS-backed PBS-X backup/restore round trip with matching file hashes, Unicode names, exclusions, alternate data streams, sparse allocation ranges, and a protected DACL. See [the validation report](../docs/windows-native-validation.md) for scope and limitations.
 
 ## Windows VSS integration test

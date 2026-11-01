@@ -18,7 +18,6 @@ import (
 	"github.com/pbs-plus/pxar/datastore"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/agentfs"
-	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/snapshots"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/winpath"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
@@ -420,23 +419,7 @@ func cleanupSnapshots(snaps []snapshots.Snapshot) {
 }
 
 func uploadCredentials() (string, string, *tls.Config, error) {
-	server, err := registry.GetEntry(registry.CONFIG, "ServerURL", false)
-	if err != nil || server == nil || strings.TrimSpace(server.Value) == "" {
-		return "", "", nil, fmt.Errorf("PBS-X server URL is not configured")
-	}
-	authID, err := registry.GetEntry(registry.AUTH, "BackupAuthID", false)
-	if err != nil || authID == nil || strings.TrimSpace(authID.Value) == "" {
-		return "", "", nil, fmt.Errorf("PBS-X backup upload auth ID is missing; re-enroll the host")
-	}
-	secret, err := registry.GetEntry(registry.AUTH, "BackupSecret", true)
-	if err != nil || secret == nil || strings.TrimSpace(secret.Value) == "" {
-		return "", "", nil, fmt.Errorf("PBS-X backup upload secret is missing; re-enroll the host")
-	}
-	tlsConfig, err := agent.GetTLSConfig()
-	if err != nil {
-		return "", "", nil, err
-	}
-	return server.Value, strings.TrimSpace(authID.Value) + ":" + strings.TrimSpace(secret.Value), tlsConfig, nil
+	return agent.PBSConnectionInfo()
 }
 
 func pbsAPIBase(server string) (string, error) {

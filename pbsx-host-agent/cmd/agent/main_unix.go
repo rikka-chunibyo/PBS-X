@@ -184,6 +184,13 @@ func main() {
 		}
 	}()
 	conf.Version = Version
+	if requested, err := storageKeyCommand(os.Args[1:]); requested {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if code, requested, err := enrollmentCodeFromArgs(os.Args[1:]); requested {
 		if err == nil {
 			err = runEnrollmentCode(code)

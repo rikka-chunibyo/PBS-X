@@ -17,6 +17,7 @@ import (
 type runCommand struct {
 	RunID       string   `json:"run-id"`
 	HostID      string   `json:"host-id"`
+	BackupID    string   `json:"backup-id,omitempty"`
 	Store       string   `json:"store"`
 	Namespace   string   `json:"ns,omitempty"`
 	BackupTime  int64    `json:"backup-time"`
@@ -109,7 +110,7 @@ func pollOnce(ctx context.Context) error {
 	}()
 
 	runErr := Run(ctx, Job{
-		ID: run.RunID, HostID: run.HostID, Datastore: run.Store,
+		ID: run.RunID, HostID: run.HostID, BackupID: run.BackupID, Datastore: run.Store,
 		Namespace: run.Namespace, BackupTime: run.BackupTime,
 		Sources: run.Sources, Destination: run.Destination, Mode: run.Mode,
 		OnProgress: func(fileCount, byteCount uint64) {

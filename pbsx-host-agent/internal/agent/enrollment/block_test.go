@@ -2,8 +2,26 @@ package enrollment
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"testing"
 )
+
+func TestEnrollmentStorageCredentialOption(t *testing.T) {
+	var payload map[string]any
+	_ = json.Unmarshal([]byte(testPayload), &payload)
+	payload["storage_auth_id"] = "restore@pbs!shared"
+	payload["storage_secret"] = "example-secret"
+	raw, _ := json.Marshal(payload)
+	values, err := Decode(Prefix + base64.RawURLEncoding.EncodeToString(raw))
+	if err != nil || values.StorageAuthID != "restore@pbs!shared" || values.StorageSecret != "example-secret" {
+		t.Fatal("custom enrollment credential not preserved")
+	}
+	delete(payload, "storage_secret")
+	raw, _ = json.Marshal(payload)
+	if _, err := Decode(Prefix + base64.RawURLEncoding.EncodeToString(raw)); err == nil {
+		t.Fatal("partial credential accepted")
+	}
+}
 
 const testPayload = `{"v":1,"host_id":"test-host","server_url":"https://pbs.example:8007","bootstrap_token":"abc123","server_ca_fingerprint":"aa:bb"}`
 

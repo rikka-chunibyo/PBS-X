@@ -39,6 +39,22 @@ Ext.define('PBS.window.HostRestore', {
 	    ],
 	    column2: [
 		{
+		    xtype: 'combobox',
+		    fieldLabel: gettext('Restore to host'),
+		    name: 'target-host',
+		    value: me.host,
+		    allowBlank: false,
+		    forceSelection: true,
+		    queryMode: 'local',
+		    displayField: 'name',
+		    valueField: 'name',
+		    store: {
+			autoLoad: true,
+			fields: ['name'],
+			proxy: { type: 'proxmox', url: '/api2/json/config/host' },
+		    },
+		},
+		{
 		    xtype: 'proxmoxKVComboBox',
 		    fieldLabel: gettext('Metadata'),
 		    name: 'mode',
@@ -64,7 +80,7 @@ Ext.define('PBS.window.HostRestore', {
 		    name: 'destination',
 		    fieldLabel: gettext('Destination'),
 		    allowBlank: false,
-		    emptyText: gettext('Directory on the protected host'),
+		    emptyText: gettext('Directory on the selected destination host'),
 		},
 	    ],
 	};
@@ -100,7 +116,7 @@ Ext.define('PBS.HostBackupSnapshotView', {
 			    Ext.Msg.show({
 				title: gettext('Restore queued'),
 				icon: Ext.Msg.INFO,
-				message: gettext('The restore was queued for this host.'),
+				message: gettext('The restore was queued for the selected destination host. Its storage API key must have access to this backup.'),
 				buttons: Ext.Msg.OK,
 			    });
 			}
