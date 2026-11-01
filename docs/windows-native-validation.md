@@ -4,6 +4,10 @@ Validated on 2026-11-01 using Windows Server 2025 Evaluation, Go 1.27.3,
 and the dedicated PBS-X VM 114 (`pbsx-win-test`, 4 vCPU, 8 GiB RAM).
 The PBS-X test server was VM 104; no hypervisor reboot was required.
 
+Run multiple live VSS test packages with `go test -p 1`. Parallel package
+processes can request overlapping snapshots of the same volume and receive a
+Windows shadow-copy provider veto. Ordinary unit tests can run in parallel.
+
 ## Results
 
 - Full native host-agent `go test -count=1 -timeout=10m ./...`: passed.

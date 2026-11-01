@@ -38,6 +38,9 @@ go test -v -count=1 -run '^TestNTFSSnapshotLive$' ./internal/agent/snapshots
 
 The test is skipped during ordinary unit-test runs because VSS requires an
 elevated Windows host and temporarily creates system snapshot state.
+When running multiple packages with live VSS tests enabled, pass `-p 1` to
+`go test`: shadow-copy creation can be vetoed when separate test processes
+request snapshots of the same volume concurrently.
 
 For broader live backup/restore coverage on a disposable enrolled Windows host,
 explicitly select the test datastore and opt in:
