@@ -55,11 +55,12 @@ func init() {
 }
 
 type Client struct {
-	cfg    configuration
-	tls    *tls.Config
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	dialer *net.Dialer
+	cfg     configuration
+	tls     *tls.Config
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	dialer  *net.Dialer
+	details ProgressDetails
 }
 
 // SocketBinder binds an unconnected TCP socket to the selected Android network.
@@ -239,7 +240,7 @@ func Enroll(code, hostname string) (string, error) {
 	}
 	cfg.Certificate = cert
 	cfg.PrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
-	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.2.0-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
+	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.2.1-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
 	response, err := c.request(context.Background(), "POST", "/pbsx/agent/bootstrap", body, false)
 	if err != nil {
 		return "", err
@@ -327,9 +328,12 @@ func (c *Client) backupNamed(store, namespace, jobID, jobName string, docs Docum
 	}
 	defer done()
 	stamp := time.Now().Unix()
-	client := backupproxy.NewLocalClient(&documentFS{docs: docs, ctx: ctx})
+	report := newTransferReporter(ctx, c.details)
+	defer report.close()
+	client := backupproxy.NewLocalClient(&documentFS{docs: docs, ctx: ctx, report: report})
 	server := backupproxy.NewServer(client, backupproxy.NewPBSStore(cfg, buzhash.DefaultConfig(), true))
 	_, err = server.RunBackupWithMode(ctx, ".", backupproxy.BackupConfig{BackupType: datastore.BackupHost, BackupID: c.cfg.HostID, Namespace: namespace, BackupTime: stamp, ChunkConfig: buzhash.DefaultConfig(), DetectionMode: backupproxy.DetectionData, Compress: true, StrictMetadata: true, OnUploadProgress: func(p backupproxy.UploadProgress) {
+		report.uploaded(int64(p.UploadedBytes))
 		if progress != nil {
 			progress.Update("Uploading", int64(p.UploadedChunks), int64(p.UploadedBytes))
 		}
@@ -339,6 +343,7 @@ func (c *Client) backupNamed(store, namespace, jobID, jobName string, docs Docum
 	}
 	result := backupResult{Snapshot: fmt.Sprintf("host/%s/%s", c.cfg.HostID, time.Unix(stamp, 0).UTC().Format("2006-01-02T15:04:05Z"))}
 	if jobID != "" {
+		report.phase("Saving snapshot notes", "", -1)
 		values := map[string]any{"backup-type": "host", "backup-id": c.cfg.HostID, "backup-time": stamp, "notes": "PBS-X Android: " + jobName + "\nJob ID: " + jobID}
 		if namespace != "" {
 			values["ns"] = namespace

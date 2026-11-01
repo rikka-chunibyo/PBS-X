@@ -60,7 +60,7 @@ public final class RestoreActivity extends Activity {
       page = Ui.scroll(root);
       footer = Ui.column(this);
       footer.setPadding(Ui.dp(this, 16), Ui.dp(this, 5), Ui.dp(this, 16), Ui.dp(this, 8));
-      footer.setBackgroundColor(android.graphics.Color.WHITE);
+      footer.setBackgroundColor(Ui.SURFACE);
       root.addView(footer);
       if (saved != null) {
         store = saved.getString("store", store);
@@ -199,7 +199,7 @@ public final class RestoreActivity extends Activity {
       if (item == null) continue;
       long time = item.optLong("backup-time");
       LinearLayout card = Ui.card(page);
-      Ui.text(card, date(time), 19, Ui.NAVY);
+      Ui.text(card, date(time), 19, Ui.TEXT);
       String comment = item.optString("comment", "");
       if (!comment.isEmpty()) Ui.hint(card, comment);
       Ui.button(
@@ -293,7 +293,7 @@ public final class RestoreActivity extends Activity {
       check.setContentDescription("Select " + name);
       line.addView(check, new LinearLayout.LayoutParams(Ui.dp(this, 46), Ui.dp(this, 52)));
       LinearLayout info = Ui.column(this);
-      TextView label = Ui.text(info, name, 16, dir ? Ui.BLUE : Ui.NAVY);
+      TextView label = Ui.text(info, name, 16, dir ? Ui.BLUE : Ui.TEXT);
       label.setMaxLines(2);
       label.setEllipsize(TextUtils.TruncateAt.END);
       Ui.hint(

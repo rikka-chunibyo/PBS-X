@@ -40,6 +40,10 @@ func TestLivePBS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	details := &detailSpy{}
+	if err := client.SetProgressDetails(details); err != nil {
+		t.Fatal(err)
+	}
 	source := &fsDocuments{root: t.TempDir()}
 	files := map[string][]byte{"Photos/猫.jpg": bytes.Repeat([]byte("photo bytes "), 200000), "Documents/empty": {}, "Documents/keep.txt": []byte("unchanged"), "Documents/change.txt": []byte("version one"), "Documents/delete.txt": []byte("delete me")}
 	for name, data := range files {
@@ -72,6 +76,14 @@ func TestLivePBS(t *testing.T) {
 	}
 	if uploaded := atomic.LoadInt64(&progress.bytes); uploaded != 0 {
 		t.Fatalf("unchanged snapshot uploaded %d new chunk bytes", uploaded)
+	}
+	var logical int64
+	for _, value := range files {
+		logical += int64(len(value))
+	}
+	liveProgress := details.latest()
+	if liveProgress.Bytes != logical || liveProgress.Files != int64(len(files)) || liveProgress.UploadedBytes != 0 {
+		t.Fatalf("unchanged live PBS backup did not publish logical progress: %+v", liveProgress)
 	}
 	t.Log("Unchanged snapshot reused every data chunk")
 	time.Sleep(1100 * time.Millisecond)

@@ -98,8 +98,9 @@ func entryStat(e documentEntry) (format.Stat, error) {
 
 type documentFS struct {
 	backupproxy.NoExtendedAttrs
-	docs Documents
-	ctx  context.Context
+	docs   Documents
+	ctx    context.Context
+	report *transferReporter
 }
 
 func (f *documentFS) entry(p string) (documentEntry, error) {
@@ -130,6 +131,7 @@ func (f *documentFS) Stat(p string) (format.Stat, error) {
 }
 func (f *documentFS) ReadDir(p string) ([]backupproxy.DirEntry, error) {
 	p = strings.TrimPrefix(p, "./")
+	f.report.phase("Scanning folders", p, -1)
 	if err := safePath(p); err != nil {
 		return nil, err
 	}
@@ -171,6 +173,7 @@ func (f *documentFS) OpenFile(p string) (io.ReadCloser, uint64, error) {
 	if e.Directory || e.Size < 0 {
 		return nil, 0, errors.New("not a sized regular file")
 	}
+	f.report.phase("Backing up", p, e.Size)
 	fd, err := f.docs.OpenRead(p)
 	if err != nil {
 		return nil, 0, err
@@ -209,6 +212,7 @@ func (r *checkedDocument) Read(p []byte) (int, error) {
 	// Probe one byte beyond the advertised size so growing files also fail.
 	n, err := r.file.Read(p)
 	r.read += int64(n)
+	r.fs.report.add(int64(n))
 	if r.read > r.before.Size {
 		return 0, errors.New("file grew while being backed up")
 	}
@@ -232,6 +236,7 @@ func (r *checkedDocument) Read(p []byte) (int, error) {
 			return 0, errors.New("file changed while being backed up")
 		}
 		r.checked = true
+		r.fs.report.fileDone()
 	}
 	return n, err
 }

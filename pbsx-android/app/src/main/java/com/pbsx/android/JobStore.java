@@ -93,7 +93,7 @@ final class JobStore {
             .put("target", job.target())
             .put("started", System.currentTimeMillis())
             .put("state", "running")
-            .put("message", "Starting…");
+            .put("message", kind.equals("restore") ? "Preparing restore…" : "Preparing backup…");
     JSONArray old = new JSONArray(prefs(c).getString("history", "[]")),
         out = new JSONArray().put(run);
     for (int i = 0; i < old.length() && i < 99; i++) out.put(old.get(i));
@@ -114,6 +114,18 @@ final class JobStore {
       }
     }
     prefs(c).edit().putString("history", out.toString()).commit();
+  }
+
+  static synchronized void progress(Context c, String id, String message) throws Exception {
+    JSONArray runs = history(c);
+    for (int i = 0; i < runs.length(); i++) {
+      JSONObject run = runs.getJSONObject(i);
+      if (id.equals(run.optString("id")) && "running".equals(run.optString("state"))) {
+        run.put("message", message.length() > 4096 ? message.substring(0, 4096) : message);
+        prefs(c).edit().putString("history", runs.toString()).apply();
+        return;
+      }
+    }
   }
 
   static synchronized JSONArray history(Context c) throws Exception {

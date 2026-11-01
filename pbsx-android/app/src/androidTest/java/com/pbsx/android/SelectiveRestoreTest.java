@@ -38,6 +38,9 @@ public class SelectiveRestoreTest {
   public void browsesArchiveAndRestoresOnlySelectedFilesThroughSaf() throws Exception {
     Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
     Client client = client(c);
+    java.util.concurrent.atomic.AtomicReference<String> details =
+        new java.util.concurrent.atomic.AtomicReference<>();
+    client.setProgressDetails(details::set);
     JSONObject root =
         new JSONObject(client.listArchive("backup", "", "android-test", 1700000000, ".", 0, 200));
     assertEquals(3, root.getInt("total"));
@@ -66,6 +69,12 @@ public class SelectiveRestoreTest {
       assertEquals(1, stats.getLong("files"));
     }
     assertEquals("image fixture", read(base, "Photos/nested/猫.jpg"));
+    assertNotNull(details.get());
+    JSONObject progress = new JSONObject(details.get());
+    assertEquals("Restoring", progress.getString("stage"));
+    assertEquals("Photos/nested/猫.jpg", progress.getString("path"));
+    assertEquals(1, progress.getLong("files"));
+    assertEquals(progress.getLong("file_total"), progress.getLong("file_bytes"));
     assertFalse(new File(base, "Photos/a.txt").exists());
     assertFalse(new File(base, "Documents").exists());
   }

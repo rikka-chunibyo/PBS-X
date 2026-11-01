@@ -28,6 +28,13 @@ public final class MainActivity extends Activity {
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
   private LinearLayout page, nav, root;
   private TextView connectionLabel, activeLabel;
+  private TextView transferStage,
+      transferPath,
+      transferCounts,
+      transferBarLabel,
+      runningJobLabel,
+      runningHistoryLabel;
+  private ProgressBar transferBar;
   private int tab;
   private long fingerprint;
   private boolean busy;
@@ -36,13 +43,7 @@ public final class MainActivity extends Activity {
       new Runnable() {
         public void run() {
           try {
-            if (activeLabel != null)
-              activeLabel.setText(
-                  Operations.running()
-                      ? Operations.activeName()
-                          + "\n"
-                          + Settings.prefs(MainActivity.this).getString("status", "Working…")
-                      : "Ready · v" + BuildConfig.VERSION_NAME);
+            updateProgress();
             long next = fingerprint();
             if (next != fingerprint) {
               fingerprint = next;
@@ -51,7 +52,7 @@ public final class MainActivity extends Activity {
           } catch (Exception e) {
             Settings.status(MainActivity.this, e.getMessage());
           }
-          handler.postDelayed(this, 1500);
+          handler.postDelayed(this, 500);
         }
       };
   private final Shizuku.OnRequestPermissionResultListener permission =
@@ -75,7 +76,7 @@ public final class MainActivity extends Activity {
     root.setBackgroundColor(Ui.BG);
     Ui.systemBars(this);
     LinearLayout header = Ui.column(this);
-    header.setBackgroundColor(Ui.NAVY);
+    header.setBackgroundColor(Ui.HEADER);
     header.setPadding(Ui.dp(this, 22), Ui.dp(this, 18), Ui.dp(this, 22), Ui.dp(this, 16));
     TextView title = Ui.text(header, "PBS-X Backup", 26, Color.WHITE);
     title.setTypeface(null, Typeface.BOLD);
@@ -89,7 +90,7 @@ public final class MainActivity extends Activity {
     scroll.addView(page);
     root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
     nav = Ui.row(this);
-    nav.setBackgroundColor(Color.WHITE);
+    nav.setBackgroundColor(Ui.SURFACE);
     nav.setPadding(Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
     root.addView(nav);
     if (Build.VERSION.SDK_INT >= 30)
@@ -145,15 +146,56 @@ public final class MainActivity extends Activity {
     super.onSaveInstanceState(out);
   }
 
-  private long fingerprint() {
+  private long fingerprint() throws Exception {
     android.content.SharedPreferences p = getSharedPreferences("jobs-v1", 0);
-    return 31L * p.getString("jobs", "").hashCode() + p.getString("history", "").hashCode();
+    JSONArray history = JobStore.history(this);
+    for (int i = 0; i < history.length(); i++)
+      if ("running".equals(history.getJSONObject(i).optString("state")))
+        history.getJSONObject(i).remove("message");
+    return 31L * p.getString("jobs", "").hashCode()
+        + history.toString().hashCode()
+        + (Operations.running() ? 1 : 0);
+  }
+
+  private void updateProgress() {
+    if (activeLabel == null) return;
+    TransferState.Snapshot state = TransferState.current();
+    activeLabel.setText(
+        Operations.running()
+            ? Operations.activeName() + " · " + state.stage
+            : "Ready · v" + BuildConfig.VERSION_NAME);
+    if (transferBar != null) {
+      transferStage.setText(state.stage);
+      transferPath.setText(state.path);
+      transferPath.setVisibility(
+          state.path.isEmpty() ? android.view.View.GONE : android.view.View.VISIBLE);
+      transferCounts.setText(state.counts(this));
+      transferBarLabel.setText(state.barLabel());
+      boolean indeterminate = !state.hasFileProgress();
+      if (transferBar.isIndeterminate() != indeterminate)
+        transferBar.setIndeterminate(indeterminate);
+      if (!indeterminate) transferBar.setProgress(state.percent(), true);
+    }
+    if (runningJobLabel != null)
+      runningJobLabel.setText(
+          state.stage
+              + " · "
+              + state.counts(this)
+              + (state.path.isEmpty() ? "" : "\n" + state.path));
+    if (runningHistoryLabel != null) runningHistoryLabel.setText(state.summary(this));
   }
 
   private void render() {
     if (page == null || isDestroyed() || isFinishing()) return;
     page.removeAllViews();
     nav.removeAllViews();
+    transferBar = null;
+    transferStage = null;
+    transferPath = null;
+    transferCounts = null;
+    transferBarLabel = null;
+    runningJobLabel = null;
+    runningHistoryLabel = null;
     try {
       String raw = Vault.load(this);
       JSONObject cfg = raw.isEmpty() ? null : new JSONObject(raw);
@@ -183,8 +225,19 @@ public final class MainActivity extends Activity {
       }
       if (Operations.running()) {
         LinearLayout running = Ui.card(page);
-        Ui.text(running, "Transfer in progress", 17, Ui.BLUE);
-        Ui.hint(running, Operations.activeName());
+        Ui.text(running, Operations.activeName(), 17, Ui.BLUE);
+        transferStage = Ui.text(running, "", 16, Ui.TEXT);
+        transferPath = Ui.hint(running, "");
+        transferCounts = Ui.hint(running, "");
+        transferBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        transferBar.setMax(100);
+        transferBar.setProgressTintList(android.content.res.ColorStateList.valueOf(Ui.BLUE));
+        transferBar.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(Ui.BLUE));
+        transferBar.setProgressBackgroundTintList(
+            android.content.res.ColorStateList.valueOf(Ui.LINE));
+        transferBar.setContentDescription("Current file progress");
+        running.addView(transferBar, new LinearLayout.LayoutParams(-1, Ui.dp(this, 12)));
+        transferBarLabel = Ui.hint(running, "");
         Ui.button(running, "Cancel transfer", false, v -> Operations.cancel());
       }
       if (tab == 0) jobs(cfg);
@@ -192,6 +245,7 @@ public final class MainActivity extends Activity {
       else if (tab == 2) activity();
       else settings(cfg);
       fingerprint = fingerprint();
+      updateProgress();
     } catch (Exception e) {
       Ui.hint(page, e.getMessage() == null ? "Could not load app data" : e.getMessage());
     }
@@ -203,7 +257,7 @@ public final class MainActivity extends Activity {
     title.setText("Backup jobs");
     title.setTextSize(25);
     title.setTypeface(null, Typeface.BOLD);
-    title.setTextColor(Ui.NAVY);
+    title.setTextColor(Ui.TEXT);
     heading.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
     Button add = new Button(this);
     add.setText("+ New job");
@@ -214,7 +268,7 @@ public final class MainActivity extends Activity {
     Ui.hint(page, "Choose what to protect, where it goes and when each job runs.");
     if (cfg == null) {
       LinearLayout connect = Ui.card(page);
-      Ui.text(connect, "Connect to PBS-X", 19, Ui.NAVY);
+      Ui.text(connect, "Connect to PBS-X", 19, Ui.TEXT);
       Ui.hint(
           connect,
           "Use an enrollment code for an automatic device key, or connect with an existing API"
@@ -239,14 +293,14 @@ public final class MainActivity extends Activity {
       TextView label = new TextView(this);
       label.setText(job.name);
       label.setTextSize(21);
-      label.setTextColor(Ui.NAVY);
+      label.setTextColor(Ui.TEXT);
       label.setTypeface(null, Typeface.BOLD);
       titleRow.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
       Button more = new Button(this);
       more.setText("⋮");
       more.setTextSize(23);
       more.setContentDescription("Job options for " + job.name);
-      more.setBackgroundColor(Color.WHITE);
+      more.setBackgroundColor(Ui.SURFACE);
       titleRow.addView(more, new LinearLayout.LayoutParams(Ui.dp(this, 48), Ui.dp(this, 48)));
       more.setOnClickListener(
           v -> {
@@ -270,8 +324,14 @@ public final class MainActivity extends Activity {
           last = history.getJSONObject(i);
           break;
         }
-      if (last == null) Ui.hint(card, "No runs yet");
-      else Ui.hint(card, pretty(last.optString("state")) + " · " + date(last.optLong("started")));
+      TextView lastLabel =
+          Ui.hint(
+              card,
+              last == null
+                  ? "No runs yet"
+                  : pretty(last.optString("state")) + " · " + date(last.optLong("started")));
+      if (Operations.running() && job.id.equals(Operations.activeJobId()))
+        runningJobLabel = lastLabel;
       LinearLayout actions = Ui.row(this);
       Ui.button(actions, "Back up", true, v -> run(job));
       Ui.button(actions, "Snapshots", false, v -> browse(job));
@@ -289,7 +349,7 @@ public final class MainActivity extends Activity {
         page,
         "Browse a snapshot, choose files or folders, then choose a destination and conflict mode.");
     LinearLayout intro = Ui.card(page);
-    Ui.text(intro, "Only what you need", 21, Ui.NAVY);
+    Ui.text(intro, "Only what you need", 21, Ui.TEXT);
     Ui.hint(
         intro,
         "Select individual files across folders, an entire directory, or the whole snapshot."
@@ -298,7 +358,7 @@ public final class MainActivity extends Activity {
     Ui.button(intro, "Browse backups", true, v -> browse(null));
     for (BackupJob job : JobStore.all(this)) {
       LinearLayout card = Ui.card(page);
-      Ui.text(card, job.name, 18, Ui.NAVY);
+      Ui.text(card, job.name, 18, Ui.TEXT);
       Ui.hint(card, job.target());
       Ui.button(card, "Browse this destination", false, v -> browse(job));
     }
@@ -323,20 +383,21 @@ public final class MainActivity extends Activity {
           pretty(state) + " · " + pretty(r.optString("kind")),
           14,
           "success".equals(state)
-              ? Color.rgb(27, 121, 94)
+              ? Color.rgb(126, 216, 168)
               : "failed".equals(state) || "interrupted".equals(state)
-                  ? Color.rgb(170, 65, 65)
+                  ? Color.rgb(255, 157, 157)
                   : Ui.BLUE);
-      Ui.text(card, r.optString("job_name"), 19, Ui.NAVY);
+      Ui.text(card, r.optString("job_name"), 19, Ui.TEXT);
       Ui.hint(card, date(r.optLong("started")) + " · " + r.optString("target"));
-      Ui.hint(card, r.optString("message"));
+      TextView message = Ui.hint(card, r.optString("message"));
+      if (r.optString("id").equals(Operations.activeRunId())) runningHistoryLabel = message;
     }
   }
 
   private void settings(JSONObject cfg) {
     Ui.title(page, "Settings");
     LinearLayout account = Ui.card(page);
-    Ui.text(account, "Server & credentials", 20, Ui.NAVY);
+    Ui.text(account, "Server & credentials", 20, Ui.TEXT);
     Ui.hint(
         account,
         cfg == null
@@ -346,7 +407,7 @@ public final class MainActivity extends Activity {
     Ui.button(account, "Use an existing API key", false, v -> connections.manual());
     Ui.button(account, "Change storage API key", false, v -> connections.storage());
     LinearLayout restore = Ui.card(page);
-    Ui.text(restore, "Restore connection", 19, Ui.NAVY);
+    Ui.text(restore, "Restore connection", 19, Ui.TEXT);
     CheckBox wifi =
         Ui.check(
             restore,
@@ -356,7 +417,7 @@ public final class MainActivity extends Activity {
         (b, value) -> Settings.prefs(this).edit().putBoolean("wifi", value).apply());
     Ui.hint(restore, "Backup jobs each have their own Wi-Fi setting.");
     LinearLayout privileged = Ui.card(page);
-    Ui.text(privileged, "Shizuku", 19, Ui.NAVY);
+    Ui.text(privileged, "Shizuku", 19, Ui.TEXT);
     String status = "Not running";
     try {
       if (Shizuku.pingBinder())
@@ -387,7 +448,7 @@ public final class MainActivity extends Activity {
         "Jobs can opt into installed APKs and accessible Android/data or obb files. Private app"
             + " data is not included.");
     LinearLayout battery = Ui.card(page);
-    Ui.text(battery, "Background backups", 19, Ui.NAVY);
+    Ui.text(battery, "Background backups", 19, Ui.TEXT);
     Ui.hint(
         battery,
         "On Samsung, add PBS-X Backup to Battery → Background usage limits → Never sleeping apps."

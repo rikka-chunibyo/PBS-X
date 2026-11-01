@@ -126,9 +126,23 @@ func TestDocumentArchiveRoundTrip(t *testing.T) {
 	}
 	backup := func(stamp int64) {
 		t.Helper()
-		_, err := backupproxy.NewServer(backupproxy.NewLocalClient(&documentFS{docs: src, ctx: ctx}), store).RunBackupWithMode(ctx, ".", backupproxy.BackupConfig{BackupType: datastore.BackupHost, BackupID: "android-test", BackupTime: stamp, ChunkConfig: cfg, Compress: true, DetectionMode: backupproxy.DetectionData, StrictMetadata: true})
+		spy := &detailSpy{}
+		report := newTransferReporter(ctx, spy)
+		_, err := backupproxy.NewServer(backupproxy.NewLocalClient(&documentFS{docs: src, ctx: ctx, report: report}), store).RunBackupWithMode(ctx, ".", backupproxy.BackupConfig{BackupType: datastore.BackupHost, BackupID: "android-test", BackupTime: stamp, ChunkConfig: cfg, Compress: true, DetectionMode: backupproxy.DetectionData, StrictMetadata: true, OnUploadProgress: func(p backupproxy.UploadProgress) { report.uploaded(int64(p.UploadedBytes)) }})
+		report.close()
 		if err != nil {
 			t.Fatal(err)
+		}
+		var expected int64
+		for _, value := range files {
+			expected += int64(len(value))
+		}
+		state := spy.latest()
+		if state.Bytes != expected || state.Files != int64(len(files)) {
+			t.Fatalf("real backup omitted logical progress: %+v", state)
+		}
+		if stamp == 1700000001 && state.UploadedBytes != 0 {
+			t.Fatalf("unchanged backup uploaded new bytes: %+v", state)
 		}
 	}
 	backup(1700000000)

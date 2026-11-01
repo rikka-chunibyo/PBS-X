@@ -4,6 +4,43 @@ Branch: `pbsx-android-app`, based on PBS-X `026c165a2`.
 Phone target: Samsung S20 FE, Android 13 / One UI 5.1, unrooted with Shizuku.
 No physical Samsung phone was available for these checks.
 
+## 0.2.1: dark theme and live progress
+
+The app now uses a dark theme throughout its own screens and dialogs. The
+current-file progress bar, phase, path, completed-file count, logical bytes and
+uploaded chunk bytes update in the transfer card, job/Activity rows and manual
+transfer notification. Scheduled runs share the same status path. Scanning and
+finalization remain indeterminate; no overall job percentage is invented.
+
+The old callback only reported uploaded chunks, which could remain at zero
+during reads or unchanged/deduplicated backups. A separate native detail callback
+now reports logical reads and restores, with a bounded ticker to publish the
+current phase even while a provider is blocked. Listener shutdown joins that
+ticker before the operation returns. Upload counts are monotonic despite
+out-of-order worker callbacks. Live-history updates do not rebuild the page on
+every tick or overwrite a completed run.
+
+Go tests with race detection passed, including actual archive backups that read
+all unchanged files while uploading zero new bytes, intermediate per-file
+counts, blocked-provider phase publication, callback shutdown and restore
+details. APK/AAR assembly, Java unit tests and Android lint also passed.
+All **16 Android 13 instrumentation tests passed with zero skips**. The live PBS
+regression passed again, including an assertion that the unchanged snapshot
+reports every logical file/byte while uploading zero new chunk bytes. Temporary
+server resources and uploaded tools were removed, and both PBS services remain
+active. The local emulator and dummy fixture were stopped after testing.
+
+Instrumentation adds a native PBS-reader-to-SAF progress check, current-file
+versus indeterminate state transitions, protection against late history updates,
+and a synthetic UI-state fixture that verifies dark colors, a 50% file bar and
+preservation of the same view during live updates. The UI-state fixture lives
+only in the instrumentation APK; it is separate from the actual Go/SAF checks.
+Software renders of the dark screens and the synthetic progress card are in
+ignored `build/reports/android-ui/`, including `progress-dark.png`. A clean APK
+build, signature verification and 16 KiB ZIP alignment checks passed; the
+signing identity is unchanged. Samsung provider/system-bar behavior remains a
+physical-phone check.
+
 ## 0.2.0: jobs and selective restore
 
 The app now separates Jobs, Restore, Activity and Settings. Each local job has
@@ -131,7 +168,7 @@ Install `artifacts/pbsx-android-preview.apk`.
 SHA-256:
 
 ```text
-f7332259e64be7aa107b5bbdbaad95c6d1adb391da7c40ddf890a7b56277d56f
+ddbc0a0a78d119d0b6f7db84e4f7c9abd3dca1d6b3e12eef08b40447c2fd5be1
 ```
 
 This is a preview signed with the local Android debug key. Its signing

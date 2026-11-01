@@ -32,6 +32,13 @@ preview, not a full device-image or private-app-data backup tool.
 
 The bottom navigation separates **Jobs**, **Restore**, **Activity** and
 **Settings**. Activity retains the latest 100 local runs and their outcomes.
+The app uses a dark theme for screens, menus and dialogs. Active transfers show
+the current phase and file, completed-file/logical-byte counts, actual uploaded
+chunk bytes, and a progress bar in the app and manual-transfer notification.
+The percentage is for the **current file**, not the whole job. Scanning,
+preparing sources, comparing files and saving the snapshot use an indeterminate
+bar. Reading unchanged files still advances progress even when PBS reuses every
+chunk and uploads zero new content. Job and Activity rows update while running.
 Existing folder and schedule settings migrate into a `Phone backup` job on
 upgrade; the existing connection and keys are retained. Editing or deleting a
 local job never deletes its PBS snapshots.

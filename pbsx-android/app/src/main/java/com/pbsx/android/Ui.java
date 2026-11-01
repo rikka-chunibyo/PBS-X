@@ -13,11 +13,15 @@ import android.view.WindowManager;
 import android.widget.*;
 
 final class Ui {
-  static final int NAVY = Color.rgb(24, 40, 72),
-      BLUE = Color.rgb(49, 89, 205),
-      MUTED = Color.rgb(101, 114, 137),
-      BG = Color.rgb(243, 246, 251),
-      LINE = Color.rgb(220, 227, 238);
+  static final int TEXT = Color.rgb(237, 242, 252),
+      HEADER = Color.rgb(20, 32, 51),
+      SURFACE = Color.rgb(25, 37, 56),
+      SECONDARY = Color.rgb(38, 52, 75),
+      PRIMARY = Color.rgb(57, 87, 190),
+      BLUE = Color.rgb(156, 182, 255),
+      MUTED = Color.rgb(167, 180, 202),
+      BG = Color.rgb(14, 22, 36),
+      LINE = Color.rgb(57, 72, 96);
 
   static int dp(Context c, int n) {
     return (int) (n * c.getResources().getDisplayMetrics().density + .5f);
@@ -55,7 +59,7 @@ final class Ui {
   }
 
   static TextView title(LinearLayout p, String value) {
-    TextView t = text(p, value, 25, NAVY);
+    TextView t = text(p, value, 25, TEXT);
     t.setTypeface(null, Typeface.BOLD);
     return t;
   }
@@ -73,7 +77,7 @@ final class Ui {
     Context c = parent.getContext();
     LinearLayout p = column(c);
     p.setPadding(dp(c, 18), dp(c, 14), dp(c, 18), dp(c, 14));
-    p.setBackground(shape(Color.WHITE, dp(c, 16)));
+    p.setBackground(shape(SURFACE, dp(c, 16)));
     p.setElevation(dp(c, 1));
     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
     lp.setMargins(0, dp(c, 6), 0, dp(c, 10));
@@ -89,7 +93,7 @@ final class Ui {
     b.setAllCaps(false);
     b.setTextColor(primary ? Color.WHITE : BLUE);
     b.setBackgroundTintList(
-        android.content.res.ColorStateList.valueOf(primary ? BLUE : Color.rgb(230, 236, 250)));
+        android.content.res.ColorStateList.valueOf(primary ? PRIMARY : SECONDARY));
     b.setMinHeight(dp(c, 46));
     b.setOnClickListener(action);
     LinearLayout.LayoutParams lp =
@@ -109,7 +113,7 @@ final class Ui {
     e.setText(value);
     e.setSingleLine(true);
     e.setTextSize(16);
-    e.setTextColor(NAVY);
+    e.setTextColor(TEXT);
     e.setInputType(
         InputType.TYPE_CLASS_TEXT
             | (secret
@@ -123,14 +127,14 @@ final class Ui {
   static CheckBox check(LinearLayout p, String label, boolean checked) {
     CheckBox b = new CheckBox(p.getContext());
     b.setText(label);
-    b.setTextColor(NAVY);
+    b.setTextColor(TEXT);
     b.setChecked(checked);
     p.addView(b);
     return b;
   }
 
   static void systemBars(Activity a) {
-    a.getWindow().setStatusBarColor(NAVY);
+    a.getWindow().setStatusBarColor(HEADER);
     a.getWindow().setNavigationBarColor(BG);
     a.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
     // Materialize the decor before PhoneWindow accesses its insets controller.
@@ -140,11 +144,11 @@ final class Ui {
       WindowInsetsController controller = a.getWindow().getInsetsController();
       if (controller != null)
         controller.setSystemBarsAppearance(
-            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+            0,
             WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
                 | WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
     } else {
-      decor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+      decor.setSystemUiVisibility(0);
     }
   }
 
@@ -154,12 +158,12 @@ final class Ui {
     root.setBackgroundColor(BG);
     LinearLayout bar = row(a);
     bar.setPadding(dp(a, 12), dp(a, 8), dp(a, 16), dp(a, 8));
-    bar.setBackgroundColor(NAVY);
+    bar.setBackgroundColor(HEADER);
     Button back = new Button(a);
     back.setText("‹");
     back.setTextSize(28);
     back.setTextColor(Color.WHITE);
-    back.setBackgroundColor(NAVY);
+    back.setBackgroundColor(HEADER);
     back.setContentDescription("Back");
     back.setOnClickListener(v -> a.finish());
     bar.addView(back, new LinearLayout.LayoutParams(dp(a, 46), dp(a, 48)));

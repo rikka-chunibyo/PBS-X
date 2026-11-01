@@ -16,6 +16,20 @@ final class Operations {
   private static final AtomicBoolean running = new AtomicBoolean();
   private static volatile Cancellation active;
   private static volatile String activeName = "";
+  private static volatile String activeJobId = "";
+  private static volatile String activeRunId = "";
+
+  static String activeJobId() {
+    return activeJobId;
+  }
+
+  static String activeRunId() {
+    return activeRunId;
+  }
+
+  static boolean isActive(Cancellation token) {
+    return running.get() && active == token;
+  }
 
   static String activeName() {
     return activeName;
@@ -132,15 +146,40 @@ final class Operations {
     ConnectivityManager.NetworkCallback callback = null;
     active = cancellation;
     activeName = destination == null ? job.name : "Restore files";
+    activeJobId = job.id;
+    TransferState.begin(destination != null);
     String runId = null;
     try {
       runId = JobStore.start(context, job, destination == null ? "backup" : "restore");
+      activeRunId = runId;
+      final String trackedRun = runId;
+      java.util.concurrent.atomic.AtomicLong lastPublish =
+          new java.util.concurrent.atomic.AtomicLong();
+      Runnable publish =
+          () -> {
+            if (!isActive(cancellation)) return;
+            long now = android.os.SystemClock.elapsedRealtime(), before = lastPublish.get();
+            if (now - before < 500 || !lastPublish.compareAndSet(before, now)) return;
+            TransferState.Snapshot state = TransferState.current();
+            String summary = state.summary(context);
+            Settings.status(context, summary);
+            try {
+              JobStore.progress(context, trackedRun, summary);
+            } catch (Exception ignored) {
+            }
+            if (progress != null) progress.update(summary, state.files, state.bytes);
+          };
+      publish.run();
       cancellation.check();
       checkNetwork(context, job.wifi);
       String config = Vault.load(context);
       if (config.isEmpty()) throw new Exception("Enroll or configure an API key first");
       Client client = client(context, config, cancellation, job.wifi);
       cancellation.client = client;
+      client.setProgressDetails(
+          value -> {
+            if (isActive(cancellation) && TransferState.accept(value)) publish.run();
+          });
       cancellation.check();
       if (job.wifi) {
         final Network selected = manager.getActiveNetwork();
@@ -158,6 +197,8 @@ final class Operations {
             callback);
       }
       if (destination != null) {
+        TransferState.phase("Preparing restore destination");
+        publish.run();
         String folder = "PBS-X-restore-" + System.currentTimeMillis();
         DocumentTree parent =
             new DocumentTree(context.getContentResolver(), Uri.parse(destination));
@@ -167,14 +208,7 @@ final class Operations {
           org.json.JSONObject stats =
               new org.json.JSONObject(
                   client.restoreSelected(
-                      job.store,
-                      job.namespace,
-                      source,
-                      snapshot,
-                      selections,
-                      mode,
-                      docs,
-                      progress));
+                      job.store, job.namespace, source, snapshot, selections, mode, docs, null));
           result =
               "Restored "
                   + stats.getLong("files")
@@ -188,11 +222,13 @@ final class Operations {
         record(context, runId, true, result);
         return result;
       }
+      TransferState.phase("Preparing selected sources");
+      publish.run();
       try (AndroidDocuments docs =
           new AndroidDocuments(context, job.sources, job.shizuku, job.apks, job.data, job.obb)) {
         org.json.JSONObject backup =
             new org.json.JSONObject(
-                client.backupJob(job.store, job.namespace, job.id, job.name, docs, progress));
+                client.backupJob(job.store, job.namespace, job.id, job.name, docs, null));
         String result = "Backup complete: " + job.name + " · " + backup.getString("snapshot");
         if (!backup.optString("warning").isEmpty()) result += " · " + backup.getString("warning");
         record(context, runId, true, result);
@@ -211,6 +247,8 @@ final class Operations {
       cancellation.client = null;
       active = null;
       activeName = "";
+      activeJobId = "";
+      activeRunId = "";
       running.set(false);
     }
   }

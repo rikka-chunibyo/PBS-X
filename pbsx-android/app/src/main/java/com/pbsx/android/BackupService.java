@@ -13,6 +13,18 @@ public final class BackupService extends Service {
   private static final int ID = 71;
   private volatile boolean working;
   private volatile long lastUpdate;
+  private final android.os.Handler handler =
+      new android.os.Handler(android.os.Looper.getMainLooper());
+  private final Runnable refreshNotification =
+      new Runnable() {
+        public void run() {
+          if (!working) return;
+          if (Operations.isActive(cancellation))
+            getSystemService(NotificationManager.class)
+                .notify(ID, notification(TransferState.current().summary(BackupService.this)));
+          handler.postDelayed(this, 1000);
+        }
+      };
 
   private Notification notification(String text) {
     PendingIntent open =
@@ -37,6 +49,12 @@ public final class BackupService extends Service {
             .setOngoing(working)
             .setOnlyAlertOnce(true);
     if (working) builder.addAction(new Notification.Action.Builder(null, "Cancel", cancel).build());
+    if (working) {
+      TransferState.Snapshot state = TransferState.current();
+      boolean known = Operations.isActive(cancellation) && state.hasFileProgress();
+      builder.setProgress(100, known ? state.percent() : 0, !known);
+      builder.setSubText(known ? state.barLabel() : "Transfer in progress");
+    }
     return builder.build();
   }
 
@@ -63,7 +81,8 @@ public final class BackupService extends Service {
     if (working) return START_NOT_STICKY;
     working = true;
     cancellation = new Operations.Cancellation();
-    startForeground(ID, notification("Starting…"));
+    startForeground(ID, notification("Preparing transfer…"));
+    handler.post(refreshNotification);
     Settings.status(this, "Operation running…");
     new Thread(
             () -> {
@@ -90,11 +109,7 @@ public final class BackupService extends Service {
                           long now = System.currentTimeMillis();
                           if (now - lastUpdate > 1000) {
                             lastUpdate = now;
-                            String progress =
-                                stage
-                                    + " · "
-                                    + android.text.format.Formatter.formatFileSize(this, bytes);
-                            Settings.status(this, progress);
+                            String progress = stage;
                             getSystemService(NotificationManager.class)
                                 .notify(ID, notification(progress));
                           }
@@ -104,6 +119,7 @@ public final class BackupService extends Service {
                 result = "Failed: " + e.getMessage();
               }
               working = false;
+              handler.removeCallbacks(refreshNotification);
               Settings.status(this, result);
               stopForeground(STOP_FOREGROUND_REMOVE);
               getSystemService(NotificationManager.class).notify(ID, notification(result));
@@ -125,6 +141,7 @@ public final class BackupService extends Service {
 
   @Override
   public void onDestroy() {
+    handler.removeCallbacks(refreshNotification);
     if (working && cancellation != null) cancellation.cancel();
     super.onDestroy();
   }

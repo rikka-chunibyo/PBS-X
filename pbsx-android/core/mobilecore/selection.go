@@ -73,12 +73,15 @@ func (c *Client) RestoreSelected(store, namespace, source string, stamp int64, s
 		return "", err
 	}
 	defer done()
+	report := newTransferReporter(ctx, c.details)
+	defer report.close()
+	report.phase("Opening snapshot", "", -1)
 	snapshot, err := c.openSnapshot(ctx, store, namespace, source, stamp)
 	if err != nil {
 		return "", err
 	}
 	defer snapshot.close()
-	stats, err := restoreSelected(ctx, snapshot.fs, paths, mode, docs, progress)
+	stats, err := restoreSelectedReporting(ctx, snapshot.fs, paths, mode, docs, progress, report)
 	if err != nil {
 		return "", err
 	}
@@ -92,11 +95,16 @@ type selectionRestore struct {
 	docs        Documents
 	mode        string
 	progress    Progress
+	report      *transferReporter
 	stats       restoreStats
 	directories map[string]string
 }
 
 func restoreSelected(ctx context.Context, fs vfs.FileSystem, paths []string, mode string, docs Documents, progress Progress) (restoreStats, error) {
+	return restoreSelectedReporting(ctx, fs, paths, mode, docs, progress, nil)
+}
+func restoreSelectedReporting(ctx context.Context, fs vfs.FileSystem, paths []string, mode string, docs Documents, progress Progress, report *transferReporter) (restoreStats, error) {
+	report.phase("Checking selected files", "", -1)
 	// Validate the complete selected metadata before touching destination files.
 	count := 0
 	for _, p := range paths {
@@ -104,7 +112,7 @@ func restoreSelected(ctx context.Context, fs vfs.FileSystem, paths []string, mod
 			return restoreStats{}, err
 		}
 	}
-	r := &selectionRestore{ctx: ctx, fs: fs, docs: docs, mode: mode, progress: progress, directories: map[string]string{".": "."}}
+	r := &selectionRestore{ctx: ctx, fs: fs, docs: docs, mode: mode, progress: progress, report: report, directories: map[string]string{".": "."}}
 	for _, p := range paths {
 		if err := r.walk(p, 0); err != nil {
 			return r.stats, err
@@ -240,6 +248,7 @@ func (r *selectionRestore) directory(archivePath string) (string, error) {
 	return target, nil
 }
 func (r *selectionRestore) walk(p string, depth int) error {
+	r.report.phase("Checking destination", p, -1)
 	if err := r.ctx.Err(); err != nil {
 		return err
 	}
@@ -328,7 +337,8 @@ func (r *selectionRestore) walk(p string, depth int) error {
 		return err
 	}
 	stop := context.AfterFunc(r.ctx, func() { out.Close() })
-	n, copyErr := io.Copy(out, &cancelReader{ctx: r.ctx, reader: content})
+	r.report.phase("Restoring", p, int64(e.RawSize))
+	n, copyErr := io.Copy(&restoreProgressWriter{writer: out, report: r.report}, &cancelReader{ctx: r.ctx, reader: content})
 	stop()
 	closeErr := out.Close()
 	if copyErr == nil && uint64(n) != e.RawSize {
@@ -338,6 +348,7 @@ func (r *selectionRestore) walk(p string, depth int) error {
 		return fmt.Errorf("restore %s: %w", target, err)
 	}
 	r.stats.Files++
+	r.report.fileDone()
 	r.stats.Bytes += n
 	if r.progress != nil {
 		r.progress.Update("Restoring", r.stats.Files, r.stats.Bytes)
@@ -345,6 +356,7 @@ func (r *selectionRestore) walk(p string, depth int) error {
 	return nil
 }
 func (r *selectionRestore) identical(source, target string, e *pxar.FileInfo, existing destinationEntry) (bool, error) {
+	r.report.phase("Comparing existing file", target, -1)
 	if existing.Size >= 0 && uint64(existing.Size) != e.RawSize {
 		return false, nil
 	}
@@ -381,4 +393,15 @@ func (r *selectionRestore) identical(source, target string, e *pxar.FileInfo, ex
 		return false, err
 	}
 	return string(existingHash.Sum(nil)) == string(archiveHash.Sum(nil)), nil
+}
+
+type restoreProgressWriter struct {
+	writer io.Writer
+	report *transferReporter
+}
+
+func (w *restoreProgressWriter) Write(p []byte) (int, error) {
+	n, err := w.writer.Write(p)
+	w.report.add(int64(n))
+	return n, err
 }

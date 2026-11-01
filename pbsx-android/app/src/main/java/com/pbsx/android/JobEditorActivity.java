@@ -31,7 +31,7 @@ public final class JobEditorActivity extends Activity {
       Ui.title(basic, "Job details");
       name = Ui.input(basic, "Name", job.name, false);
       LinearLayout dest = Ui.card(page);
-      Ui.text(dest, "Destination", 18, Ui.NAVY);
+      Ui.text(dest, "Destination", 18, Ui.TEXT);
       store = Ui.input(dest, "Datastore", job.store, false);
       namespace = Ui.input(dest, "Namespace · leave blank for root", job.namespace, false);
       Ui.hint(
@@ -39,13 +39,13 @@ public final class JobEditorActivity extends Activity {
           "This host must have an enabled server job authorizing this destination. Jobs here select"
               + " your phone's folders and schedule.");
       LinearLayout sourceCard = Ui.card(page);
-      Ui.text(sourceCard, "Folders", 18, Ui.NAVY);
+      Ui.text(sourceCard, "Folders", 18, Ui.TEXT);
       folders = Ui.column(this);
       sourceCard.addView(folders);
       renderFolders();
       Ui.button(sourceCard, "+ Add folder", false, v -> pick());
       LinearLayout options = Ui.card(page);
-      Ui.text(options, "Schedule & connection", 18, Ui.NAVY);
+      Ui.text(options, "Schedule & connection", 18, Ui.TEXT);
       hours =
           Ui.input(options, "Run every … hours · 0 means manual", String.valueOf(job.hours), false);
       hours.setInputType(InputType.TYPE_CLASS_NUMBER);
@@ -56,7 +56,7 @@ public final class JobEditorActivity extends Activity {
           "Android chooses the exact time. Each job has its own schedule; transfers run one at a"
               + " time.");
       LinearLayout extra = Ui.card(page);
-      Ui.text(extra, "Optional Shizuku sources", 18, Ui.NAVY);
+      Ui.text(extra, "Optional Shizuku sources", 18, Ui.TEXT);
       shizuku = Ui.check(extra, "Enable Shizuku for this job", job.shizuku);
       apks = Ui.check(extra, "Installed application APKs", job.apks);
       data = Ui.check(extra, "Android/data", job.data);
@@ -118,7 +118,7 @@ public final class JobEditorActivity extends Activity {
         LinearLayout row = Ui.row(this);
         TextView label = new TextView(this);
         label.setText(source.getString("label"));
-        label.setTextColor(Ui.NAVY);
+        label.setTextColor(Ui.TEXT);
         label.setTextSize(16);
         row.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
         Button remove = new Button(this);
