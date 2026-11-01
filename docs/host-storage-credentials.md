@@ -83,3 +83,25 @@ the destination agent and server together for cross-host restores.
 The live credential test exercises the production agent runners and PBS reader;
 the new server queue API and dialogs have build/unit validation but have not yet
 been deployed for a complete browser-to-queue cross-host test.
+
+## Planned: optional revocation when generating enrollment
+
+Add a **Revoke existing keys** checkbox to the Generate Enrollment popup,
+**unchecked (`false`) by default**. This is a planned change, not implemented yet.
+
+- Unchecked: another enrollment must preserve existing valid keys, making it
+  easy for multiple authorized devices to access the same backups through
+  ordinary PBS credentials and ACLs. Host IDs and backup groups are not adopted
+  or renamed. Manual creation and selection of API keys remain available.
+- Checked: explicitly revoke the selected host's earlier PBS-X-generated keys;
+  do not revoke unrelated hosts' keys or independently managed API keys.
+- Store this choice with the one-time enrollment grant and enforce it when the
+  grant is redeemed. Current token replacement happens during bootstrap, so a
+  UI-only checkbox would not change the behavior. The server must support
+  multiple issued keys instead of unconditionally rotating one deterministic
+  token, and keep device-control identity separate from shared backup access.
+- Test that default enrollment leaves the first device working, explicit
+  revocation invalidates its previous generated key, and unrelated/manual keys
+  continue to work. Shared access remains subject to normal PBS permissions and
+  backup ownership; a shared credential must not grant another host's control
+  privileges.
