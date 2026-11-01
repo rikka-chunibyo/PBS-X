@@ -453,3 +453,27 @@ func TestSocketBindingFailureCannotFallBack(t *testing.T) {
 		t.Fatalf("restore binding: %v", err)
 	}
 }
+
+func TestMissingBackupJobExplainsSetupWithoutReenrollment(t *testing.T) {
+	original := errors.New("start session: PBS H2 connect: upgrade failed: HTTP 403: PBS-X host 'phone' has no enabled backup job targeting this datastore/namespace")
+	for _, ns := range []string{"", "family/phones"} {
+		err := backupFailure(original, "phone", "backup", ns)
+		message := err.Error()
+		for _, want := range []string{"Hosts → phone → Jobs", "datastore backup", "enrollment is already valid"} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("missing %q in %q", want, message)
+			}
+		}
+		label := ns
+		if label == "" {
+			label = "(root)"
+		}
+		if !strings.Contains(message, "namespace "+label) {
+			t.Fatal(message)
+		}
+	}
+	other := errors.New("HTTP 403: owner check failed")
+	if backupFailure(other, "phone", "backup", "") != other {
+		t.Fatal("unrelated access error was rewritten")
+	}
+}

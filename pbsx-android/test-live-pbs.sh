@@ -25,7 +25,7 @@ api create /admin/datastore/backup/namespace --name "$test_id" >/dev/null
 namespace_created=true
 api create /config/host --name "$test_id" --comment 'Disposable Android core integration test' >/dev/null
 host_created=true
-api create /config/host-backup --host "$test_id" --id "$test_id" --sources /selected-folders --store backup --ns "$test_id" --snapshot-mode direct >/dev/null
+api create /config/host-backup --host "$test_id" --id "$test_id" --sources /selected-folders --store backup --ns "$test_id" --snapshot-mode direct --enable false >/dev/null
 job_created=true
 api create "/config/host/$test_id/enrollment-token" > "$scratch/bootstrap.json"
 python3 - "$scratch" "$test_id" <<'PY'
@@ -38,4 +38,4 @@ values={'v':1,'host_id':host,'server_url':'https://127.0.0.1:8007','bootstrap_to
 code='pbsx1.'+base64.urlsafe_b64encode(json.dumps(values).encode()).decode().rstrip('=')
 (folder/'enrollment').write_text(code)
 PY
-PBSX_ANDROID_TEST_ENROLLMENT="$scratch/enrollment" PBSX_ANDROID_TEST_NAMESPACE="$test_id" "$binary" -test.run '^TestLivePBS$' -test.v -test.timeout 90s
+PBSX_ANDROID_TEST_ENROLLMENT="$scratch/enrollment" PBSX_ANDROID_TEST_NAMESPACE="$test_id" PBSX_ANDROID_TEST_DISABLED_JOB="$test_id" "$binary" -test.run '^TestLivePBS$' -test.v -test.timeout 90s

@@ -81,7 +81,7 @@ public final class MainActivity extends Activity {
             return insets;
           });
     title(page, "PBS-X Backup");
-    text(page, "Android preview · Files, media and optional Shizuku sources");
+    text(page, "v" + BuildConfig.VERSION_NAME + " · Files, media and optional Shizuku sources");
     connection = text(page, "");
     button(page, "Enroll with PBS-X code", v -> enroll());
     button(page, "Use an existing API key", v -> manualKey());
@@ -283,7 +283,9 @@ public final class MainActivity extends Activity {
                   () -> {
                     String cfg = Mobilecore.enroll(value, Build.MANUFACTURER + " " + Build.MODEL);
                     Vault.save(this, cfg);
-                    return "Enrolled. Select backup folders and verify datastore Settings.";
+                    return "Enrolled. Before the first backup, enable a job for this host in PBS-X"
+                        + " → Hosts → Jobs. Match its datastore and namespace in Settings,"
+                        + " select folders, then back up.";
                   });
             })
         .show();

@@ -239,7 +239,7 @@ func Enroll(code, hostname string) (string, error) {
 	}
 	cfg.Certificate = cert
 	cfg.PrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
-	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.1.0", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
+	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.1.1-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
 	response, err := c.request(context.Background(), "POST", "/pbsx/agent/bootstrap", body, false)
 	if err != nil {
 		return "", err
@@ -314,7 +314,17 @@ func (c *Client) Backup(store, namespace string, docs Documents, progress Progre
 		}
 	}})
 	if err != nil {
-		return "", err
+		return "", backupFailure(err, c.cfg.HostID, store, namespace)
 	}
 	return fmt.Sprintf("host/%s/%s", c.cfg.HostID, time.Unix(stamp, 0).UTC().Format("2006-01-02T15:04:05Z")), nil
+}
+
+func backupFailure(err error, host, store, namespace string) error {
+	if !strings.Contains(err.Error(), "has no enabled backup job targeting this datastore/namespace") {
+		return err
+	}
+	if namespace == "" {
+		namespace = "(root)"
+	}
+	return fmt.Errorf("Backup destination needs setup. In PBS-X, open Hosts → %s → Jobs and create or enable a job for datastore %s, namespace %s. Then retry Back up now; your enrollment is already valid", host, store, namespace)
 }

@@ -27,15 +27,17 @@ public final class BackupService extends Service {
             1,
             new Intent(this, BackupService.class).setAction("cancel"),
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-    return new Notification.Builder(this, "backups")
-        .setSmallIcon(android.R.drawable.stat_sys_upload)
-        .setContentTitle("PBS-X Backup")
-        .setContentText(text)
-        .setContentIntent(open)
-        .setOngoing(working)
-        .setOnlyAlertOnce(true)
-        .addAction(new Notification.Action.Builder(null, "Cancel", cancel).build())
-        .build();
+    Notification.Builder builder =
+        new Notification.Builder(this, "backups")
+            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setContentTitle("PBS-X Backup")
+            .setContentText(text)
+            .setStyle(new Notification.BigTextStyle().bigText(text))
+            .setContentIntent(open)
+            .setOngoing(working)
+            .setOnlyAlertOnce(true);
+    if (working) builder.addAction(new Notification.Action.Builder(null, "Cancel", cancel).build());
+    return builder.build();
   }
 
   @Override

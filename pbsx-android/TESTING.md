@@ -4,6 +4,27 @@ Branch: `pbsx-android-app`, based on PBS-X `026c165a2`.
 Phone target: Samsung S20 FE, Android 13 / One UI 5.1, unrooted with Shizuku.
 No physical Samsung phone was available for these checks.
 
+## 0.1.1 follow-up: new phone destination setup
+
+The S20 FE screenshots showed successful enrollment followed by a native upload
+403: the phone host had no enabled job authorizing the chosen datastore and
+namespace. Existing-host snapshot reads did not exercise this upload policy.
+The phone's unscheduled `s20-fe-android` job now authorizes datastore `backup`,
+root namespace, and refreshed its existing token's ACLs. No enrollment/key
+rotation was needed, and existing Windows jobs were not changed.
+
+Version 0.1.1 explains this condition with the exact host, datastore and namespace
+and directs the user to Hosts → Jobs. Enrollment completion now mentions that
+setup step. Notifications expand the complete message and show Cancel only
+while an operation is running. The activity displays its build version.
+
+Go unit/race tests, Java unit tests, APK assembly, lint, signature and 16 KiB ZIP
+alignment checks passed. The live test now starts with a disabled target,
+confirms rejection with actionable guidance, enables the target, and completes
+backup and restore using the same enrolled key. The six Android instrumentation
+tests described below were run on 0.1.0; the 0.1.1 follow-up used build/unit and
+live-protocol validation. Full S20 FE backup/restore is still being user-tested.
+
 ## Passed
 
 - Linux core tests: complete portable archive/restore round trip, unchanged
@@ -53,7 +74,7 @@ Install `artifacts/pbsx-android-preview.apk`.
 SHA-256:
 
 ```text
-4ac9cbc719db6d2e670c0333df3466d8c97040d4ae20f0c9ac24fec7297145b2
+3c8259e297a225920dc5dcfe39d6f3f33e38ec5fb85a22c1a736669727067e6c
 ```
 
 This is a preview signed with the local Android debug key. Its signing

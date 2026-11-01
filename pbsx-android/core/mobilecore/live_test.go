@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,6 +51,17 @@ func TestLivePBS(t *testing.T) {
 		}
 	}
 	progress := &uploadSpy{}
+	if jobID := os.Getenv("PBSX_ANDROID_TEST_DISABLED_JOB"); jobID != "" {
+		_, err := client.Backup("backup", namespace, source, nil)
+		if err == nil || !strings.Contains(err.Error(), "Backup destination needs setup") || !strings.Contains(err.Error(), "enrollment is already valid") {
+			t.Fatalf("missing enabled job should explain setup without re-enrollment: %v", err)
+		}
+		output, err := exec.Command("proxmox-backup-debug", "api", "set", "/config/host-backup/"+jobID, "--enable", "true").CombinedOutput()
+		if err != nil {
+			t.Fatalf("enable disposable host target: %v: %s", err, output)
+		}
+		t.Log("Missing enabled job rejected with setup guidance; enabled target using the same enrolled key")
+	}
 	if _, err := client.Backup("backup", namespace, source, progress); err != nil {
 		t.Fatal(err)
 	}
