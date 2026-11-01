@@ -3,6 +3,7 @@
 package agentfs
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -71,6 +72,9 @@ func enumerateAlternateDataStreams(path string) ([]string, error) {
 		0,
 	)
 	if handle == uintptr(windows.InvalidHandle) {
+		if noMoreAlternateDataStreams(callErr) {
+			return nil, nil
+		}
 		if errno, ok := callErr.(syscall.Errno); ok && errno != 0 {
 			return nil, errno
 		}
@@ -89,7 +93,7 @@ func enumerateAlternateDataStreams(path string) ([]string, error) {
 		if ok != 0 {
 			continue
 		}
-		if errno, isErrno := nextErr.(syscall.Errno); isErrno && errno == windows.ERROR_HANDLE_EOF {
+		if noMoreAlternateDataStreams(nextErr) {
 			break
 		}
 		if errno, isErrno := nextErr.(syscall.Errno); isErrno && errno != 0 {
@@ -98,6 +102,11 @@ func enumerateAlternateDataStreams(path string) ([]string, error) {
 		break
 	}
 	return out, nil
+}
+
+func noMoreAlternateDataStreams(err error) bool {
+	return errors.Is(err, windows.ERROR_HANDLE_EOF) ||
+		errors.Is(err, windows.ERROR_NO_MORE_FILES)
 }
 
 func parseAlternateStreamName(raw string) (string, bool) {

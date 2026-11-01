@@ -18,4 +18,34 @@ PBS-X Agent
 
 The backup job ID is never used as the PBS backup group ID.
 
-The Linux path has completed an end-to-end backup/restore round trip against PBS-X, including symlinks and sparse files. Windows builds and Windows-specific packages cross-compile, but the current native Windows path still needs a live end-to-end validation pass.
+The Linux path has completed an end-to-end backup/restore round trip against PBS-X, including symlinks and sparse files. The Windows agent builds and its full Go module suite runs natively on Windows. Windows Server 2025 has completed a VSS-backed PBS-X backup/restore round trip with matching file hashes, Unicode names, exclusions, alternate data streams, sparse allocation ranges, and a protected DACL. See [the validation report](../docs/windows-native-validation.md) for scope and limitations.
+
+## Windows VSS integration test
+
+The snapshot package includes an opt-in test that creates a real VSS shadow
+copy, verifies that its contents remain point-in-time consistent after the live
+file changes, and removes the shadow copy. Run it from an elevated PowerShell
+session on a disposable Windows test host:
+
+```powershell
+$env:PBSX_WINDOWS_VSS_INTEGRATION = "1"
+go test -v -count=1 -run '^TestNTFSSnapshotLive$' ./internal/agent/snapshots
+```
+
+The test is skipped during ordinary unit-test runs because VSS requires an
+elevated Windows host and temporarily creates system snapshot state.
+
+For broader live backup/restore coverage on a disposable enrolled Windows host,
+explicitly select the test datastore and opt in:
+
+```powershell
+$env:PBSX_WINDOWS_PBS_INTEGRATION = "1"
+$env:PBSX_WINDOWS_TEST_DATASTORE = "backup"
+go test -v -count=1 -timeout=15m -run 'TestWindowsPBS' ./internal/agent/nativebackup
+```
+
+These tests use the enrolled host's credentials and write real PBS snapshots.
+Temporary source/restore files are cleaned up; committed snapshots remain for
+inspection. The suite covers multiple sources, hardlinks, symlinks, long paths,
+ADS, attributes, locked files, metadata-mode changes, selected-file restore, and
+explicit oversized-ADS rejection. Both environment flags are required.

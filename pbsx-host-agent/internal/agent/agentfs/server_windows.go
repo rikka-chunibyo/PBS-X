@@ -138,11 +138,17 @@ func (s *Server) platformXstat(path string, aclOnly bool) (fswire.AgentFileInfo,
 		}
 	}
 	o, g, a, err := GetWinACLsHandle(h)
-	if err == nil {
-		info.Owner = o
-		info.Group = g
-		info.WinACLs = a
+	if err != nil {
+		return info, err
 	}
+	info.Owner = o
+	info.Group = g
+	info.WinACLs = a
+	protected, err := DACLProtectedHandle(h)
+	if err != nil {
+		return info, err
+	}
+	info.DACLProtected = &protected
 	return info, nil
 }
 

@@ -130,6 +130,21 @@ func GetWinACLsHandle(h windows.Handle) (owner string, group string, acls []fswi
 	return owner, group, result, nil
 }
 
+func DACLProtectedHandle(h windows.Handle) (bool, error) {
+	if h == windows.InvalidHandle || h == 0 {
+		return false, fmt.Errorf("invalid handle")
+	}
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return false, fmt.Errorf("GetSecurityInfo: %w", err)
+	}
+	control, _, err := sd.Control()
+	if err != nil {
+		return false, fmt.Errorf("security descriptor control: %w", err)
+	}
+	return control&windows.SE_DACL_PROTECTED != 0, nil
+}
+
 func GetExplicitEntriesFromACL(acl *windows.ACL) (uintptr, uint32, error) {
 	if acl == nil {
 		return 0, 0, fmt.Errorf("input ACL cannot be nil")

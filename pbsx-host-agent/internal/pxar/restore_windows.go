@@ -30,12 +30,16 @@ var (
 	procLocalFree        = modKernel32.NewProc("LocalFree")
 )
 
+const restoreSecurityAccess = windows.READ_CONTROL | windows.WRITE_DAC | windows.WRITE_OWNER
+
 type FILE_BASIC_INFO struct {
+	_              [0]uint64 // FILETIME fields alone only enforce 4-byte Go alignment.
 	CreationTime   windows.Filetime
 	LastAccessTime windows.Filetime
 	LastWriteTime  windows.Filetime
 	ChangeTime     windows.Filetime
 	FileAttributes uint32
+	_              uint32 // Native FILE_BASIC_INFO has 8-byte alignment and size 40.
 }
 
 func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.FileInfo) error {
@@ -92,22 +96,6 @@ func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.File
 		}
 	}
 
-	if hasAttrs {
-		info := FILE_BASIC_INFO{
-			CreationTime:   c,
-			LastAccessTime: a,
-			LastWriteTime:  w,
-			FileAttributes: attrs,
-		}
-		st.reportErr(ctx, "set basic info", path, setBasicInfo(h, &info))
-	} else {
-		var cp *windows.Filetime
-		if hasCreation {
-			cp = &c
-		}
-		st.reportErr(ctx, "set file time", path, windows.SetFileTime(h, cp, &a, &w))
-	}
-
 	if xattrs != nil {
 		// WRITE_DAC/WRITE_OWNER, which normally causes SetSecurityInfo to
 		if st.fsCap.supportsPersistentACLs {
@@ -118,6 +106,18 @@ func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.File
 		if st.fsCap.supportsXAttrs {
 			writeAlternateDataStreams(ctx, st, path, xattrs)
 		}
+	}
+	// Restore streams before READONLY and timestamps: creating an ADS needs
+	// write access and can update the file's last-write time.
+	if hasAttrs {
+		info := FILE_BASIC_INFO{CreationTime: c, LastAccessTime: a, LastWriteTime: w, FileAttributes: attrs}
+		st.reportErr(ctx, "set basic info", path, setBasicInfo(h, &info))
+	} else {
+		var cp *windows.Filetime
+		if hasCreation {
+			cp = &c
+		}
+		st.reportErr(ctx, "set file time", path, windows.SetFileTime(h, cp, &a, &w))
 	}
 
 	return nil
@@ -138,7 +138,7 @@ func restoreWindowsACLsFromPath(ctx context.Context, st *restoreState, path stri
 	}
 	h, err := windows.CreateFile(
 		pathPtr,
-		windows.WRITE_DAC|windows.WRITE_OWNER,
+		restoreSecurityAccess,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 		nil,
 		windows.OPEN_EXISTING,
@@ -158,19 +158,16 @@ func restoreWindowsACLsFromPath(ctx context.Context, st *restoreState, path stri
 // 10.0.26200 LocalFree on a ConvertStringSidToSidW SID causes heap corruption
 // (0xC0000374). The leak is bounded (freed at process exit).
 func restoreWindowsACLsFromHandle(ctx context.Context, st *restoreState, h windows.Handle, path string, xattrs map[string][]byte) {
-	var secInfo windows.SECURITY_INFORMATION
 	var ownerSID, groupSID *windows.SID
 
 	if d, ok := xattrs["user.owner"]; ok {
 		if sid, err := windows.StringToSid(string(d)); err == nil {
 			ownerSID = sid
-			secInfo |= windows.OWNER_SECURITY_INFORMATION
 		}
 	}
 	if d, ok := xattrs["user.group"]; ok {
 		if sid, err := windows.StringToSid(string(d)); err == nil {
 			groupSID = sid
-			secInfo |= windows.GROUP_SECURITY_INFORMATION
 		}
 	}
 
@@ -186,29 +183,48 @@ func restoreWindowsACLsFromHandle(ctx context.Context, st *restoreState, h windo
 					st.reportErr(ctx, "build dacl", path, berr)
 				} else if acl != nil {
 					dacl = acl
-					secInfo |= windows.DACL_SECURITY_INFORMATION
 				}
 			}
 		}
 	}
 
-	if secInfo == 0 || h == 0 || h == windows.InvalidHandle {
+	if h == 0 || h == windows.InvalidHandle {
 		return
 	}
 
-	ret, _, _ := procSetSecurityInfo.Call(
-		uintptr(h), uintptr(windows.SE_FILE_OBJECT), uintptr(secInfo),
-		sidPtr(ownerSID), sidPtr(groupSID), aclPtr(dacl), 0,
-	)
-	if ret != 0 {
-		st.reportErr(ctx, "set security info", path, syscall.Errno(ret))
+	if ownerSID != nil {
+		st.reportErr(ctx, "set owner", path, setSecurityInfoPart(h, windows.OWNER_SECURITY_INFORMATION, ownerSID, nil, nil))
+	}
+	if groupSID != nil {
+		st.reportErr(ctx, "set group", path, setSecurityInfoPart(h, windows.GROUP_SECURITY_INFORMATION, nil, groupSID, nil))
+	}
+	if dacl != nil {
+		info := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION)
+		switch string(xattrs[XAttrDACLProtected]) {
+		case "1":
+			info |= windows.PROTECTED_DACL_SECURITY_INFORMATION
+		case "0":
+			info |= windows.UNPROTECTED_DACL_SECURITY_INFORMATION
+		}
+		st.reportErr(ctx, "set dacl", path, setSecurityInfoPart(h, info, nil, nil, dacl))
 	}
 
 	localFreePtr(aclPtr(dacl))
 }
 
+func setSecurityInfoPart(h windows.Handle, info windows.SECURITY_INFORMATION, owner, group *windows.SID, dacl *windows.ACL) error {
+	ret, _, _ := procSetSecurityInfo.Call(
+		uintptr(h), uintptr(windows.SE_FILE_OBJECT), uintptr(info),
+		sidPtr(owner), sidPtr(group), aclPtr(dacl), 0,
+	)
+	if ret != 0 {
+		return syscall.Errno(ret)
+	}
+	return nil
+}
+
 func applyMetaSymlink(ctx context.Context, st *restoreState, linkPath string, e pxar.FileInfo) error {
-	h, err := openReparsePoint(linkPath, windows.FILE_WRITE_ATTRIBUTES|windows.WRITE_DAC|windows.WRITE_OWNER)
+	h, err := openReparsePoint(linkPath, windows.FILE_WRITE_ATTRIBUTES|restoreSecurityAccess)
 	if err != nil {
 		st.reportErr(ctx, "open symlink for metadata", linkPath, err)
 		return nil
@@ -357,6 +373,12 @@ func unixToFiletime(unixTime int64) windows.Filetime {
 func buildFileAttributes(fa map[string]bool) uint32 {
 	var r uint32
 	m := map[string]uint32{
+		"readOnly":                windows.FILE_ATTRIBUTE_READONLY,
+		"hidden":                  windows.FILE_ATTRIBUTE_HIDDEN,
+		"system":                  windows.FILE_ATTRIBUTE_SYSTEM,
+		"archive":                 windows.FILE_ATTRIBUTE_ARCHIVE,
+		"temporary":               windows.FILE_ATTRIBUTE_TEMPORARY,
+		"notContentIndexed":       windows.FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
 		"FILE_ATTRIBUTE_READONLY": windows.FILE_ATTRIBUTE_READONLY,
 		"FILE_ATTRIBUTE_HIDDEN":   windows.FILE_ATTRIBUTE_HIDDEN,
 		"FILE_ATTRIBUTE_SYSTEM":   windows.FILE_ATTRIBUTE_SYSTEM,

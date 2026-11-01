@@ -149,6 +149,7 @@ type (
 		Owner          string          `cbor:"owner,omitempty"`
 		Group          string          `cbor:"group,omitempty"`
 		WinACLs        []WinACL        `cbor:"win_acls,omitempty"`
+		DACLProtected  *bool           `cbor:"dacl_protected,omitempty"`
 		PosixACLs      []PosixACL      `cbor:"posix_acls,omitempty"`
 	}
 
