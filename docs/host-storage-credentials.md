@@ -84,24 +84,39 @@ The live credential test exercises the production agent runners and PBS reader;
 the new server queue API and dialogs have build/unit validation but have not yet
 been deployed for a complete browser-to-queue cross-host test.
 
-## Planned: optional revocation when generating enrollment
+## Optional revocation when generating enrollment
 
-Add a **Revoke existing keys** checkbox to the Generate Enrollment popup,
-**unchecked (`false`) by default**. This is a planned change, not implemented yet.
+The Generate Enrollment popup has a **Revoke existing keys** checkbox,
+**unchecked (`false`) by default**. Changing it regenerates the one-time code;
+the Copy button stays disabled until the server returns the new grant. A failed
+regeneration clears the displayed code and can be retried with Regenerate code.
+Storage secrets are encoded locally and are never sent to the grant endpoint.
 
-- Unchecked: another enrollment must preserve existing valid keys, making it
-  easy for multiple authorized devices to access the same backups through
-  ordinary PBS credentials and ACLs. Host IDs and backup groups are not adopted
-  or renamed. Manual creation and selection of API keys remain available.
-- Checked: explicitly revoke the selected host's earlier PBS-X-generated keys;
-  do not revoke unrelated hosts' keys or independently managed API keys.
-- Store this choice with the one-time enrollment grant and enforce it when the
-  grant is redeemed. Current token replacement happens during bootstrap, so a
-  UI-only checkbox would not change the behavior. The server must support
-  multiple issued keys instead of unconditionally rotating one deterministic
-  token, and keep device-control identity separate from shared backup access.
-- Test that default enrollment leaves the first device working, explicit
-  revocation invalidates its previous generated key, and unrelated/manual keys
-  continue to work. Shared access remains subject to normal PBS permissions and
-  backup ownership; a shared credential must not grant another host's control
-  privileges.
+- **Unchecked:** enrollment issues another independent, narrowly scoped API
+  token. Earlier generated keys retain backup and restore access to this host's
+  configured destinations, including its existing snapshots.
+- **Checked:** successful redemption revokes this host's earlier generated keys.
+  Merely generating a code, abandoning it, or submitting an expired, invalid or
+  already-used code does not revoke them. Independently managed API keys and
+  other hosts' keys are unaffected.
+- **Agent control:** only the newest enrollment can send this host's heartbeats
+  or claim/report its queued jobs. Earlier retained keys have storage access
+  only. This avoids multiple devices competing for one host's server jobs;
+  another independently managed host should have its own host definition and
+  can select an authorized storage key separately.
+
+The API accepts optional `revoke-existing-keys` on
+`POST /config/host/{host}/enrollment-token`; omission means `false`. The choice is
+stored with the grant digest and enforced during bootstrap, not supplied by the
+enrolling client. Existing agents and enrollment-code formats remain compatible.
+The new web UI and server must be upgraded together.
+
+Generated keys have distinct token IDs. The host's credential registry tracks
+the current controller, retained keys and retired key IDs, without storing API
+secrets. Old single-key records load without migration or re-enrollment. Job
+edits refresh ACLs for all retained keys, and deleting a host revokes all its
+generated keys. Normal PBS user/token owner checks remain unchanged for manual
+credentials. Generated keys additionally recognize the same host's earlier
+generated owners, restricted to that host group and its configured destinations;
+this keeps backups usable after rotation without changing their recorded owner.
+No host IDs, backup groups or owners are adopted or renamed.

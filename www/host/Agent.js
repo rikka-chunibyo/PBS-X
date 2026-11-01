@@ -10,13 +10,16 @@ Ext.define('PBS.HostAgentView', {
 
 	generateEnrollmentToken: function() {
 	    let view = this.getView();
+	    if (view.enrollmentWindow) { view.enrollmentWindow.show(); return; }
 	    Proxmox.Utils.API2Request({
 		method: 'POST',
 		url: `/config/host/${encodeURIComponent(view.host)}/enrollment-token`,
+		params: { 'revoke-existing-keys': false },
 		success: function(response) {
 		    let data = response.result.data;
 		    let origin = window.location.origin;
 		    let encodeEnrollment = function(server) {
+			if (!data) { return ''; }
 			let fields = {
 			    v: 1,
 			    host_id: view.host,
@@ -37,21 +40,63 @@ Ext.define('PBS.HostAgentView', {
 			return `pbsx1.${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
 		    };
 		    let initialCode = encodeEnrollment(origin);
+		    let refreshEnrollment = function(win) {
+			data = null;
+			win.down('#enrollmentCode').setValue('');
+			win.down('#tokenField').setValue('');
+			win.down('#copyEnrollment').setDisabled(true);
+			win.down('#regenerateEnrollment').setDisabled(true);
+			win.down('#revokeExistingKeys').setDisabled(true);
+			Proxmox.Utils.API2Request({
+			    method: 'POST',
+			    url: `/config/host/${encodeURIComponent(view.host)}/enrollment-token`,
+			    params: { 'revoke-existing-keys': win.down('#revokeExistingKeys').getValue() === true },
+			    success: function(result) {
+				if (win.destroyed) { return; }
+				data = result.result.data;
+				win.down('#tokenField').setValue(data.token);
+				win.down('#fingerprintField').setValue(data['server-fingerprint']);
+				win.down('#enrollmentCode').setValue(encodeEnrollment(win.down('#serverField').getValue().trim()));
+				win.down('#copyEnrollment').setDisabled(false);
+			    },
+			    failure: function(result) {
+				if (!win.destroyed) { Ext.Msg.alert(gettext('Error'), result.htmlStatus); }
+			    },
+			    callback: function() {
+				if (win.destroyed) { return; }
+				win.down('#regenerateEnrollment').setDisabled(false);
+				win.down('#revokeExistingKeys').setDisabled(false);
+			    },
+			});
+		    };
 
 		    view.enrollmentWindow = Ext.create('Ext.window.Window', {
 			title: gettext('Enroll Agent'),
 			modal: true,
 			width: 760,
-			height: 620,
+			height: 640,
 			layout: 'fit',
 			items: [{
 			    xtype: 'form',
+			    scrollable: true,
 			    bodyPadding: 15,
 			    defaults: {
 				anchor: '100%',
 				labelWidth: 150,
 			    },
 			    items: [{
+				xtype: 'proxmoxcheckbox',
+				itemId: 'revokeExistingKeys',
+				boxLabel: gettext('Revoke existing keys'),
+				checked: false,
+				listeners: { change: function(field) {
+				    let win = field.up('window');
+				    if (win && win.down('#enrollmentCode')) { refreshEnrollment(win); }
+				} },
+			    }, {
+				xtype: 'displayfield',
+				value: gettext('Previous generated keys keep backup access unless revocation is selected. Revocation happens when this code is used, not when it is generated. The newest enrollment controls agent jobs; manual API keys are unaffected.'),
+			    }, {
 				xtype: 'proxmoxKVComboBox',
 				itemId: 'storageMode',
 				fieldLabel: gettext('Storage credentials'),
@@ -101,10 +146,12 @@ Ext.define('PBS.HostAgentView', {
 			    }, {
 				xtype: 'displayfield',
 				fieldLabel: gettext('Token'),
+				itemId: 'tokenField',
 				value: data.token,
 			    }, {
 				xtype: 'displayfield',
 				fieldLabel: gettext('Fingerprint'),
+				itemId: 'fingerprintField',
 				value: data['server-fingerprint'],
 			    }, {
 				xtype: 'displayfield',
@@ -119,13 +166,19 @@ Ext.define('PBS.HostAgentView', {
 			    }],
 			}],
 			buttons: [{
+			    text: gettext('Regenerate code'),
+			    itemId: 'regenerateEnrollment',
+			    handler: function(button) { refreshEnrollment(button.up('window')); },
+			}, {
 			    text: gettext('Copy Enrollment Code'),
+			    itemId: 'copyEnrollment',
 			    iconCls: 'fa fa-clipboard',
 			    handler: function(button) {
 				let win = button.up('window');
 				if (!win.down('form').isValid()) { return; }
 				let area = win.down('#enrollmentCode');
 				let value = area.getValue();
+				if (!value) { return; }
 				if (navigator.clipboard) {
 				    navigator.clipboard.writeText(value).catch(() => {
 					let selection = window.getSelection();

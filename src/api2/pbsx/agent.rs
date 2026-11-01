@@ -24,6 +24,17 @@ fn ensure_agent_access(host_id: &str, rpcenv: &mut dyn RpcEnvironment) -> Result
         .get_auth_id()
         .ok_or_else(|| format_err!("missing authentication ID"))?
         .parse()?;
+    if let Some(bound_host) = crate::server::host::host_for_upload_auth(&auth_id)? {
+        let current = crate::server::host::read_host_credentials(&bound_host)?;
+        if bound_host != host_id
+            || current.as_ref().map(|r| r.backup_auth_id.as_str())
+                != Some(auth_id.to_string().as_str())
+        {
+            bail!(
+                "this generated key has storage access only; a newer enrollment controls the agent"
+            );
+        }
+    }
     let user_info = CachedUserInfo::new()?;
     let privs = user_info.lookup_privs(&auth_id, &["host", host_id]);
     if privs & PRIV_HOST_AGENT == 0 {
@@ -92,20 +103,11 @@ pub fn bootstrap_agent(request: HostBootstrapRequest) -> Result<HostBootstrapRes
     let cert_der = cert.to_der()?;
     let certificate_fingerprint = hex::encode(openssl::sha::sha256(&cert_der));
 
-    crate::server::host::consume_enrollment_token(&request.host_id, &request.token)?;
-    let (backup_auth_id, backup_secret) =
-        crate::server::host::issue_host_upload_token(&request.host_id)?;
-
-    let record = crate::server::host::HostAgentCredentialRecord {
+    let (backup_auth_id, backup_secret) = crate::server::host::enroll_host(
+        &request.host_id,
+        &request.token,
         certificate_fingerprint,
-        backup_auth_id: backup_auth_id.clone(),
-        issued: proxmox_time::epoch_i64(),
-    };
-    if let Err(err) = crate::server::host::write_host_credentials(&request.host_id, &record) {
-        let _ = crate::server::host::revoke_host_upload_auth(&backup_auth_id);
-        let _ = crate::server::host::remove_host_credentials(&request.host_id);
-        return Err(err);
-    }
+    )?;
 
     crate::server::host::write_host_status(
         &request.host_id,
