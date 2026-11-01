@@ -86,8 +86,16 @@ func TestLivePBS(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := client.Backup("backup", namespace, source, nil); err != nil {
+	jobResult, err := client.BackupJob("backup", namespace, "fixture-job", "Photo job", source, nil)
+	if err != nil {
 		t.Fatal(err)
+	}
+	var named struct {
+		Snapshot string `json:"snapshot"`
+		Warning  string `json:"warning"`
+	}
+	if err := json.Unmarshal([]byte(jobResult), &named); err != nil || named.Snapshot == "" || named.Warning != "" {
+		t.Fatalf("named backup did not record its note: %s (%v)", jobResult, err)
 	}
 	raw, err := client.ListSnapshots("backup", namespace, "")
 	if err != nil {
@@ -95,7 +103,8 @@ func TestLivePBS(t *testing.T) {
 	}
 	var response struct {
 		Data []struct {
-			Time int64 `json:"backup-time"`
+			Time    int64  `json:"backup-time"`
+			Comment string `json:"comment"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(raw), &response); err != nil {
@@ -105,6 +114,9 @@ func TestLivePBS(t *testing.T) {
 		t.Fatalf("got %d snapshots, expected 3", len(response.Data))
 	}
 	sort.Slice(response.Data, func(i, j int) bool { return response.Data[i].Time < response.Data[j].Time })
+	if !strings.Contains(response.Data[2].Comment, "Photo job") {
+		t.Fatalf("snapshot list did not expose job name: %q", response.Data[2].Comment)
+	}
 	// A destination identity does not adopt the source ID. The authorized key and
 	// explicit source group control reads, just as they do for normal PBS clients.
 	sourceID := cfg.HostID
@@ -138,7 +150,57 @@ func TestLivePBS(t *testing.T) {
 	if _, err := os.Stat(original.full("Documents/delete.txt")); err != nil {
 		t.Fatal("old snapshot lost a later-deleted file")
 	}
-	t.Log("Automatic enrollment, three snapshots, incremental transfer, latest and historical restore, and separate destination identity passed")
+	page, err := target.ListArchive("backup", namespace, sourceID, response.Data[2].Time, "Documents", 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listing struct {
+		Total   int           `json:"total"`
+		Entries []archiveItem `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(page), &listing); err != nil || listing.Total != 4 || len(listing.Entries) != 2 {
+		t.Fatalf("unexpected archive page: %s (%v)", page, err)
+	}
+	for _, mode := range []string{"skip", "replace", "rename"} {
+		dest := &fsDocuments{root: t.TempDir()}
+		if err := os.MkdirAll(dest.full("Documents"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range map[string]string{"Documents/change.txt": "other bytes", "Documents/unrelated.txt": "keep this"} {
+			if err := os.WriteFile(dest.full(name), []byte(value), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := target.RestoreSelected("backup", namespace, sourceID, response.Data[2].Time, `["Documents/change.txt","Documents/new.txt"]`, mode, dest, nil); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(dest.full("Documents/change.txt"))
+		want := "other bytes"
+		if mode == "replace" {
+			want = "version two"
+		}
+		if err != nil || string(got) != want {
+			t.Fatalf("%s conflict: %q (%v)", mode, got, err)
+		}
+		if mode == "rename" {
+			got, err = os.ReadFile(dest.full("Documents/change (restored 1).txt"))
+			if err != nil || string(got) != "version two" {
+				t.Fatalf("rename: %q (%v)", got, err)
+			}
+		}
+		got, err = os.ReadFile(dest.full("Documents/new.txt"))
+		if err != nil || string(got) != "added file" {
+			t.Fatalf("%s missing: %q (%v)", mode, got, err)
+		}
+		got, err = os.ReadFile(dest.full("Documents/unrelated.txt"))
+		if err != nil || string(got) != "keep this" {
+			t.Fatal("unrelated file changed")
+		}
+		if _, err := os.Stat(dest.full("Documents/keep.txt")); !os.IsNotExist(err) {
+			t.Fatal("unselected file appeared")
+		}
+	}
+	t.Log("Automatic enrollment, named jobs, three snapshots, incremental transfer, historical restore, directory browsing, selective restore in all conflict modes, and separate destination identity passed")
 }
 
 type uploadSpy struct{ bytes int64 }

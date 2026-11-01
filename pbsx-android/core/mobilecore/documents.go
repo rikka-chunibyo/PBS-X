@@ -12,6 +12,7 @@ import (
 	"path"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/pbs-plus/pxar/backupproxy"
 	"github.com/pbs-plus/pxar/format"
@@ -27,6 +28,10 @@ type Documents interface {
 	OpenRead(relative string) (int64, error)
 	MakeDirectory(relative string) error
 	OpenWrite(relative string) (int64, error)
+	// InspectJSON reports {exists:false} for a missing destination. Permission
+	// and provider failures must return errors, never masquerade as absence.
+	InspectJSON(relative string) (string, error)
+	OpenReplace(relative string) (int64, error)
 }
 
 type Progress interface {
@@ -60,6 +65,9 @@ type documentEntry struct {
 }
 
 func safePath(p string) error {
+	if !utf8.ValidString(p) {
+		return errors.New("Android cannot represent this non-UTF-8 archive name")
+	}
 	if p == "." {
 		return nil
 	}

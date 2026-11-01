@@ -112,6 +112,27 @@ final class DocumentTree {
     }
   }
 
+  JSONObject inspect(String path) throws Exception {
+    String id = root;
+    for (String part : Paths.parts(path)) {
+      id = find(id, part);
+      if (id == null) return new JSONObject().put("exists", false);
+    }
+    try (Cursor c = resolver.query(document(id), COLUMNS, null, null, null)) {
+      if (c == null || !c.moveToFirst()) throw new Exception("Destination provider is unavailable");
+      return row(c).put("exists", true);
+    }
+  }
+
+  long replace(String path) throws Exception {
+    JSONObject existing = stat(path);
+    if (existing.getBoolean("directory"))
+      throw new Exception("Cannot overwrite a destination folder");
+    ParcelFileDescriptor fd = resolver.openFileDescriptor(document(resolve(path)), "wt");
+    if (fd == null) throw new Exception("Provider refused replacing this file");
+    return fd.detachFd();
+  }
+
   JSONArray list(String path) throws Exception {
     return children(resolve(path));
   }

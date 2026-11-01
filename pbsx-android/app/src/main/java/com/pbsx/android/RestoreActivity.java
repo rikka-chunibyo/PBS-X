@@ -1,0 +1,639 @@
+package com.pbsx.android;
+
+import android.Manifest;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.text.TextUtils;
+import android.view.ViewGroup;
+import android.widget.*;
+import com.pbsx.core.mobilecore.Client;
+import java.text.DateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.TreeSet;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+/** Snapshot history → paged file browser → selection → restore review. */
+public final class RestoreActivity extends Activity {
+  private final ExecutorService executor = Executors.newSingleThreadExecutor();
+  private final TreeSet<String> selected = new TreeSet<>();
+  private LinearLayout page, footer;
+  private EditText storeInput, namespaceInput, sourceInput;
+  private String store = "backup", namespace = "", source = "", relative = ".", mode = "fail";
+  private long snapshot, offset, total;
+  private int stage, generation, snapshotOffset;
+  private boolean loading;
+  private JSONArray snapshots = new JSONArray(), entries = new JSONArray();
+  private volatile Client client;
+  private Operations.Cancellation request;
+
+  @Override
+  public void onCreate(Bundle saved) {
+    super.onCreate(saved);
+    try {
+      String config = Vault.load(this);
+      if (config.isEmpty()) throw new Exception("Connect to PBS-X in Settings first");
+      JSONObject cfg = new JSONObject(config);
+      source = cfg.getString("host_id");
+      store =
+          getIntent().getStringExtra("store") == null
+              ? Settings.store(this)
+              : getIntent().getStringExtra("store");
+      namespace =
+          getIntent().getStringExtra("namespace") == null
+              ? Settings.namespace(this)
+              : getIntent().getStringExtra("namespace");
+      LinearLayout root = Ui.screen(this, "Restore files");
+      ((ViewGroup) root.getChildAt(0)).getChildAt(0).setOnClickListener(v -> navigateBack());
+      if (Build.VERSION.SDK_INT >= 33)
+        getOnBackInvokedDispatcher()
+            .registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::navigateBack);
+      page = Ui.scroll(root);
+      footer = Ui.column(this);
+      footer.setPadding(Ui.dp(this, 16), Ui.dp(this, 5), Ui.dp(this, 16), Ui.dp(this, 8));
+      footer.setBackgroundColor(android.graphics.Color.WHITE);
+      root.addView(footer);
+      if (saved != null) {
+        store = saved.getString("store", store);
+        namespace = saved.getString("namespace", namespace);
+        source = saved.getString("source", source);
+        relative = saved.getString("relative", ".");
+        snapshot = saved.getLong("snapshot", 0);
+        mode = saved.getString("mode", "fail");
+        JSONArray paths = new JSONArray(saved.getString("selected", "[]"));
+        for (int i = 0; i < paths.length(); i++) selected.add(paths.getString(i));
+        if (snapshot > 0) {
+          stage = 2;
+          loadDirectory(relative, saved.getLong("offset", 0));
+          return;
+        }
+      }
+      setup();
+    } catch (Exception e) {
+      message(e.getMessage());
+    }
+  }
+
+  private void setup() {
+    stage = 0;
+    loading = false;
+    page.removeAllViews();
+    footer.removeAllViews();
+    Ui.title(page, "Choose a backup source");
+    Ui.hint(page, "Use this host or another host your storage API key can read.");
+    LinearLayout card = Ui.card(page);
+    sourceInput = Ui.input(card, "Source host ID", source, false);
+    storeInput = Ui.input(card, "Datastore", store, false);
+    namespaceInput = Ui.input(card, "Namespace · blank means root", namespace, false);
+    Ui.hint(
+        card,
+        "Jobs using the same host and destination share its snapshot history. New backups show the"
+            + " job name.");
+    Ui.button(
+        page,
+        "Load snapshots",
+        true,
+        v -> {
+          try {
+            source = sourceInput.getText().toString().trim();
+            store = storeInput.getText().toString().trim();
+            namespace = namespaceInput.getText().toString().trim();
+            if (!source.matches("[A-Za-z0-9_][A-Za-z0-9_.-]{1,63}"))
+              throw new Exception("Enter a valid source host ID");
+            BackupJob check = new BackupJob();
+            check.store = store;
+            check.namespace = namespace;
+            check.validate(false);
+            loadSnapshots();
+          } catch (Exception e) {
+            message(e.getMessage());
+          }
+        });
+  }
+
+  interface Fetch {
+    String run(Client c) throws Exception;
+  }
+
+  interface Result {
+    void show(String value) throws Exception;
+  }
+
+  private void fetch(String label, Fetch action, Result result) {
+    final int ticket = ++generation;
+    if (request != null) request.cancel();
+    if (client != null) client.cancel();
+    final Operations.Cancellation token = new Operations.Cancellation();
+    request = token;
+    loading = true;
+    page.removeAllViews();
+    footer.removeAllViews();
+    Ui.title(page, label);
+    Ui.hint(page, "Reading snapshot metadata…");
+    executor.execute(
+        () -> {
+          try {
+            token.check();
+            Client c = Operations.client(this, Vault.load(this), token);
+            client = c;
+            token.check();
+            String response = action.run(c);
+            runOnUiThread(
+                () -> {
+                  if (ticket != generation || isDestroyed() || isFinishing()) return;
+                  loading = false;
+                  try {
+                    result.show(response);
+                  } catch (Exception e) {
+                    message(e.getMessage());
+                    setup();
+                  }
+                });
+          } catch (Exception e) {
+            runOnUiThread(
+                () -> {
+                  if (ticket != generation || isDestroyed() || isFinishing()) return;
+                  loading = false;
+                  message(e.getMessage());
+                  setup();
+                });
+          }
+        });
+  }
+
+  private void loadSnapshots() {
+    fetch(
+        "Loading snapshots",
+        c -> c.listSnapshots(store, namespace, source),
+        value -> {
+          JSONArray all = new JSONObject(value).getJSONArray("data");
+          ArrayList<JSONObject> list = new ArrayList<>();
+          for (int i = 0; i < all.length(); i++) list.add(all.getJSONObject(i));
+          list.sort((a, b) -> Long.compare(b.optLong("backup-time"), a.optLong("backup-time")));
+          snapshots = new JSONArray();
+          for (JSONObject item : list) snapshots.put(item);
+          snapshotOffset = 0;
+          showSnapshots();
+        });
+  }
+
+  private void showSnapshots() {
+    stage = 1;
+    page.removeAllViews();
+    footer.removeAllViews();
+    Ui.title(page, "Snapshots");
+    Ui.hint(page, source + " · " + store + " / " + (namespace.isEmpty() ? "root" : namespace));
+    if (snapshots.length() == 0)
+      Ui.hint(Ui.card(page), "No completed snapshots are available for this source.");
+    for (int i = snapshotOffset; i < Math.min(snapshotOffset + 100, snapshots.length()); i++) {
+      final JSONObject item = snapshots.optJSONObject(i);
+      if (item == null) continue;
+      long time = item.optLong("backup-time");
+      LinearLayout card = Ui.card(page);
+      Ui.text(card, date(time), 19, Ui.NAVY);
+      String comment = item.optString("comment", "");
+      if (!comment.isEmpty()) Ui.hint(card, comment);
+      Ui.button(
+          card,
+          "Browse files",
+          true,
+          v -> {
+            snapshot = time;
+            relative = ".";
+            selected.clear();
+            offset = 0;
+            stage = 2;
+            loadDirectory(".", 0);
+          });
+    }
+    LinearLayout pager = Ui.row(this);
+    if (snapshotOffset > 0)
+      Ui.button(
+          pager,
+          "Newer",
+          false,
+          v -> {
+            snapshotOffset = Math.max(0, snapshotOffset - 100);
+            showSnapshots();
+          });
+    if (snapshotOffset + 100 < snapshots.length())
+      Ui.button(
+          pager,
+          "Older",
+          false,
+          v -> {
+            snapshotOffset += 100;
+            showSnapshots();
+          });
+    page.addView(pager);
+    Ui.button(footer, "Change source", false, v -> setup());
+  }
+
+  private void loadDirectory(String path, long start) {
+    relative = path;
+    offset = start;
+    stage = 2;
+    fetch(
+        "Opening folder",
+        c -> c.listArchive(store, namespace, source, snapshot, path, start, 200),
+        value -> {
+          JSONObject result = new JSONObject(value);
+          entries = result.getJSONArray("entries");
+          total = result.getLong("total");
+          renderDirectory();
+        });
+  }
+
+  private void renderDirectory() {
+    stage = 2;
+    page.removeAllViews();
+    footer.removeAllViews();
+    Ui.text(page, date(snapshot), 14, Ui.MUTED);
+    Ui.title(
+        page,
+        relative.equals(".")
+            ? "Snapshot contents"
+            : relative.substring(relative.lastIndexOf('/') + 1));
+    Ui.hint(page, "/" + (relative.equals(".") ? "" : relative));
+    LinearLayout top = Ui.row(this);
+    if (!relative.equals(".")) Ui.button(top, "↑ Parent folder", false, v -> up());
+    Ui.button(
+        top,
+        "Select this folder",
+        false,
+        v -> {
+          try {
+            selectPath(relative);
+            renderDirectory();
+          } catch (Exception e) {
+            message(e.getMessage());
+          }
+        });
+    page.addView(top);
+    if (total == 0) Ui.hint(page, "This folder is empty. You can still select and restore it.");
+    for (int i = 0; i < entries.length(); i++) {
+      JSONObject e = entries.optJSONObject(i);
+      if (e == null) continue;
+      String path = e.optString("path"), name = e.optString("name");
+      boolean dir = e.optBoolean("directory"), supported = e.optBoolean("supported");
+      LinearLayout row = Ui.card(page), line = Ui.row(this);
+      CheckBox check = new CheckBox(this);
+      boolean inherited = parentSelected(path);
+      check.setChecked(selected.contains(path) || inherited);
+      check.setEnabled(supported && !inherited);
+      check.setContentDescription("Select " + name);
+      line.addView(check, new LinearLayout.LayoutParams(Ui.dp(this, 46), Ui.dp(this, 52)));
+      LinearLayout info = Ui.column(this);
+      TextView label = Ui.text(info, name, 16, dir ? Ui.BLUE : Ui.NAVY);
+      label.setMaxLines(2);
+      label.setEllipsize(TextUtils.TruncateAt.END);
+      Ui.hint(
+          info,
+          !supported
+              ? "Unsupported Android file type"
+              : dir
+                  ? "Folder"
+                  : android.text.format.Formatter.formatFileSize(this, e.optLong("size")));
+      line.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+      if (dir) {
+        Button open = new Button(this);
+        open.setText("Open");
+        open.setAllCaps(false);
+        open.setOnClickListener(v -> loadDirectory(path, 0));
+        line.addView(open);
+        info.setOnClickListener(v -> loadDirectory(path, 0));
+      } else
+        info.setOnClickListener(
+            v -> {
+              if (check.isEnabled()) check.performClick();
+            });
+      row.addView(line);
+      check.setOnCheckedChangeListener(
+          (button, checked) -> {
+            if (checked) {
+              try {
+                selectPath(path);
+              } catch (Exception failure) {
+                button.setChecked(false);
+                message(failure.getMessage());
+              }
+            } else selected.remove(path);
+            if (dir) {
+              android.widget.ScrollView scroll = (android.widget.ScrollView) page.getParent();
+              int y = scroll.getScrollY();
+              renderDirectory();
+              scroll.post(() -> scroll.scrollTo(0, y));
+            } else renderSelection();
+          });
+    }
+    if (total > 200) {
+      LinearLayout pager = Ui.row(this);
+      if (offset > 0)
+        Ui.button(
+            pager, "Previous", false, v -> loadDirectory(relative, Math.max(0, offset - 200)));
+      if (offset + 200 < total)
+        Ui.button(pager, "Next", false, v -> loadDirectory(relative, offset + 200));
+      page.addView(pager);
+      Ui.hint(page, (offset + 1) + "–" + Math.min(offset + 200, total) + " of " + total);
+    }
+    renderSelection();
+  }
+
+  private boolean parentSelected(String path) {
+    for (String parent : selected)
+      if (parent.equals(".") || path.startsWith(parent + "/")) return true;
+    return false;
+  }
+
+  private void selectPath(String path) throws Exception {
+    if (parentSelected(path)) return;
+    TreeSet<String> before = new TreeSet<>(selected);
+    if (path.equals(".")) selected.clear();
+    else selected.removeIf(p -> p.startsWith(path + "/"));
+    selected.add(path);
+    if (selected.size() > 1000 || selectionJSON().length() > 256 * 1024) {
+      selected.clear();
+      selected.addAll(before);
+      throw new Exception("Select a parent folder instead of more than 1,000 individual paths");
+    }
+  }
+
+  private String selectionJSON() {
+    return new JSONArray(selected).toString();
+  }
+
+  private void renderSelection() {
+    footer.removeAllViews();
+    LinearLayout row = Ui.row(this);
+    Ui.button(row, "Selection · " + selected.size(), false, v -> selectionDialog());
+    Button restore = Ui.button(row, "Restore selected", true, v -> options());
+    restore.setEnabled(!selected.isEmpty());
+    footer.addView(row);
+    Ui.hint(footer, "Selected paths keep their folder hierarchy at the destination.");
+  }
+
+  private void selectionDialog() {
+    if (selected.isEmpty()) {
+      message("Choose files or folders using their checkboxes.");
+      return;
+    }
+    String[] paths = selected.toArray(new String[0]);
+    boolean[] remove = new boolean[paths.length];
+    new AlertDialog.Builder(this)
+        .setTitle("Remove from selection")
+        .setMultiChoiceItems(paths, remove, (d, index, value) -> remove[index] = value)
+        .setNegativeButton("Keep selection", null)
+        .setPositiveButton(
+            "Remove selected",
+            (d, w) -> {
+              for (int i = 0; i < paths.length; i++) if (remove[i]) selected.remove(paths[i]);
+              renderDirectory();
+            })
+        .setNeutralButton(
+            "Clear all",
+            (d, w) -> {
+              selected.clear();
+              renderDirectory();
+            })
+        .show();
+  }
+
+  private void options() {
+    if (Operations.running()) {
+      message("Wait for the current transfer or cancel it first");
+      return;
+    }
+    LinearLayout form = Ui.form(this);
+    Ui.hint(form, selected.size() + " selected paths · " + source + "\n" + date(snapshot));
+    String[] codes = {"fail", "skip", "replace", "rename"},
+        labels =
+            {
+              "New folder (default)",
+              "Skip existing files",
+              "Replace different files",
+              "Rename conflicting files"
+            },
+        details =
+            {
+              "Create a separate PBS-X-restore folder. Existing destination files are untouched.",
+              "Add missing files. Leave existing files untouched and reuse existing folders.",
+              "Add missing files and replace files only when their contents differ. Reuse folders"
+                  + " and keep unrelated files. File/folder type conflicts stop the restore.",
+              "Add missing files and keep both copies on conflicts using a numbered suffix. Reuse"
+                  + " existing folders."
+            };
+    RadioGroup modes = new RadioGroup(this);
+    int[] ids = new int[labels.length];
+    for (int i = 0; i < labels.length; i++) {
+      RadioButton b = new RadioButton(this);
+      b.setText(labels[i]);
+      ids[i] = android.view.View.generateViewId();
+      b.setId(ids[i]);
+      modes.addView(b);
+    }
+    form.addView(modes);
+    TextView explanation = Ui.hint(form, "");
+    int current = 0;
+    for (int i = 0; i < codes.length; i++) if (codes[i].equals(mode)) current = i;
+    modes.check(ids[current]);
+    mode = codes[current];
+    explanation.setText(details[current]);
+    modes.setOnCheckedChangeListener(
+        (g, id) -> {
+          for (int index = 0; index < ids.length; index++)
+            if (ids[index] == id) {
+              mode = codes[index];
+              explanation.setText(details[index]);
+              break;
+            }
+        });
+    new AlertDialog.Builder(this)
+        .setTitle("Restore options")
+        .setView(Ui.wrapped(form))
+        .setNegativeButton("Cancel", null)
+        .setPositiveButton(
+            "Choose destination",
+            (d, w) -> {
+              startActivityForResult(
+                  new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                      .addFlags(
+                          Intent.FLAG_GRANT_READ_URI_PERMISSION
+                              | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                              | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                              | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION),
+                  101);
+            })
+        .show();
+  }
+
+  @Override
+  protected void onActivityResult(int code, int result, Intent intent) {
+    super.onActivityResult(code, result, intent);
+    if (code != 101 || result != RESULT_OK || intent == null || intent.getData() == null) return;
+    try {
+      Uri uri = intent.getData();
+      if ((intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) == 0
+          || (intent.getFlags() & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == 0)
+        throw new Exception("Choose a folder with read and write access");
+      getContentResolver()
+          .takePersistableUriPermission(
+              uri, Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+      executor.execute(
+          () -> {
+            try {
+              String name = new DocumentTree(getContentResolver(), uri).stat(".").getString("name");
+              runOnUiThread(() -> review(uri, name));
+            } catch (Exception e) {
+              runOnUiThread(() -> message(e.getMessage()));
+            }
+          });
+    } catch (Exception e) {
+      message(e.getMessage());
+    }
+  }
+
+  private void review(Uri uri, String name) {
+    if (isDestroyed() || isFinishing()) return;
+    StringBuilder paths = new StringBuilder();
+    int count = 0;
+    for (String p : selected) {
+      if (count++ == 5) {
+        paths.append("\n… and more");
+        break;
+      }
+      paths.append("\n• ").append(p.equals(".") ? "Entire snapshot" : p);
+    }
+    String label =
+        mode.equals("fail")
+            ? "New folder"
+            : mode.equals("skip")
+                ? "Skip existing files"
+                : mode.equals("replace") ? "Replace different files" : "Rename conflicts";
+    new AlertDialog.Builder(this)
+        .setTitle("Restore to " + name + "?")
+        .setMessage(
+            "Mode: "
+                + label
+                + "\n"
+                + (mode.equals("replace")
+                    ? "Different matching files will be overwritten; unrelated files stay in"
+                        + " place.\n"
+                    : "")
+                + paths)
+        .setNegativeButton("Cancel", null)
+        .setPositiveButton(
+            "Start restore",
+            (d, w) -> {
+              try {
+                if (Operations.running())
+                  throw new Exception("Another transfer is already running");
+                BackupJob target = new BackupJob();
+                target.name = "Restore from " + source;
+                target.store = store;
+                target.namespace = namespace;
+                target.wifi = Settings.prefs(this).getBoolean("wifi", true);
+                if (Build.VERSION.SDK_INT >= 33
+                    && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED)
+                  requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 73);
+                startForegroundService(
+                    new Intent(this, BackupService.class)
+                        .putExtra("job_config", target.json().toString())
+                        .putExtra("destination", uri.toString())
+                        .putExtra("source", source)
+                        .putExtra("snapshot", snapshot)
+                        .putExtra("selection", selectionJSON())
+                        .putExtra("mode", mode));
+                startActivity(
+                    new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));
+                finish();
+              } catch (Exception e) {
+                message(e.getMessage());
+              }
+            })
+        .show();
+  }
+
+  private void up() {
+    int slash = relative.lastIndexOf('/');
+    loadDirectory(slash < 0 ? "." : relative.substring(0, slash), 0);
+  }
+
+  private void navigateBack() {
+    generation++;
+    if (request != null) request.cancel();
+    if (client != null) client.cancel();
+    loading = false;
+    if (stage == 2 && !relative.equals(".")) {
+      up();
+      return;
+    }
+    if (stage == 2) {
+      if (snapshots.length() > 0) showSnapshots();
+      else setup();
+      return;
+    }
+    if (stage == 1) {
+      setup();
+      return;
+    }
+    finish();
+  }
+
+  // API 33+ uses the platform callback registered above. This override is the
+  // compatibility fallback for the application's Android 8–12 support.
+  @android.annotation.SuppressLint("GestureBackNavigation")
+  @Override
+  public void onBackPressed() {
+    navigateBack();
+  }
+
+  @Override
+  protected void onDestroy() {
+    generation++;
+    if (request != null) request.cancel();
+    if (client != null) client.cancel();
+    executor.shutdownNow();
+    super.onDestroy();
+  }
+
+  @Override
+  protected void onSaveInstanceState(Bundle out) {
+    super.onSaveInstanceState(out);
+    if (stage == 0 && storeInput != null) {
+      store = storeInput.getText().toString();
+      namespace = namespaceInput.getText().toString();
+      source = sourceInput.getText().toString();
+    }
+    out.putString("store", store);
+    out.putString("namespace", namespace);
+    out.putString("source", source);
+    out.putString("relative", relative);
+    out.putLong("snapshot", stage == 2 ? snapshot : 0);
+    out.putLong("offset", offset);
+    out.putString("mode", mode);
+    out.putString("selected", selectionJSON());
+  }
+
+  private void message(String text) {
+    if (!isDestroyed() && !isFinishing())
+      new AlertDialog.Builder(this)
+          .setMessage(text == null ? "Restore request failed" : text)
+          .setPositiveButton("OK", null)
+          .show();
+  }
+
+  private static String date(long seconds) {
+    return DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
+        .format(new Date(seconds * 1000));
+  }
+}

@@ -109,7 +109,7 @@ final class AndroidDocuments implements Documents, AutoCloseable {
 
   public long openRead(String path) throws Exception {
     Paths.parts(path);
-    if (output != null) throw new Exception("Restore destination is write-only");
+    if (output != null) return output.read(path);
     if (privileged.containsKey(label(path))) {
       ParcelFileDescriptor fd = bridge.files().openRead(privilegedPath(path));
       if (fd == null) throw new Exception("Shizuku returned no descriptor");
@@ -128,6 +128,18 @@ final class AndroidDocuments implements Documents, AutoCloseable {
     Paths.parts(path);
     if (output == null) throw new Exception("Backup sources are read-only");
     return output.write(path);
+  }
+
+  public String inspectJSON(String path) throws Exception {
+    Paths.parts(path);
+    if (output == null) throw new Exception("Backup sources are read-only");
+    return output.inspect(path).toString();
+  }
+
+  public long openReplace(String path) throws Exception {
+    Paths.parts(path);
+    if (output == null) throw new Exception("Backup sources are read-only");
+    return output.replace(path);
   }
 
   public void close() {

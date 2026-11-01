@@ -69,12 +69,23 @@ public final class BackupService extends Service {
             () -> {
               String result;
               try {
+                BackupJob job;
+                String saved = intent.getStringExtra("job_config");
+                if (saved != null) job = BackupJob.from(new org.json.JSONObject(saved));
+                else job = JobStore.get(this, intent.getStringExtra("job_id"));
                 result =
-                    Operations.run(
+                    Operations.runJob(
                         this,
+                        job,
                         intent.getStringExtra("destination"),
                         intent.getStringExtra("source"),
                         intent.getLongExtra("snapshot", 0),
+                        intent.getStringExtra("selection") == null
+                            ? "[\".\"]"
+                            : intent.getStringExtra("selection"),
+                        intent.getStringExtra("mode") == null
+                            ? "fail"
+                            : intent.getStringExtra("mode"),
                         (stage, files, bytes) -> {
                           long now = System.currentTimeMillis();
                           if (now - lastUpdate > 1000) {

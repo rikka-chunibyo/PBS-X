@@ -4,6 +4,63 @@ Branch: `pbsx-android-app`, based on PBS-X `026c165a2`.
 Phone target: Samsung S20 FE, Android 13 / One UI 5.1, unrooted with Shizuku.
 No physical Samsung phone was available for these checks.
 
+## 0.2.0: jobs and selective restore
+
+The app now separates Jobs, Restore, Activity and Settings. Each local job has
+its own folder selections, destination, interval, Wi-Fi and scheduled charging
+constraints, and optional Shizuku sources. Existing settings migrate once into
+a Phone backup job. Jobs sharing a PBS destination retain the same host group;
+each snapshot contains that run's selections and records the job name in notes.
+
+The snapshot browser pages directories and supports selecting individual files
+across folders. New-folder restore remains the default. Skip adds missing files;
+Replace also overwrites differing contents while leaving identical files
+untouched; Rename keeps both copies with numbered suffixes. Existing folders
+are reused, unrelated files remain, and no separate Merge option is present.
+Type conflicts never delete existing directory trees.
+
+Validation for this version:
+
+- All 18 Go core tests passed with race detection, including selection
+  normalization, path rejection, metadata pagination, empty folders, special
+  entries rejected before writes, bounded content-cache eviction, cancellation,
+  all three conflict modes, identical-file mtimes and existing rename suffixes.
+- APK/AAR assembly, two Java unit tests and Android lint passed. Instrumented
+  navigation caught and fixed a startup crash caused by accessing the window
+  insets controller before materializing the window decor.
+- **All 13 Android 13 instrumentation tests passed, with zero skips**. They
+  cover the six baseline cases plus one-time settings migration, independent
+  job settings, completion/interruption history, actual JobScheduler intervals
+  and constraints, update/cancellation of individual schedules, tab/editor and
+  in-app Back navigation, restore-mode choices, paginated native PBS archive
+  browsing, selective SAF restores and all three conflict modes. Identical
+  files retain their original mtimes; same-size differing files are replaced;
+  existing numbered names and unrelated files are preserved. Hardware/system
+  Back gestures remain a physical-device check because injected Back events
+  were unreliable in ATD. Shizuku ran as shell UID 2000, not root.
+- Live PBS-X integration passed again on VM 104 using only a disposable host,
+  job and namespace. It verified job names in actual snapshot notes/listings,
+  three snapshots and unchanged-chunk reuse, historical restore, paginated
+  browsing, and selected-file restores with Skip, Replace and Rename through
+  an authorized key and a separate destination identity. All disposable server
+  resources and uploaded test tools were removed afterward.
+- Signature, unchanged signing identity, ARM64/x86-64 libraries and 16 KiB APK
+  ZIP alignment passed.
+
+The Android tests use an expanded loopback-only HTTPS fixture serving a real
+pxar archive over the PBS reader HTTP/2 protocol. It accepts dummy credentials
+only; real PBS credentials never enter the emulator. Optional
+`pbsx_screenshots=true` instrumentation captures software renders of actual
+laid-out Android views under the app cache (`jobs.png`, `restore-files.png`,
+`restore-modes.png`), since ATD's display output is black. These are view renders,
+not evidence of Samsung/system-bar rendering. Review copies live in ignored
+`build/reports/android-ui/`.
+
+Replace uses the document provider's truncate/write operation. Failure or
+cancellation can leave a partial file, and restores are not transactional.
+No success is recorded for an interrupted run. Samsung's providers, system bars,
+real source sizes and background scheduling still require phone testing.
+
 ## 0.1.1 follow-up: new phone destination setup
 
 The S20 FE screenshots showed successful enrollment followed by a native upload
@@ -25,7 +82,7 @@ backup and restore using the same enrolled key. The six Android instrumentation
 tests described below were run on 0.1.0; the 0.1.1 follow-up used build/unit and
 live-protocol validation. Full S20 FE backup/restore is still being user-tested.
 
-## Passed
+## Initial 0.1.0 baseline
 
 - Linux core tests: complete portable archive/restore round trip, unchanged
   chunk reuse, additions/changes/deletions, Unicode and empty files, nesting,
@@ -74,7 +131,7 @@ Install `artifacts/pbsx-android-preview.apk`.
 SHA-256:
 
 ```text
-3c8259e297a225920dc5dcfe39d6f3f33e38ec5fb85a22c1a736669727067e6c
+f7332259e64be7aa107b5bbdbaad95c6d1adb391da7c40ddf890a7b56277d56f
 ```
 
 This is a preview signed with the local Android debug key. Its signing

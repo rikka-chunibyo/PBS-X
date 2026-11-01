@@ -17,15 +17,39 @@ preview, not a full device-image or private-app-data backup tool.
    **Enroll with PBS-X code**. The private device identity stays on the phone.
    The Android preview selects files locally; its selected folders determine
    the archive contents, rather than the server job's source-path list.
-3. In **Settings**, select the matching datastore/namespace. Add DCIM for camera
-   photos/videos and any other folders using **Add a folder**. Give each folder
-   a distinct archive label, such as `Photos` or `Documents`.
-4. Run **Back up now**, initially using a small folder. Wi-Fi-only is enabled by
+3. Open **Jobs → New job**, name the job and select the matching datastore and
+   namespace. Add DCIM for camera photos/videos or other folders using **Add a
+   folder**. Give each folder a distinct archive label, such as `Photos` or
+   `Documents`. Each job has its own sources, schedule and network settings.
+4. Tap the job's **Back up** button, initially using a small folder. Wi-Fi-only is enabled by
    default. Allow notifications to see progress and cancellation controls.
-5. **Browse snapshots and restore**, select the snapshot, and select a writable
-   destination folder. Restore creates a fresh `PBS-X-restore-*` subfolder. It
-   refuses to overwrite existing documents. Check the restored file contents
-   before relying on this preview for important data.
+5. Tap **Snapshots** on a job, or use the **Restore** tab. Browse a snapshot and
+   check individual files or whole folders, including selections across folders.
+   Tap **Restore selected**, choose a restore mode, then choose and confirm a
+   writable destination. The default creates a fresh `PBS-X-restore-*` folder.
+   Selected paths keep their archive hierarchy. Check restored contents before
+   relying on this preview for important data.
+
+The bottom navigation separates **Jobs**, **Restore**, **Activity** and
+**Settings**. Activity retains the latest 100 local runs and their outcomes.
+Existing folder and schedule settings migrate into a `Phone backup` job on
+upgrade; the existing connection and keys are retained. Editing or deleting a
+local job never deletes its PBS snapshots.
+
+Restore modes reuse existing folders and keep unrelated destination files:
+
+| Mode | Behavior |
+| --- | --- |
+| New folder (default) | Restore into a separate new subfolder. |
+| Skip | Add missing files; leave existing files untouched. |
+| Replace | Add missing files and overwrite files whose contents differ. Identical files remain untouched. |
+| Rename | Add missing files; keep both copies for conflicts using `name (restored 1).ext`, etc. |
+
+There is no separate Merge option. File/folder type conflicts are skipped in
+Skip mode, renamed in Rename mode, or fail clearly in Replace mode; Replace
+does not delete a destination directory. Provider errors and interrupted
+transfers stop the run visibly and may leave partially restored files. Replace
+uses the provider's truncate/write operation rather than an atomic file swap.
 
 An existing PBS API token can be used instead of enrollment. Enter its full
 `user@realm!token` auth ID, secret, HTTPS server origin and SHA-256 **server leaf
@@ -48,7 +72,7 @@ and datastore snapshots to check results.
 
 ## Changed files and scheduling
 
-Every completed backup is a complete snapshot of all selected sources.
+Every completed backup is a complete snapshot of that job's selected sources.
 Content-defined chunking and PBS deduplication reuse existing chunks; unchanged
 content is not uploaded again. This first version still **reads all selected
 files** each run. Skipping unchanged file reads by reusing metadata is a future
@@ -56,14 +80,19 @@ optimization, since document providers may report missing or unreliable mtimes.
 Deleting a file from the phone removes it from the next snapshot; earlier
 snapshots remain subject to PBS retention settings. There is no file syncing.
 
-Manual runs are the default. The optional schedule is an interval in whole
-hours (0 disables it), shared by all selected folders, with an optional charging
-requirement. Android chooses the exact execution time and can interrupt jobs.
-Separate per-folder schedules are not implemented in this preview, so each
-snapshot contains the whole selected set rather than only the last folder run.
-Wi-Fi-only applies to backups and restores, including native TCP socket binding
+Manual runs are the default. Each job can have an optional interval in whole
+hours (0 disables it) and charging requirement. Put directories in separate
+jobs to schedule them independently. Android chooses the exact execution time
+and can interrupt jobs. Wi-Fi-only is enabled per backup job; Settings controls
+Wi-Fi-only for browsing and restores. It includes native TCP socket binding
 to the selected Android network; network loss cancels an active operation.
 Enrollment itself is a setup request and is not gated by that setting.
+
+Jobs using the same host ID, datastore and namespace share one PBS snapshot
+group. Each snapshot contains only the sources selected by the job that ran;
+the job name is saved in snapshot notes. Use distinct namespaces if separate
+retention or access boundaries are needed, and authorize each namespace in a
+server host backup job when using an automatic key.
 
 On Samsung, consider adding PBS-X Backup to **Battery → Background usage limits
 → Never sleeping apps** if enabling a schedule. Scheduled jobs can be deferred
@@ -75,8 +104,8 @@ new destination folder; check activity status before using its files.
 
 ## Optional Shizuku sources
 
-Start Shizuku and grant PBS-X permission using the button in **Settings**. Enable
-Shizuku mode, then opt into individual sources:
+Start Shizuku and grant PBS-X permission using the button in **Settings**. In a
+job's editor, enable Shizuku mode, then opt into individual sources:
 
 - **Installed application APKs:** third-party installed packages, including
   base and split APKs, under `Installed-APKs/<package>/<index>.apk`.
@@ -102,7 +131,7 @@ a split package needs its entire APK set and a compatible Android installer
 (or `adb install-multiple` with the restored set).
 
 No root mode, SMS/contact/settings extraction, client-side encrypted PBS key
-import, granular restore picker, or device-image restore is implemented yet.
+import or device-image restore is implemented yet.
 
 ## Build and tests
 
@@ -150,8 +179,11 @@ loopback-only HTTPS server with dummy credentials. Start it with
 `core`, then pass that JSON as the `pbsx_mock_config` instrumentation argument.
 Shizuku instrumentation requires its service to be running with permission
 granted to PBS-X. These optional cases skip when their prerequisites are absent;
-the recorded validation supplied both and passed all six Android tests. See
+the recorded validation supplies both. See
 [the validation report](TESTING.md) for tested cases and remaining device work.
+Version 0.2.0 passed all 13 instrumentation cases, including job migration,
+independent Android schedules, UI navigation, file browsing and native
+selective restores through SAF in each conflict mode.
 
 No test uses a real person's phone data. Document providers with unknown file
 sizes are rejected. Individual SAF directories are limited to 40,000 entries;

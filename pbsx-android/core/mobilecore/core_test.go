@@ -83,6 +83,26 @@ func (d *fsDocuments) OpenWrite(p string) (int64, error) {
 	fd, err := syscall.Open(d.full(p), syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0600)
 	return int64(fd), err
 }
+func (d *fsDocuments) InspectJSON(p string) (string, error) {
+	raw, err := d.StatJSON(p)
+	if os.IsNotExist(err) {
+		return `{"exists":false}`, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var e map[string]any
+	if err := json.Unmarshal([]byte(raw), &e); err != nil {
+		return "", err
+	}
+	e["exists"] = true
+	out, err := json.Marshal(e)
+	return string(out), err
+}
+func (d *fsDocuments) OpenReplace(p string) (int64, error) {
+	fd, err := syscall.Open(d.full(p), syscall.O_WRONLY|syscall.O_TRUNC, 0600)
+	return int64(fd), err
+}
 func (d *fsDocuments) MakeDirectory(p string) error { return os.Mkdir(d.full(p), 0700) }
 
 func TestDocumentArchiveRoundTrip(t *testing.T) {
@@ -148,12 +168,8 @@ func TestDocumentArchiveRoundTrip(t *testing.T) {
 	}
 	fs := vfs.NewLocalFS(archive)
 	defer fs.Close()
-	root, err := fs.Root()
+	stats, err := restoreSelected(ctx, fs, []string{"."}, "fail", dst, nil)
 	if err != nil {
-		t.Fatal(err)
-	}
-	var count, total int64
-	if err := restoreDirectory(ctx, fs, root, ".", dst, nil, &count, &total, 0); err != nil {
 		t.Fatal(err)
 	}
 	for name, want := range files {
@@ -165,11 +181,11 @@ func TestDocumentArchiveRoundTrip(t *testing.T) {
 	if _, err := os.Stat(dst.full("Documents/space name.txt")); !os.IsNotExist(err) {
 		t.Fatal("deleted source appeared in latest restore")
 	}
-	if count != int64(len(files)) {
-		t.Fatalf("restored %d files, expected %d", count, len(files))
+	if stats.Files != int64(len(files)) {
+		t.Fatalf("restored %d files, expected %d", stats.Files, len(files))
 	}
 	// A second restore to the same destination must refuse to overwrite it.
-	if err := restoreDirectory(ctx, fs, root, ".", dst, nil, &count, &total, 0); err == nil {
+	if _, err := restoreSelected(ctx, fs, []string{"."}, "fail", dst, nil); err == nil {
 		t.Fatal("restore overwrote existing destination")
 	}
 }

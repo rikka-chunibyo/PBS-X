@@ -239,7 +239,7 @@ func Enroll(code, hostname string) (string, error) {
 	}
 	cfg.Certificate = cert
 	cfg.PrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
-	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.1.1-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
+	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.2.0-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
 	response, err := c.request(context.Background(), "POST", "/pbsx/agent/bootstrap", body, false)
 	if err != nil {
 		return "", err
@@ -296,13 +296,34 @@ func (c *Client) ListSnapshots(store, namespace, sourceHost string) (string, err
 }
 
 func (c *Client) Backup(store, namespace string, docs Documents, progress Progress) (string, error) {
-	cfg, err := c.pbsConfig(store, namespace)
+	result, err := c.backupNamed(store, namespace, "", "", docs, progress)
+	return result.Snapshot, err
+}
+
+type backupResult struct {
+	Snapshot string `json:"snapshot"`
+	Warning  string `json:"warning,omitempty"`
+}
+
+func (c *Client) BackupJob(store, namespace, jobID, jobName string, docs Documents, progress Progress) (string, error) {
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(jobID) || len(jobName) == 0 || len(jobName) > 400 || strings.ContainsAny(jobName, "\r\n") {
+		return "", errors.New("invalid backup job label")
+	}
+	result, err := c.backupNamed(store, namespace, jobID, jobName, docs, progress)
 	if err != nil {
 		return "", err
 	}
+	raw, err := json.Marshal(result)
+	return string(raw), err
+}
+func (c *Client) backupNamed(store, namespace, jobID, jobName string, docs Documents, progress Progress) (backupResult, error) {
+	cfg, err := c.pbsConfig(store, namespace)
+	if err != nil {
+		return backupResult{}, err
+	}
 	ctx, done, err := c.begin()
 	if err != nil {
-		return "", err
+		return backupResult{}, err
 	}
 	defer done()
 	stamp := time.Now().Unix()
@@ -314,9 +335,20 @@ func (c *Client) Backup(store, namespace string, docs Documents, progress Progre
 		}
 	}})
 	if err != nil {
-		return "", backupFailure(err, c.cfg.HostID, store, namespace)
+		return backupResult{}, backupFailure(err, c.cfg.HostID, store, namespace)
 	}
-	return fmt.Sprintf("host/%s/%s", c.cfg.HostID, time.Unix(stamp, 0).UTC().Format("2006-01-02T15:04:05Z")), nil
+	result := backupResult{Snapshot: fmt.Sprintf("host/%s/%s", c.cfg.HostID, time.Unix(stamp, 0).UTC().Format("2006-01-02T15:04:05Z"))}
+	if jobID != "" {
+		values := map[string]any{"backup-type": "host", "backup-id": c.cfg.HostID, "backup-time": stamp, "notes": "PBS-X Android: " + jobName + "\nJob ID: " + jobID}
+		if namespace != "" {
+			values["ns"] = namespace
+		}
+		body, _ := json.Marshal(values)
+		if _, err := c.request(ctx, "PUT", "/admin/datastore/"+url.PathEscape(store)+"/notes", body, true); err != nil {
+			result.Warning = "Snapshot saved; job label could not be attached"
+		}
+	}
+	return result, nil
 }
 
 func backupFailure(err error, host, store, namespace string) error {

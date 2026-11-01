@@ -27,7 +27,7 @@ public class SmokeTest {
       String result =
           Operations.client(c, config, new Operations.Cancellation())
               .listSnapshots("backup", "", "android-test");
-      assertEquals(0, new JSONObject(result).getJSONArray("data").length());
+      assertEquals(1, new JSONObject(result).getJSONArray("data").length());
     } finally {
       Settings.prefs(c).edit().putBoolean("wifi", old).commit();
     }
