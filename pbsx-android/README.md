@@ -12,13 +12,16 @@ preview, not a full device-image or private-app-data backup tool.
    browser/file manager you use to open it. This is a development-signed build;
    keep the signing key when building upgrades.
 2. In the PBS-X web UI, create a host and an **enabled host backup job** allowing
-   the desired datastore and namespace. The automatic token checks that target
-   against enabled jobs. Generate the host's enrollment code and paste it into
+   the desired datastore and namespace. New server jobs suggest
+   `devices/<device-id>` and can create missing namespaces with your administrator
+   permissions. Generate the host's enrollment code and paste it into
    **Enroll with PBS-X code**. The private device identity stays on the phone.
    The Android preview selects files locally; its selected folders determine
    the archive contents, rather than the server job's source-path list.
 3. Open **Jobs → New job**, name the job and select the matching datastore and
-   namespace. Add DCIM for camera photos/videos or other folders using **Add a
+   namespace. New local jobs default to the device namespace and a generated,
+   editable **Backup ID**. Job name is cosmetic. **Use existing backup** selects
+   a visible host history without changing your device identity. Add DCIM for camera photos/videos or other folders using **Add a
    folder**. Give each folder a distinct archive label, such as `Photos` or
    `Documents`. Each job has its own sources, schedule and network settings.
 4. Tap the job's **Back up** button, initially using a small folder. Wi-Fi-only is enabled by
@@ -97,16 +100,23 @@ Wi-Fi-only for browsing and restores. It includes native TCP socket binding
 to the selected Android network; network loss cancels an active operation.
 Enrollment itself is a setup request and is not gated by that setting.
 
-Jobs using the same host ID, datastore and namespace share one PBS snapshot
-group. Each snapshot contains only the sources selected by the job that ran;
-the job name is saved in snapshot notes. Use distinct namespaces if separate
-retention or access boundaries are needed, and authorize each namespace in a
-server host backup job when using an automatic key.
+Jobs using the same datastore, namespace and **Backup ID** share a PBS snapshot
+history. Each snapshot contains only the sources selected by that run; nothing
+is merged with another job's contents. The job name is saved in snapshot notes.
+Manual and scheduled runs of one job use the same history. Different Backup IDs
+have separate histories. Renaming a job does not change its Backup ID; changing
+the destination selects another history and leaves old snapshots in Restore.
+Existing jobs retain their namespace and legacy device-ID backup group until
+edited. Device IDs longer than 32 characters are split across namespace levels
+so defaults respect PBS's component limit without truncating the identity.
 
-Independent per-job histories under a device namespace are proposed in
-[Job histories](JOB-HISTORIES.md). Manual and scheduled runs of one job would
-share that job's history. Version 0.2.2 preserves existing configured destinations
-and snapshots; it does not automatically create or move namespaces.
+Generated keys are normal PBS API tokens. Automatic grants cover the approved
+namespace; additional namespaces and roles can be granted in **Permissions**.
+Job edits preserve grants added manually to other namespaces. Normal PBS ACLs
+and group ownership apply, including when using an existing broader key. See
+[Job histories](JOB-HISTORIES.md) for details. Android 0.3.0 requires the matching
+server update for custom Backup IDs with generated keys; older servers reject
+those IDs rather than silently writing to the device-ID group.
 
 The Restore catalogue includes host, VM and container groups. Supported root
 PXAR archives can be browsed for file restores, including container groups.
@@ -201,11 +211,10 @@ loopback-only HTTPS server with dummy credentials. Start it with
 Shizuku instrumentation requires its service to be running with permission
 granted to PBS-X. These optional cases skip when their prerequisites are absent;
 the recorded validation supplies both. See
-[the validation report](TESTING.md) for tested cases and remaining device work.
-Version 0.2.2 passed all 18 instrumentation cases, including job migration,
-independent Android schedules, UI navigation, live progress, catalogue discovery,
-container file browsing and native selective restores through SAF in each
-conflict mode.
+[the validation report](TESTING.md) for current instrumentation results and
+remaining device work. Covered cases include job
+migration, independent Android schedules, UI navigation, live progress, catalogue
+discovery, container file browsing and selective SAF restore conflict modes.
 
 No test uses a real person's phone data. Document providers with unknown file
 sizes are rejected. Individual SAF directories are limited to 40,000 entries;
@@ -214,6 +223,10 @@ streamed; selected datasets are not staged into a second copy. Portable archives
 store names, contents and reported mtimes, with synthetic file modes. Android
 restore preserves contents and hierarchy, not POSIX ownership, ACLs, symlinks,
 device nodes, hardlinks, or provider-unsupported timestamps.
+
+Custom Android Backup IDs are visible in this app's Restore catalogue and the
+server's Datastore → Content view. The server's desktop Host → Backups view still
+filters by the host ID; it does not yet show every custom Android group.
 
 ## Research references
 

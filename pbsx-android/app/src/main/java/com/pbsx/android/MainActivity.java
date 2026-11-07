@@ -486,7 +486,16 @@ public final class MainActivity extends Activity {
       return;
     }
     Intent i = new Intent(this, RestoreActivity.class);
-    if (job != null) i.putExtra("store", job.store).putExtra("namespace", job.namespace);
+    if (job != null) {
+      try {
+        i.putExtra("store", job.store)
+            .putExtra("namespace", job.namespace)
+            .putExtra("source", job.backupID(this));
+      } catch (Exception e) {
+        message(e.getMessage());
+        return;
+      }
+    }
     startActivity(i);
   }
 

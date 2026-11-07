@@ -1,8 +1,79 @@
 # Android preview validation — 2026-11-06
 
-Branch: `pbsx-android-app`, based on PBS-X `026c165a2`.
+Latest branch: `pbsx-device-backup-identities`. The original Android series began
+on `pbsx-android-app`, based on PBS-X `026c165a2`.
 Phone target: Samsung S20 FE, Android 13 / One UI 5.1, unrooted with Shizuku.
 No physical Samsung phone was available for these checks.
+
+## 0.3.0: editable backup histories and namespace permissions
+
+Job name is cosmetic; datastore/namespace/Backup ID select the history. New
+Android jobs get a device namespace and a stable generated, editable Backup ID.
+Two jobs can deliberately share a history without merging their contents.
+Manual and scheduled runs use the saved job destination. The existing-backup
+picker selects host groups only, and changing it does not adopt the source
+device identity. Older jobs retain their device-ID fallback and destination.
+Long device IDs are split into namespace components of at most 32 characters.
+
+The matching server update makes namespace ACLs authoritative for generated
+device tokens, preserving PBS ownership checks. Administrators can add another
+namespace or read role directly in Permissions. Job edits track and update only
+automatic grants, preserving manually added namespaces/roles and widened
+propagation. The web job form suggests the device namespace; missing levels
+are provisioned only with normal Datastore.Modify privileges. Devices receive
+DatastoreBackup, without namespace creation privileges. Automatic enrollment
+and the false-by-default optional key revocation behavior remain supported.
+
+Passed validation:
+
+- Five focused Rust enrollment/ACL tests, including preservation of manual
+  namespace grants, other roles and administrator-enabled propagation. All
+  three server executables compile; the web UI builds and JavaScript lint and
+  enrollment-dialog checks pass. New namespace defaults were also exercised for
+  normal and long device IDs, while existing form destinations remain intact.
+- All 26 Go core tests with race detection; ARM64/x86-64 native bindings;
+  clean APK/test-APK assembly; two Java unit tests; Android lint; unchanged
+  development signing certificate; and 16 KiB APK ZIP alignment.
+- **All 20 Android 13 instrumentation tests passed, with zero skips.** New
+  cases cover stable Backup IDs through cosmetic renames, separate scheduling
+  identities for jobs sharing a history, legacy fallback, long device IDs,
+  invalid IDs, choosing an existing host history and opening that explicit
+  source through a job's Snapshots button. Existing progress, scheduling,
+  Shizuku, native-reader/SAF and restore conflict-mode checks remain green.
+- Three real PBS-X suites passed on VM 104: `TestLiveBackupIdentities`,
+  `TestLivePBS` and `TestLiveEnrollmentKeys`, each with a separate disposable
+  fixture. They verify shared versus separate IDs, complete snapshots without
+  merging, named notes, historical restore, manual namespace grants surviving
+  job edits, immediate grant removal, generated-key reads of another token's
+  group after an explicit read grant, and refusal to append to that owner.
+  Nested namespaces created by the job API support actual upload/restore;
+  device tokens cannot create namespaces. Retained/revoked enrollments,
+  deduplication, all restore modes and independent device identity still pass.
+
+The nested-namespace test caught root-owned directories created by the
+protected job API. Namespace provisioning now creates missing directories and
+intermediate `ns/` containers with backup-service ownership. The final test
+uploads, restores and removes the whole nested fixture successfully. Test-only
+identifier limits and a stale missing-permission setup hint were also corrected.
+
+The server/UI update is installed on VM 104. The original pre-feature files are
+retained at `/var/backups/pbsx-device-identities-20261107-014227.VP9KFu`; the final
+deployment also retains its immediate predecessor at
+`/var/backups/pbsx-device-identities-20261107-015149.5NdgDP`. Executable hashes,
+dynamic libraries, idle tasks, active PBS services and the actually served UI
+were checked around deployment. Final API checks found no disposable hosts,
+jobs, namespaces, enrollment grants or credential/status records. Staged tools
+were removed. VMs 103/104 were returned to their original stopped states and
+memory settings; neither the development VM nor the hypervisor was restarted.
+
+APK: `artifacts/pbsx-android-preview.apk`, version `0.3.0-preview`, code 6.
+SHA-256: `ac5a6247b2838f26e5d9869837e02548c52fac67368b800dc5eaff6f8bcfe61c`.
+Software renders of the actual editor and picker views are in ignored
+`build/reports/android-ui/job-identity.png` and `backup-history-picker.png`.
+The emulator and dummy fixture were stopped after testing. Samsung-specific
+provider and background behavior still require phone testing. Custom Android
+IDs appear in Android Restore and Datastore Content; the server's desktop
+Host Backups view still filters by the host ID.
 
 ## 0.2.2: accessible backup catalogue
 

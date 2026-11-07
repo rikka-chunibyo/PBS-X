@@ -49,6 +49,15 @@ host/dev-server/2026-09-19T06:00:00Z
 
 Backup jobs belong to a host. The job ID must not become the PBS backup group ID. This is an intentional difference from PBS Plus and is important for the native PBS-X UI: `gaming-pc` owns its snapshot history regardless of whether the snapshot was produced by a nightly job, an on-demand job, or a future image-backup job.
 
+Android 0.3.0 extends this with an explicit, editable **Backup ID**, independent
+of both the enrolled device identity and the local scheduling UUID. Local jobs
+can select the same datastore/namespace/Backup ID to share a history, or choose
+different IDs for separate histories. Job names remain cosmetic snapshot notes;
+sharing a history never merges the contents of successive snapshots. New job
+forms default to a device namespace. Automatic device tokens follow normal PBS
+namespace ACLs and ownership, including manually granted additional namespaces.
+Desktop dispatched jobs retain the host-ID default described above.
+
 The UI should expose Hosts as a top-level workload type with a detail view containing Summary, Backups, Disks/Volumes, Files, Jobs and Agent tabs. The Backups view should ultimately read the same PBS snapshots visible under Datastore -> Content.
 
 ## Initial goals

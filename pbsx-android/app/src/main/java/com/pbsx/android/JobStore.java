@@ -22,6 +22,7 @@ final class JobStore {
           || old.getBoolean("data", false)
           || old.getBoolean("obb", false)) {
         BackupJob j = new BackupJob();
+        j.backupID = "";
         j.name = "Phone backup";
         j.schedulerId = 1000;
         j.sources = Settings.sources(c);

@@ -49,6 +49,10 @@ pub struct HostAgentCredentialRecord {
     // Keep historical owners so revoking a key does not orphan its snapshots.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retired_backup_auth_ids: Vec<String>,
+    // Only these automatically managed grants are removed on a job edit.
+    // Namespace grants added manually through PBS are preserved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_upload_paths: Option<Vec<String>>,
 }
 
 impl HostAgentCredentialRecord {
@@ -77,6 +81,7 @@ impl HostAgentCredentialRecord {
             retired_backup_auth_ids: previous
                 .map(|p| p.retired_backup_auth_ids.clone())
                 .unwrap_or_default(),
+            managed_upload_paths: previous.and_then(|p| p.managed_upload_paths.clone()),
         };
         if let Some(previous) = previous {
             let ids = previous.active_auth_ids().map(str::to_owned);
@@ -95,6 +100,70 @@ impl HostAgentCredentialRecord {
 #[cfg(test)]
 mod enrollment_key_tests {
     use super::*;
+
+    #[test]
+    fn automatic_acl_sync_preserves_manual_namespaces_and_roles() {
+        let id: Authid = "root@pam!phone".parse().unwrap();
+        let mut acl = pbs_config::acl::AclTree::default();
+        acl.insert_user_role(
+            "/datastore/backup/old-device",
+            &id,
+            "DatastoreBackup",
+            false,
+        );
+        acl.insert_user_role("/datastore/backup/shared", &id, "DatastoreBackup", false);
+        acl.insert_user_role(
+            "/datastore/backup/old-device",
+            &id,
+            "DatastoreReader",
+            false,
+        );
+        update_managed_upload_acl(
+            &mut acl,
+            "phone",
+            &id,
+            false,
+            &["/datastore/backup/old-device".into()],
+            &["/datastore/backup/devices/phone".into()],
+        );
+        assert!(
+            !acl.find_node("/datastore/backup/old-device").unwrap().users[&id]
+                .contains_key("DatastoreBackup")
+        );
+        assert!(
+            acl.find_node("/datastore/backup/old-device").unwrap().users[&id]
+                .contains_key("DatastoreReader")
+        );
+        assert!(
+            acl.find_node("/datastore/backup/shared").unwrap().users[&id]
+                .contains_key("DatastoreBackup")
+        );
+        assert!(
+            acl.find_node("/datastore/backup/devices/phone")
+                .unwrap()
+                .users[&id]
+                .contains_key("DatastoreBackup")
+        );
+    }
+
+    #[test]
+    fn administrator_widened_propagation_is_not_reset_by_job_edits() {
+        let id: Authid = "root@pam!phone".parse().unwrap();
+        let mut acl = pbs_config::acl::AclTree::default();
+        let paths: Vec<String> = vec!["/datastore/backup/devices/phone".into()];
+        acl.insert_user_role(&paths[0], &id, "DatastoreBackup", true);
+        update_managed_upload_acl(&mut acl, "phone", &id, true, &paths, &paths);
+        assert_eq!(
+            acl.find_node(&paths[0]).unwrap().users[&id]["DatastoreBackup"],
+            true
+        );
+        update_managed_upload_acl(&mut acl, "phone", &id, false, &paths, &[]);
+        assert_eq!(
+            acl.find_node(&paths[0]).unwrap().users[&id]["DatastoreBackup"],
+            true
+        );
+        assert!(!acl.find_node("/host/phone").unwrap().users[&id].contains_key("HostAgent"));
+    }
 
     #[test]
     fn legacy_records_preserve_existing_key_by_default() {
@@ -387,22 +456,16 @@ fn token_name_for_host(host: &str) -> Result<Tokenname, Error> {
 }
 
 /// Keep normal PBS ownership checks for ordinary keys. Generated keys for one
-/// host can also access that host's historical generated owners, strictly within
-/// its configured destinations. No backup group or owner is renamed.
+/// device can also access that device's historical generated owners. Callers
+/// enforce ordinary namespace ACLs first; no group or owner is renamed.
 pub fn check_host_backup_owner(
     owner: &Authid,
     auth_id: &Authid,
-    store: &str,
-    ns: &pbs_api_types::BackupNamespace,
-    group: &pbs_api_types::BackupGroup,
+    _store: &str,
+    _ns: &pbs_api_types::BackupNamespace,
+    _group: &pbs_api_types::BackupGroup,
 ) -> Result<(), Error> {
     if let Some(host) = host_for_upload_auth(auth_id)? {
-        if group.ty != pbs_api_types::BackupType::Host
-            || group.id != host
-            || !upload_target_allowed(&host, store, ns)?
-        {
-            bail!("PBS-X key cannot access this backup group or destination");
-        }
         if let Some(record) = read_host_credentials(&host)? {
             if record.known_owner(&owner.to_string()) {
                 return Ok(());
@@ -412,59 +475,102 @@ pub fn check_host_backup_owner(
     pbs_datastore::check_backup_owner(owner, auth_id)
 }
 
-pub fn upload_target_allowed(
-    host: &str,
-    store: &str,
-    ns: &pbs_api_types::BackupNamespace,
-) -> Result<bool, Error> {
+fn host_upload_paths(host: &str) -> Result<Vec<String>, Error> {
     let (config, _) = pbs_config::host_backup::config()?;
     let jobs: Vec<HostBackupJobConfig> = config.convert_to_typed_array("host-backup")?;
-    Ok(jobs.into_iter().any(|job| {
-        job.enable
-            && job.host == host
-            && job.store == store
-            && match &job.ns {
-                Some(job_ns) => job_ns == ns,
-                None => ns.is_root(),
-            }
-    }))
+    let mut paths: Vec<_> = jobs
+        .into_iter()
+        .filter(|job| job.enable && job.host == host)
+        .map(|job| format!("/{}", job.datastore_acl_path().join("/")))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
-fn sync_host_upload_acl_for(host: &str, auth_id: &Authid, controller: bool) -> Result<(), Error> {
-    let _lock = pbs_config::acl::lock_config()?;
-    let (mut acl, _) = pbs_config::acl::config()?;
-    acl.delete_authid(auth_id);
+/// Snapshot legacy automatic grants before changing the job configuration.
+/// This avoids treating any unrelated administrator-added ACL as managed.
+pub fn initialize_host_upload_acl_tracking(host: &str) -> Result<(), Error> {
+    create_host_status_dir()?;
+    let _lock = get_lock(&credential_path(host))?;
+    if let Some(mut record) = read_host_credentials(host)? {
+        if record.managed_upload_paths.is_none() {
+            record.managed_upload_paths = Some(host_upload_paths(host)?);
+            write_host_credentials(host, &record)?;
+        }
+    }
+    Ok(())
+}
+
+fn update_managed_upload_acl(
+    acl: &mut pbs_config::acl::AclTree,
+    host: &str,
+    auth_id: &Authid,
+    controller: bool,
+    previous: &[String],
+    desired: &[String],
+) {
+    acl.delete_user_role(&format!("/host/{host}"), auth_id, "HostAgent");
     if controller {
         acl.insert_user_role(&format!("/host/{host}"), auth_id, "HostAgent", false);
     }
-
-    let (config, _) = pbs_config::host_backup::config()?;
-    let jobs: Vec<HostBackupJobConfig> = config.convert_to_typed_array("host-backup")?;
-    for job in jobs
-        .into_iter()
-        .filter(|job| job.enable && job.host == host)
-    {
-        let path = format!("/{}", job.datastore_acl_path().join("/"));
-        acl.insert_user_role(&path, auth_id, "DatastoreBackup", false);
+    for path in previous.iter().filter(|path| !desired.contains(path)) {
+        // A propagated grant was explicitly widened by an administrator.
+        let managed = acl
+            .find_node(path)
+            .and_then(|node| node.users.get(auth_id))
+            .and_then(|roles| roles.get("DatastoreBackup"))
+            == Some(&false);
+        if managed {
+            acl.delete_user_role(path, auth_id, "DatastoreBackup");
+        }
     }
-    pbs_config::acl::save_config(&acl)
+    for path in desired {
+        let exists = acl
+            .find_node(path)
+            .and_then(|node| node.users.get(auth_id))
+            .is_some_and(|roles| roles.contains_key("DatastoreBackup"));
+        if !exists {
+            acl.insert_user_role(path, auth_id, "DatastoreBackup", false);
+        }
+    }
+}
+
+fn sync_host_upload_acl_for(
+    host: &str,
+    auth_id: &Authid,
+    controller: bool,
+    previous: &[String],
+) -> Result<Vec<String>, Error> {
+    let desired = host_upload_paths(host)?;
+    let _lock = pbs_config::acl::lock_config()?;
+    let (mut acl, _) = pbs_config::acl::config()?;
+    update_managed_upload_acl(&mut acl, host, auth_id, controller, previous, &desired);
+    pbs_config::acl::save_config(&acl)?;
+    Ok(desired)
 }
 
 /// Refresh datastore/host ACLs for an already enrolled host after its job configuration changes.
 pub fn sync_host_upload_acl(host: &str) -> Result<(), Error> {
     create_host_status_dir()?;
     let _lock = get_lock(&credential_path(host))?;
-    let Some(record) = read_host_credentials(host)? else {
+    let Some(mut record) = read_host_credentials(host)? else {
         return Ok(());
     };
     for id in record.active_auth_ids() {
         // Administrators may revoke individual generated tokens through PBS.
         let (users, _) = pbs_config::user::config()?;
         if users.sections.contains_key(id) {
-            sync_host_upload_acl_for(host, &id.parse()?, id == record.backup_auth_id)?;
+            sync_host_upload_acl_for(
+                host,
+                &id.parse()?,
+                id == record.backup_auth_id,
+                record.managed_upload_paths.as_deref().unwrap_or(&[]),
+            )?;
         }
     }
-    Ok(())
+    record.managed_upload_paths = Some(host_upload_paths(host)?);
+    write_host_credentials(host, &record)
 }
 
 /// Revoke a generated host upload token and remove any ACL entries for it.
@@ -517,7 +623,7 @@ fn issue_host_upload_token(host: &str) -> Result<(String, String), Error> {
         .ok_or_else(|| format_err!("generated token response has no secret"))?
         .to_string();
 
-    if let Err(err) = sync_host_upload_acl_for(host, &auth_id, false) {
+    if let Err(err) = sync_host_upload_acl_for(host, &auth_id, false, &[]) {
         let auth_id_string = auth_id.to_string();
         let _ = revoke_host_upload_auth(&auth_id_string);
         return Err(err);
@@ -537,7 +643,7 @@ pub fn enroll_host(
     let revoke = consume_enrollment_token(host, token)?;
     let previous = read_host_credentials(host)?;
     let (auth_id, secret) = issue_host_upload_token(host)?;
-    let record = HostAgentCredentialRecord::successor(
+    let mut record = HostAgentCredentialRecord::successor(
         previous.as_ref(),
         auth_id.clone(),
         fingerprint,
@@ -558,9 +664,16 @@ pub fn enroll_host(
     for id in record.active_auth_ids() {
         let (users, _) = pbs_config::user::config()?;
         if users.sections.contains_key(id) {
-            sync_host_upload_acl_for(host, &id.parse()?, id == record.backup_auth_id)?;
+            sync_host_upload_acl_for(
+                host,
+                &id.parse()?,
+                id == record.backup_auth_id,
+                record.managed_upload_paths.as_deref().unwrap_or(&[]),
+            )?;
         }
     }
+    record.managed_upload_paths = Some(host_upload_paths(host)?);
+    write_host_credentials(host, &record)?;
     Ok((auth_id, secret))
 }
 

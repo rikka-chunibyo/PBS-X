@@ -53,7 +53,8 @@ There are two authorization checks:
    `Datastore.Read` on the selected datastore/namespace.
 2. The destination's storage API key must be authorized by the PBS reader to
    access the source group. A suitable read key can access multiple groups;
-   an automatic device key remains restricted to its own group.
+   an automatic device key is initially limited to its approved namespace.
+   Administrators can extend its normal PBS ACLs in Permissions.
 
 This permits restoring backups whose original computer is offline. It does not
 give devices unrestricted access merely because they appear in the Host list.
@@ -117,6 +118,32 @@ secrets. Old single-key records load without migration or re-enrollment. Job
 edits refresh ACLs for all retained keys, and deleting a host revokes all its
 generated keys. Normal PBS user/token owner checks remain unchanged for manual
 credentials. Generated keys additionally recognize the same host's earlier
-generated owners, restricted to that host group and its configured destinations;
+generated owners after normal namespace permission checks;
 this keeps backups usable after rotation without changing their recorded owner.
 No host IDs, backup groups or owners are adopted or renamed.
+
+## Device namespaces and Android backup IDs
+
+Generated keys appear under Access Control → API Tokens. Namespace ACLs are
+authoritative for storage access, including grants added manually through
+Permissions. The server no longer requires a generated key's backup ID to equal
+its host ID or checks enabled server jobs after a manual ACL permits access.
+PBS group ownership still applies; a read grant is not permission to append to
+another owner's existing group.
+
+New server job forms suggest `devices/<host-id>`. Long IDs are split into
+32-character namespace components. Missing namespaces can be provisioned when
+saving a job, with normal `Datastore.Modify` checks and backup-service filesystem
+ownership. The device key receives `DatastoreBackup` only on the approved
+namespace, without propagation or namespace-creation privileges. Clearing the
+namespace explicitly selects root; existing job configurations are unchanged.
+
+Automatic ACL synchronization records its managed paths rather than deleting
+every ACL for the key. Job edits remove obsolete automatic grants and preserve
+manually added namespaces, other roles and administrator-widened propagation.
+Legacy records initialize tracking before their next configuration edit.
+
+Android 0.3.0 separates cosmetic Job name from Backup ID. Its internal job UUID
+continues to identify settings and scheduling. Jobs with equal datastore,
+namespace and Backup ID share snapshots, without merging contents. Desktop
+Windows/Linux orchestration still uses the host ID as its default Backup ID.

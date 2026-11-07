@@ -1,35 +1,52 @@
-# Proposed job histories
+# Job identity and backup histories
 
-Recommendation following device testing: give each local job an independent
-snapshot history. Manual and scheduled runs of the same job append to that
-same history. Folder and Shizuku choices belong to the job; scheduling is only
-how a run is triggered. Editing a job revises the contents of its future
-snapshots, rather than creating another identity merely because its schedule
-or label changed.
+Implemented in Android 0.3.0 with the matching PBS-X server update.
 
-A device namespace containing stable per-job namespaces fits PBS-X's existing
-host identity model. For example, one device could use `devices/phone/photos`
-and `devices/phone/documents`, with the same `host/<host-id>` backup ID in each.
-Actual namespace components should include a stable job identifier, respect
-PBS's length limits, and be stored when created so renaming a job does not
-move its backups. Repeated chunks can still be deduplicated within the same
-datastore across those groups.
+The local job UUID identifies a schedule and its source selections. **Job name**
+is a cosmetic label included in snapshot notes. **Datastore**, **Namespace** and
+**Backup ID** together identify the PBS `host` backup group and its history.
 
-This is a proposal, not an automatic storage migration in version 0.2.2.
-Existing jobs currently retain their configured destinations. The Restore
-catalogue lists all accessible groups, including old shared histories and
-future per-job histories.
+New jobs default to `devices/<device-id>` and a stable generated Backup ID. Both
+fields are editable. Renaming the job or changing its schedule does not change
+the Backup ID. Pressing Back up manually and scheduled runs of that job use the
+same destination. Use existing backup selects a visible host group's datastore,
+namespace and Backup ID without changing the enrolled device identity.
 
-Automatic device keys cannot create arbitrary namespaces: PBS requires
-datastore modification privileges to create them, and PBS-X additionally
-authorizes generated keys against exact destinations in enabled server host
-jobs. A future implementation should provision job namespaces through a
-server-side operation restricted to an administrator-approved device parent,
-and issue/update only the corresponding ACL grants. It must preserve the
-normal existing-key/manual-namespace path and must not grant phones general
-datastore administration.
+Two different jobs can deliberately use the same destination. They share the
+snapshot list; contents are never merged. Every snapshot is a complete view of
+only that run's selected folders and Shizuku sources. Different Backup IDs have
+separate histories, while PBS can deduplicate their chunks within the datastore.
+Changing a destination starts or selects another history. Earlier groups remain
+available through Restore; no move, rename or deletion is performed.
 
-Existing mixed histories should stay accessible in their original location.
-Any move or split needs an explicit migration choice; no snapshots should be
-silently moved, renamed or deleted. Snapshot notes remain useful labels within
-a history, but labels alone do not isolate different job contents.
+Existing jobs without an explicit Backup ID retain the old device-ID fallback
+and configured namespace. Editing them materializes that ID in the form, so an
+upgrade alone does not switch their backup history.
+
+## Device keys and namespaces
+
+New server host jobs suggest the same `devices/<host-id>` namespace. Saving a
+server job can provision missing namespace levels, using normal administrator
+`Datastore.Modify` checks. Devices themselves receive only `DatastoreBackup` on
+the approved namespace, without propagation or namespace creation privileges.
+The root namespace remains an explicit option for administrators who want it.
+
+Generated device keys are normal PBS API tokens, visible under Access Control
+and usable with administrator-added namespace ACLs. The upload/reader no longer
+requires the Backup ID to match the device ID or requires an enabled server job
+when a manual ACL already authorizes access. Ordinary PBS ACLs and ownership
+checks remain in force. A read-only grant does not authorize appending snapshots
+to another owner's group.
+
+Automatic ACL synchronization tracks the grants it manages. Editing or deleting
+a server job removes those grants while preserving grants on other namespaces
+and other roles added manually. Administrator-enabled propagation is preserved.
+Legacy credential records initialize this tracking before their next job edit.
+Retained and replacement enrollment keys still recognize earlier owners from
+the same device after normal namespace permission checks. Only the newest key
+controls queued device work. Revoke existing keys remains optional and false by
+default.
+
+Desktop Windows/Linux jobs still use the host ID as their default Backup ID;
+this version adds editable Backup IDs to Android's local jobs. Their existing
+agents remain compatible with the namespace ACL model.

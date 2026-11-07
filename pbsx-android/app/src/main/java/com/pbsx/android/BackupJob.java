@@ -4,9 +4,10 @@ import java.util.UUID;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** A local file-selection/schedule profile; its ID never replaces the PBS host ID. */
+/** Local execution identity, display name and storage history are independent. */
 final class BackupJob {
   String id = UUID.randomUUID().toString(), name = "Phone backup", store = "backup", namespace = "";
+  String backupID = "backup-" + id.replace("-", "").substring(0, 12);
   JSONArray sources = new JSONArray();
   int hours = 0, schedulerId = 0;
   boolean wifi = true, charging = true, shizuku = false, apks = false, data = false, obb = false;
@@ -17,6 +18,7 @@ final class BackupJob {
         .put("name", name)
         .put("store", store)
         .put("namespace", namespace)
+        .put("backup_id", backupID)
         .put("sources", sources)
         .put("hours", hours)
         .put("scheduler_id", schedulerId)
@@ -34,6 +36,8 @@ final class BackupJob {
     j.name = value.getString("name");
     j.store = value.getString("store");
     j.namespace = value.optString("namespace", "");
+    // Older jobs used the enrolled host ID. Keep that history until explicitly edited.
+    j.backupID = value.optString("backup_id", "");
     j.sources =
         new JSONArray(
             value.optJSONArray("sources") == null
@@ -56,6 +60,9 @@ final class BackupJob {
     name = name.trim();
     store = store.trim();
     namespace = namespace.trim();
+    backupID = backupID.trim();
+    if (!backupID.isEmpty() && !backupID.matches("[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}"))
+      throw new Exception("Backup ID must be 1–64 letters, digits, underscores, dots or hyphens");
     if (name.isEmpty() || name.length() > 100 || name.indexOf('\n') >= 0)
       throw new Exception("Enter a job name of 1–100 characters");
     if (!store.matches("[A-Za-z0-9_][A-Za-z0-9_.-]*"))
@@ -80,7 +87,32 @@ final class BackupJob {
   }
 
   String target() {
-    return store + " / " + (namespace.isEmpty() ? "root" : namespace);
+    return store
+        + " / "
+        + (namespace.isEmpty() ? "root" : namespace)
+        + " / "
+        + (backupID.isEmpty() ? "device ID" : backupID);
+  }
+
+  String backupID(android.content.Context c) throws Exception {
+    return backupID.isEmpty() ? new JSONObject(Vault.load(c)).getString("host_id") : backupID;
+  }
+
+  static BackupJob create(android.content.Context c) throws Exception {
+    BackupJob job = new BackupJob();
+    job.store = Settings.store(c);
+    String config = Vault.load(c);
+    if (!config.isEmpty()) {
+      String device = new JSONObject(config).getString("host_id");
+      // PBS namespace components are limited to 32 characters; preserve the
+      // full device ID without a collision-prone truncated name.
+      job.namespace =
+          "devices/"
+              + (device.length() > 32
+                  ? device.substring(0, 32) + "/" + device.substring(32)
+                  : device);
+    }
+    return job;
   }
 
   String schedule() {

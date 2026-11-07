@@ -39,6 +39,7 @@ final class BackupCatalogue implements AutoCloseable {
   private long loaded;
   private volatile Client client;
   private Operations.Cancellation cancellation;
+  private boolean chooseHistory;
   private final Runnable filterUpdate =
       () -> {
         page = 0;
@@ -53,6 +54,10 @@ final class BackupCatalogue implements AutoCloseable {
       query = saved.getString("catalogue_query", "");
       page = saved.getInt("catalogue_page", 0);
     }
+  }
+
+  void chooseHistory() {
+    chooseHistory = true;
   }
 
   void save(Bundle out) {
@@ -95,7 +100,7 @@ final class BackupCatalogue implements AutoCloseable {
       }
       if (config.isEmpty()) {
         panel.removeAllViews();
-        Ui.title(panel, "Restore");
+        Ui.title(panel, chooseHistory ? "Choose backup history" : "Restore");
         Ui.hint(Ui.card(panel), "Connect to PBS-X to see the backups your storage key can access.");
         Ui.button(panel, "Open Settings", true, v -> settings.run());
         return;
@@ -154,9 +159,13 @@ final class BackupCatalogue implements AutoCloseable {
   private void draw() {
     if (panel == null || closed) return;
     panel.removeAllViews();
-    Ui.title(panel, "Restore");
+    Ui.title(panel, chooseHistory ? "Choose backup history" : "Restore");
     Ui.hint(
-        panel, "All backup groups visible to your storage key, across datastores and namespaces.");
+        panel,
+        chooseHistory
+            ? "Choose a host backup history. Permission to list a group does not necessarily allow"
+                  + " appending snapshots."
+            : "All backup groups visible to your storage key, across datastores and namespaces.");
     Button refresh =
         Ui.button(panel, loading ? "Loading backups…" : "Refresh backups", false, v -> load());
     refresh.setEnabled(!loading);
@@ -207,6 +216,7 @@ final class BackupCatalogue implements AutoCloseable {
     for (int i = 0; i < data.length(); i++) {
       JSONObject group = data.optJSONObject(i);
       if (group == null) continue;
+      if (chooseHistory && !"host".equals(group.optString("backup_type"))) continue;
       String haystack =
           group.optString("backup_type")
               + "/"
@@ -251,7 +261,7 @@ final class BackupCatalogue implements AutoCloseable {
                   : ""));
       String comment = group.optString("comment");
       if (!comment.isEmpty()) Ui.hint(card, comment);
-      Ui.button(card, "Snapshots", true, v -> open.open(group));
+      Ui.button(card, chooseHistory ? "Use this backup" : "Snapshots", true, v -> open.open(group));
     }
     if (matches.size() > 100) {
       LinearLayout pager = Ui.row(activity);

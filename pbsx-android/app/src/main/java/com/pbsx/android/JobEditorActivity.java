@@ -12,7 +12,7 @@ import org.json.JSONObject;
 
 public final class JobEditorActivity extends Activity {
   private BackupJob job;
-  private EditText name, store, namespace, hours;
+  private EditText name, store, namespace, backupID, hours;
   private CheckBox wifi, charging, shizuku, apks, data, obb;
   private LinearLayout folders;
 
@@ -21,23 +21,34 @@ public final class JobEditorActivity extends Activity {
     super.onCreate(state);
     try {
       String id = getIntent().getStringExtra("job_id");
-      job = id == null ? new BackupJob() : JobStore.get(this, id);
+      job = id == null ? BackupJob.create(this) : JobStore.get(this, id);
       if (state != null) {
+        job.id = state.getString("job_id", job.id);
         job.sources = new JSONArray(state.getString("sources", "[]"));
       }
       LinearLayout root = Ui.screen(this, id == null ? "New backup job" : "Edit backup job"),
           page = Ui.scroll(root);
       LinearLayout basic = Ui.card(page);
       Ui.title(basic, "Job details");
-      name = Ui.input(basic, "Name", job.name, false);
+      name = Ui.input(basic, "Job name", job.name, false);
+      Ui.hint(basic, "Display label only. Renaming this job does not change its backup history.");
       LinearLayout dest = Ui.card(page);
       Ui.text(dest, "Destination", 18, Ui.TEXT);
       store = Ui.input(dest, "Datastore", job.store, false);
       namespace = Ui.input(dest, "Namespace · leave blank for root", job.namespace, false);
+      backupID = Ui.input(dest, "Backup ID", job.backupID(this), false);
+      backupID.setContentDescription("Backup ID");
+      Ui.button(
+          dest,
+          "Use existing backup",
+          false,
+          v -> startActivityForResult(new Intent(this, SelectBackupActivity.class), 101));
       Ui.hint(
           dest,
-          "This host must have an enabled server job authorizing this destination. Jobs here select"
-              + " your phone's folders and schedule.");
+          "The datastore, namespace and Backup ID identify one snapshot history. Jobs using the"
+              + " same destination share snapshots; each snapshot contains only that run's selected"
+              + " sources, not a merge. Changing the destination leaves older snapshots in Restore."
+              + " Your storage key needs permission for the namespace.");
       LinearLayout sourceCard = Ui.card(page);
       Ui.text(sourceCard, "Folders", 18, Ui.TEXT);
       folders = Ui.column(this);
@@ -94,6 +105,7 @@ public final class JobEditorActivity extends Activity {
         name.setText(state.getString("name", job.name));
         store.setText(state.getString("store", job.store));
         namespace.setText(state.getString("namespace", job.namespace));
+        backupID.setText(state.getString("backup_id", job.backupID(this)));
         hours.setText(state.getString("hours", String.valueOf(job.hours)));
         wifi.setChecked(state.getBoolean("wifi", job.wifi));
         charging.setChecked(state.getBoolean("charging", job.charging));
@@ -150,6 +162,12 @@ public final class JobEditorActivity extends Activity {
   @Override
   protected void onActivityResult(int request, int result, Intent intent) {
     super.onActivityResult(request, result, intent);
+    if (request == 101 && result == RESULT_OK && intent != null) {
+      store.setText(intent.getStringExtra("store"));
+      namespace.setText(intent.getStringExtra("namespace"));
+      backupID.setText(intent.getStringExtra("backup_id"));
+      return;
+    }
     if (request != 100 || result != RESULT_OK || intent == null || intent.getData() == null) return;
     try {
       Uri uri = intent.getData();
@@ -207,6 +225,8 @@ public final class JobEditorActivity extends Activity {
       job.name = name.getText().toString();
       job.store = store.getText().toString();
       job.namespace = namespace.getText().toString();
+      job.backupID = backupID.getText().toString();
+      if (job.backupID.trim().isEmpty()) throw new Exception("Enter a Backup ID");
       job.hours = Integer.parseInt(hours.getText().toString());
       job.wifi = wifi.isChecked();
       job.charging = charging.isChecked();
@@ -238,6 +258,8 @@ public final class JobEditorActivity extends Activity {
     out.putString("name", name.getText().toString());
     out.putString("store", store.getText().toString());
     out.putString("namespace", namespace.getText().toString());
+    out.putString("backup_id", backupID.getText().toString());
+    out.putString("job_id", job.id);
     out.putString("hours", hours.getText().toString());
     out.putBoolean("wifi", wifi.isChecked());
     out.putBoolean("charging", charging.isChecked());

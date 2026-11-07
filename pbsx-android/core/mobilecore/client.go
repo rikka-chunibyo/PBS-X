@@ -246,7 +246,7 @@ func Enroll(code, hostname string) (string, error) {
 	}
 	cfg.Certificate = cert
 	cfg.PrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
-	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.2.2-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
+	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.3.0-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
 	response, err := c.request(context.Background(), "POST", "/pbsx/agent/bootstrap", body, false)
 	if err != nil {
 		return "", err
@@ -311,7 +311,7 @@ func (c *Client) ListGroupSnapshots(store, namespace, backupType, source string)
 }
 
 func (c *Client) Backup(store, namespace string, docs Documents, progress Progress) (string, error) {
-	result, err := c.backupNamed(store, namespace, "", "", docs, progress)
+	result, err := c.backupNamed(store, namespace, c.cfg.HostID, "", "", docs, progress)
 	return result.Snapshot, err
 }
 
@@ -321,17 +321,26 @@ type backupResult struct {
 }
 
 func (c *Client) BackupJob(store, namespace, jobID, jobName string, docs Documents, progress Progress) (string, error) {
+	return c.BackupGroupJob(store, namespace, c.cfg.HostID, jobID, jobName, docs, progress)
+}
+
+// BackupGroupJob keeps storage history separate from device and local job IDs.
+// Equal store/namespace/backupID values share snapshots; their contents are not merged.
+func (c *Client) BackupGroupJob(store, namespace, backupID, jobID, jobName string, docs Documents, progress Progress) (string, error) {
+	if err := validateGroup("host", backupID); err != nil {
+		return "", err
+	}
 	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(jobID) || len(jobName) == 0 || len(jobName) > 400 || strings.ContainsAny(jobName, "\r\n") {
 		return "", errors.New("invalid backup job label")
 	}
-	result, err := c.backupNamed(store, namespace, jobID, jobName, docs, progress)
+	result, err := c.backupNamed(store, namespace, backupID, jobID, jobName, docs, progress)
 	if err != nil {
 		return "", err
 	}
 	raw, err := json.Marshal(result)
 	return string(raw), err
 }
-func (c *Client) backupNamed(store, namespace, jobID, jobName string, docs Documents, progress Progress) (backupResult, error) {
+func (c *Client) backupNamed(store, namespace, backupID, jobID, jobName string, docs Documents, progress Progress) (backupResult, error) {
 	cfg, err := c.pbsConfig(store, namespace)
 	if err != nil {
 		return backupResult{}, err
@@ -346,7 +355,7 @@ func (c *Client) backupNamed(store, namespace, jobID, jobName string, docs Docum
 	defer report.close()
 	client := backupproxy.NewLocalClient(&documentFS{docs: docs, ctx: ctx, report: report})
 	server := backupproxy.NewServer(client, backupproxy.NewPBSStore(cfg, buzhash.DefaultConfig(), true))
-	_, err = server.RunBackupWithMode(ctx, ".", backupproxy.BackupConfig{BackupType: datastore.BackupHost, BackupID: c.cfg.HostID, Namespace: namespace, BackupTime: stamp, ChunkConfig: buzhash.DefaultConfig(), DetectionMode: backupproxy.DetectionData, Compress: true, StrictMetadata: true, OnUploadProgress: func(p backupproxy.UploadProgress) {
+	_, err = server.RunBackupWithMode(ctx, ".", backupproxy.BackupConfig{BackupType: datastore.BackupHost, BackupID: backupID, Namespace: namespace, BackupTime: stamp, ChunkConfig: buzhash.DefaultConfig(), DetectionMode: backupproxy.DetectionData, Compress: true, StrictMetadata: true, OnUploadProgress: func(p backupproxy.UploadProgress) {
 		report.uploaded(int64(p.UploadedBytes))
 		if progress != nil {
 			progress.Update("Uploading", int64(p.UploadedChunks), int64(p.UploadedBytes))
@@ -355,10 +364,10 @@ func (c *Client) backupNamed(store, namespace, jobID, jobName string, docs Docum
 	if err != nil {
 		return backupResult{}, backupFailure(err, c.cfg.HostID, store, namespace)
 	}
-	result := backupResult{Snapshot: fmt.Sprintf("host/%s/%s", c.cfg.HostID, time.Unix(stamp, 0).UTC().Format("2006-01-02T15:04:05Z"))}
+	result := backupResult{Snapshot: fmt.Sprintf("host/%s/%s", backupID, time.Unix(stamp, 0).UTC().Format("2006-01-02T15:04:05Z"))}
 	if jobID != "" {
 		report.phase("Saving snapshot notes", "", -1)
-		values := map[string]any{"backup-type": "host", "backup-id": c.cfg.HostID, "backup-time": stamp, "notes": "PBS-X Android: " + jobName + "\nJob ID: " + jobID}
+		values := map[string]any{"backup-type": "host", "backup-id": backupID, "backup-time": stamp, "notes": "PBS-X Android: " + jobName + "\nJob ID: " + jobID}
 		if namespace != "" {
 			values["ns"] = namespace
 		}
@@ -371,11 +380,14 @@ func (c *Client) backupNamed(store, namespace, jobID, jobName string, docs Docum
 }
 
 func backupFailure(err error, host, store, namespace string) error {
-	if !strings.Contains(err.Error(), "has no enabled backup job targeting this datastore/namespace") {
+	legacy := strings.Contains(err.Error(), "has no enabled backup job targeting this datastore/namespace")
+	missingACL := strings.Contains(err.Error(), "HTTP 403") &&
+		(strings.Contains(err.Error(), "permission check failed") || strings.Contains(err.Error(), "missing permissions 'Datastore.Backup'"))
+	if !legacy && !missingACL {
 		return err
 	}
 	if namespace == "" {
 		namespace = "(root)"
 	}
-	return fmt.Errorf("Backup destination needs setup. In PBS-X, open Hosts → %s → Jobs and create or enable a job for datastore %s, namespace %s. Then retry Back up now; your enrollment is already valid", host, store, namespace)
+	return fmt.Errorf("Backup destination needs setup. Check the storage key's Permissions for datastore %s, namespace %s. For automatic keys, open Hosts → %s → Jobs and authorize that destination. Then retry Back up; your enrollment is already valid", store, namespace, host)
 }

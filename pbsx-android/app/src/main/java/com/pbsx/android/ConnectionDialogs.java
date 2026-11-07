@@ -78,7 +78,7 @@ final class ConnectionDialogs {
         "Connect using a normal PBS API token and the server's SHA-256 certificate fingerprint."
             + " This replaces the active connection, while keeping local jobs.");
     EditText server = Ui.input(f, "HTTPS server", "https://", false),
-        host = Ui.input(f, "Backup host ID", "", false),
+        host = Ui.input(f, "Device ID", "", false),
         pin = Ui.input(f, "SHA-256 certificate fingerprint", "", false),
         id = Ui.input(f, "Auth ID · user@realm!token", "", false),
         secret = Ui.input(f, "API token secret", "", true);

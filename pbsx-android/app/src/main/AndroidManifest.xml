@@ -12,6 +12,7 @@
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>
         <activity android:name=".JobEditorActivity" android:exported="false" />
+        <activity android:name=".SelectBackupActivity" android:exported="false" />
         <activity android:name=".RestoreActivity" android:exported="false" android:enableOnBackInvokedCallback="true" />
         <service android:name=".BackupService" android:exported="false" android:foregroundServiceType="dataSync" />
         <service android:name=".ScheduleService" android:exported="false" android:permission="android.permission.BIND_JOB_SERVICE" />

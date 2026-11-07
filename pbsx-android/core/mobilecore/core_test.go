@@ -506,4 +506,10 @@ func TestMissingBackupJobExplainsSetupWithoutReenrollment(t *testing.T) {
 	if backupFailure(other, "phone", "backup", "") != other {
 		t.Fatal("unrelated access error was rewritten")
 	}
+	for _, detail := range []string{"permission check failed - missing Datastore.Backup", "missing permissions 'Datastore.Backup' on '/datastore/backup/devices/phone'"} {
+		acl := errors.New("start session: upgrade failed: HTTP 403: " + detail)
+		if message := backupFailure(acl, "phone", "backup", "devices/phone").Error(); !strings.Contains(message, "storage key's Permissions") || !strings.Contains(message, "namespace devices/phone") {
+			t.Fatal(message)
+		}
+	}
 }

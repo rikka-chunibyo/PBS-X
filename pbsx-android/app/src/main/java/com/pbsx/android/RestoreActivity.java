@@ -563,7 +563,8 @@ public final class RestoreActivity extends Activity {
                 if (Operations.running())
                   throw new Exception("Another transfer is already running");
                 BackupJob target = new BackupJob();
-                target.name = "Restore from " + source;
+                target.name = "Restore from " + sourceType + "/" + source;
+                target.backupID = source;
                 target.store = store;
                 target.namespace = namespace;
                 target.wifi = Settings.prefs(this).getBoolean("wifi", true);

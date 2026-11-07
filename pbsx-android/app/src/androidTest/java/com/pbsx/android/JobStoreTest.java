@@ -31,6 +31,45 @@ public class JobStoreTest {
   }
 
   @Test
+  public void backupIdentityIsIndependentOfJobLabelAndDeviceIdentity() throws Exception {
+    Context c = isolated();
+    Vault.save(c, new JSONObject().put("host_id", "test-phone").toString());
+    BackupJob photos = BackupJob.create(c), manual = BackupJob.create(c);
+    assertEquals("devices/test-phone", photos.namespace);
+    assertNotEquals(photos.backupID, manual.backupID);
+    String identity = photos.backupID;
+    photos.name = "Photos";
+    photos.hours = 24;
+    JobStore.save(c, photos);
+    photos.name = "Camera roll";
+    JobStore.save(c, photos);
+    assertEquals(identity, JobStore.get(c, photos.id).backupID);
+    manual.backupID = identity;
+    manual.namespace = photos.namespace;
+    JobStore.save(c, manual);
+    assertEquals(JobStore.get(c, photos.id).target(), JobStore.get(c, manual.id).target());
+    assertNotEquals(JobStore.get(c, photos.id).schedulerId, JobStore.get(c, manual.id).schedulerId);
+    JSONObject legacy = photos.json();
+    legacy.remove("backup_id");
+    assertEquals("test-phone", BackupJob.from(legacy).backupID(c));
+    assertEquals("", BackupJob.from(legacy).backupID);
+    for (String invalid : new String[] {"../other", "a/b", "has space", ".", "name\nother"}) {
+      BackupJob bad = BackupJob.create(c);
+      bad.backupID = invalid;
+      try {
+        bad.validate(false);
+        fail("Invalid ID accepted: " + invalid);
+      } catch (Exception expected) {
+      }
+    }
+    String longID = "abcdefghijklmnopqrstuvwxyz0123456789-long-device";
+    Vault.save(c, new JSONObject().put("host_id", longID).toString());
+    assertEquals(
+        "devices/" + longID.substring(0, 32) + "/" + longID.substring(32),
+        BackupJob.create(c).namespace);
+  }
+
+  @Test
   public void migratesExistingFoldersAndScheduleExactlyOnce() throws Exception {
     Context c = isolated();
     JSONArray sources =

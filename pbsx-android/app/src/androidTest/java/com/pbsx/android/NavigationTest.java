@@ -109,6 +109,7 @@ public class NavigationTest {
       jobs.edit().clear().commit();
       Vault.save(c, config);
       BackupJob job = new BackupJob();
+      job.backupID = "android-test";
       job.name = "Camera test";
       job.sources.put(
           new JSONObject().put("label", "Photos").put("uri", "content://fixture/tree/photos"));
@@ -219,6 +220,88 @@ public class NavigationTest {
       if (!gone.get()) Thread.sleep(50);
     } while (!gone.get() && System.currentTimeMillis() < deadline);
     assertTrue("Search did not filter " + absent, gone.get());
+  }
+
+  @Test
+  public void jobEditorSelectsHistoryWithoutAdoptingDeviceIdentity() throws Exception {
+    String config = InstrumentationRegistry.getArguments().getString("pbsx_mock_config");
+    Assume.assumeTrue(config != null && !config.isEmpty());
+    Context c = instrumentation.getTargetContext();
+    String oldVault = Vault.load(c);
+    Activity editor = null, picker = null, main = null, restore = null;
+    BackupJob job = null;
+    try {
+      Vault.save(c, config);
+      job = BackupJob.create(c);
+      assertEquals("devices/android-test", job.namespace);
+      job.name = "Picker test";
+      job.sources.put(
+          new JSONObject().put("label", "Photos").put("uri", "content://fixture/tree/photos"));
+      JobStore.save(c, job);
+      editor =
+          instrumentation.startActivitySync(
+              new Intent(c, JobEditorActivity.class)
+                  .putExtra("job_id", job.id)
+                  .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+      android.widget.EditText name =
+          (android.widget.EditText) waitFor(editor, "Picker test", false);
+      instrumentation.runOnMainSync(() -> name.setText("Cosmetic label"));
+      capture(editor, "job-identity");
+      Instrumentation.ActivityMonitor monitor =
+          instrumentation.addMonitor(SelectBackupActivity.class.getName(), null, false);
+      click(editor, "Use existing backup");
+      picker = instrumentation.waitForMonitorWithTimeout(monitor, 5000);
+      instrumentation.removeMonitor(monitor);
+      assertNotNull(picker);
+      View label = waitFor(picker, "host/family-laptop", false);
+      capture(picker, "backup-history-picker");
+      Activity selection = picker;
+      instrumentation.runOnMainSync(
+          () -> {
+            assertNull(find(selection.findViewById(android.R.id.content), "vm/100", false));
+            assertNull(find(selection.findViewById(android.R.id.content), "ct/101", false));
+            assertTrue(find((View) label.getParent(), "Use this backup", false).performClick());
+          });
+      picker = null;
+      waitFor(editor, "family-laptop", false);
+      click(editor, "Save job");
+      editor = null;
+      BackupJob saved = JobStore.get(c, job.id);
+      assertEquals("Cosmetic label", saved.name);
+      assertEquals("family-laptop", saved.backupID);
+      assertEquals("", saved.namespace);
+      assertEquals("android-test", new JSONObject(Vault.load(c)).getString("host_id"));
+      main =
+          instrumentation.startActivitySync(
+              new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+      View jobLabel = waitFor(main, "Cosmetic label", false);
+      monitor = instrumentation.addMonitor(RestoreActivity.class.getName(), null, false);
+      instrumentation.runOnMainSync(
+          () ->
+              assertTrue(
+                  find((View) jobLabel.getParent().getParent(), "Snapshots", false)
+                      .performClick()));
+      restore = instrumentation.waitForMonitorWithTimeout(monitor, 5000);
+      instrumentation.removeMonitor(monitor);
+      assertNotNull(restore);
+      assertEquals("family-laptop", restore.getIntent().getStringExtra("source"));
+      click(restore, "Browse files");
+      waitFor(restore, "Snapshot contents", false);
+    } finally {
+      Activity a = restore, b = main, d = picker, e = editor;
+      instrumentation.runOnMainSync(
+          () -> {
+            if (a != null) a.finish();
+            if (b != null) b.finish();
+            if (d != null) d.finish();
+            if (e != null) e.finish();
+          });
+      if (job != null) JobStore.delete(c, job.id);
+      if (oldVault.isEmpty())
+        c.getSharedPreferences("vault", 0).edit().remove("connection").commit();
+      else Vault.save(c, oldVault);
+      ScheduleService.configureAll(c);
+    }
   }
 
   @Test

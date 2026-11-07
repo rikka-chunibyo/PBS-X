@@ -261,7 +261,8 @@ final class Operations {
           new AndroidDocuments(context, job.sources, job.shizuku, job.apks, job.data, job.obb)) {
         org.json.JSONObject backup =
             new org.json.JSONObject(
-                client.backupJob(job.store, job.namespace, job.id, job.name, docs, null));
+                client.backupGroupJob(
+                    job.store, job.namespace, job.backupID(context), job.id, job.name, docs, null));
         String result = "Backup complete: " + job.name + " · " + backup.getString("snapshot");
         if (!backup.optString("warning").isEmpty()) result += " · " + backup.getString("warning");
         record(context, runId, true, result);
