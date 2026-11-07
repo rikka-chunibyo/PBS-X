@@ -61,7 +61,7 @@ impl HostAgentCredentialRecord {
             .chain(self.previous_backup_auth_ids.iter().map(String::as_str))
     }
 
-    fn known_owner(&self, auth_id: &str) -> bool {
+    pub(crate) fn known_owner(&self, auth_id: &str) -> bool {
         self.active_auth_ids()
             .chain(self.retired_backup_auth_ids.iter().map(String::as_str))
             .any(|id| id == auth_id)

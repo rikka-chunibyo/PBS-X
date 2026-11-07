@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use proxmox_schema::{Schema, StringSchema, Updater, api};
 
 use pbs_api_types::{
-    BACKUP_NAMESPACE_SCHEMA, BACKUP_TIME_SCHEMA, BackupNamespace, DATASTORE_SCHEMA, JOB_ID_SCHEMA,
-    PROXMOX_SAFE_ID_FORMAT, SINGLE_LINE_COMMENT_SCHEMA,
+    BACKUP_ID_SCHEMA, BACKUP_NAMESPACE_SCHEMA, BACKUP_TIME_SCHEMA, BackupNamespace,
+    DATASTORE_SCHEMA, JOB_ID_SCHEMA, PROXMOX_SAFE_ID_FORMAT, SINGLE_LINE_COMMENT_SCHEMA,
 };
 
 pub const HOST_ID_SCHEMA: Schema = StringSchema::new("PBS-X host ID.")
@@ -737,6 +737,10 @@ pub struct HostBackupRunInfo {
             optional: true,
             schema: BACKUP_NAMESPACE_SCHEMA,
         },
+        "backup-id": {
+            optional: true,
+            schema: BACKUP_ID_SCHEMA,
+        },
         "backup-time": {
             schema: BACKUP_TIME_SCHEMA,
         },
@@ -763,6 +767,9 @@ pub struct HostSnapshotListItem {
     pub store: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ns: Option<BackupNamespace>,
+    /// The actual PBS backup-group ID, independent of the enrolled device ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_id: Option<String>,
     pub backup_time: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,

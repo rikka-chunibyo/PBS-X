@@ -25,10 +25,9 @@ Not wired yet:
 
 - file browsing from the Host UI;
 - production packaging and upgrade delivery for the cross-platform host agent;
-- a current Windows end-to-end validation pass for the native path;
 - image backups and bare-metal recovery.
 
-The Linux native path has been validated end to end in the PBS-X VM environment: one-time enrollment, heartbeat/inventory, on-demand dispatch, PXAR/chunk upload, normal `host/<host-id>` snapshot commit, direct restore, file/symlink fidelity and sparse-file preservation. The Rust host/config crates and Go control/agent packages pass their current tests with Rust 1.94 and Go 1.27; the Windows agent and Windows-specific test packages cross-compile successfully. A live Windows round trip remains required before treating that platform as validated.
+The Linux native path has been validated end to end in the PBS-X VM environment: one-time enrollment, heartbeat/inventory, on-demand dispatch, PXAR/chunk upload, normal `host/<host-id>` snapshot commit, direct restore, file/symlink fidelity and sparse-file preservation. Windows Server 2025 has also passed real VSS-backed backup/restore and expanded NTFS cases; see [Windows validation](windows-native-validation.md) for coverage and remaining limits.
 
 ## Product model
 
@@ -58,7 +57,7 @@ forms default to a device namespace. Automatic device tokens follow normal PBS
 namespace ACLs and ownership, including manually granted additional namespaces.
 Desktop dispatched jobs retain the host-ID default described above.
 
-The UI should expose Hosts as a top-level workload type with a detail view containing Summary, Backups, Disks/Volumes, Files, Jobs and Agent tabs. The Backups view should ultimately read the same PBS snapshots visible under Datastore -> Content.
+The UI should expose Hosts as a top-level workload type with a detail view containing Summary, Backups, Disks/Volumes, Files, Jobs and Agent tabs. Host Backups now discovers normal PBS snapshots by device namespace, generated group owner or legacy device ID, while preserving operator namespace/owner checks. Rows and restore commands retain the actual custom Backup ID; enabled server jobs do not define history visibility. Datastore -> Content remains the complete datastore view.
 
 ## Initial goals
 

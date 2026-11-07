@@ -5,8 +5,9 @@ use proxmox_router::{ApiMethod, Permission, Router, RpcEnvironment, SubdirMap, h
 use proxmox_schema::api;
 
 use pbs_api_types::{
-    Authid, BACKUP_NAMESPACE_SCHEMA, BACKUP_TIME_SCHEMA, BackupNamespace, BackupType,
-    DATASTORE_SCHEMA, JOB_ID_SCHEMA, PRIV_DATASTORE_READ,
+    Authid, BACKUP_ID_SCHEMA, BACKUP_NAMESPACE_SCHEMA, BACKUP_TIME_SCHEMA, BackupNamespace,
+    BackupType, DATASTORE_SCHEMA, JOB_ID_SCHEMA, MAX_NAMESPACE_DEPTH, Operation,
+    PRIV_DATASTORE_AUDIT, PRIV_DATASTORE_BACKUP, PRIV_DATASTORE_READ,
 };
 use pbs_config::CachedUserInfo;
 use pbsx_api_types::{
@@ -175,7 +176,7 @@ pub fn heartbeat(name: String, heartbeat: HostAgentHeartbeat) -> Result<HostAgen
         permission: &Permission::Anybody,
     },
 )]
-/// List ordinary PBS snapshots for this host across the datastore/namespace targets used by its jobs.
+/// List accessible host histories by device namespace, generated owner or legacy backup ID.
 pub async fn list_host_snapshots(
     name: String,
     _info: &ApiMethod,
@@ -189,55 +190,103 @@ pub async fn list_host_snapshots(
         );
     }
 
+    get_host_config(&name)?;
     let auth_id: Authid = rpcenv.get_auth_id().unwrap().parse()?;
-    let (job_config, _digest) = pbs_config::host_backup::config()?;
-    let jobs: Vec<HostBackupJobConfig> = job_config.convert_to_typed_array("host-backup")?;
+    let stores = crate::api2::admin::datastore::get_datastore_list(Value::Null, _info, rpcenv)?;
+    let credentials = crate::server::host::read_host_credentials(&name)?;
+    let device_ns = host_device_namespace(&name)?;
 
-    let mut targets = Vec::new();
-    for job in jobs.into_iter().filter(|job| job.host == name) {
-        let ns_key = job.ns.as_ref().map(|ns| ns.to_string()).unwrap_or_default();
-        if targets.iter().any(
-            |(store, ns, _): &(String, String, Option<BackupNamespace>)| {
-                store == &job.store && ns == &ns_key
-            },
-        ) {
-            continue;
-        }
-        targets.push((job.store, ns_key, job.ns));
-    }
-
-    let host_id = name.clone();
     tokio::task::spawn_blocking(move || {
         let mut result = Vec::new();
-
-        for (store, _ns_key, ns) in targets {
-            let snapshots = unsafe {
-                crate::api2::admin::datastore::list_snapshots_blocking(
-                    store.clone(),
-                    ns.clone(),
-                    Some(BackupType::Host),
-                    Some(host_id.clone()),
-                    auth_id.clone(),
-                )
-            }?;
-
-            for snapshot in snapshots {
-                result.push(HostSnapshotListItem {
-                    store: store.clone(),
-                    ns: ns.clone(),
-                    backup_time: snapshot.backup.time,
-                    comment: snapshot.comment,
-                    size: snapshot.size,
-                    protected: snapshot.protected,
-                });
+        for item in stores {
+            // An unmounted removable datastore has no currently available snapshots.
+            if item.mount_status == pbs_api_types::DataStoreMountStatus::NotMounted {
+                continue;
+            }
+            let store = item.store;
+            let datastore = pbs_datastore::DataStore::lookup_datastore(crate::tools::lookup_with(
+                &store,
+                Operation::Read,
+            ))?;
+            // Keep the same namespace/owner filtering as normal PBS snapshot listing.
+            // Host.Audit establishes association, never datastore authorization.
+            let groups = crate::backup::ListAccessibleBackupGroups::new_with_privs(
+                &datastore,
+                BackupNamespace::root(),
+                MAX_NAMESPACE_DEPTH,
+                Some(PRIV_DATASTORE_AUDIT),
+                Some(PRIV_DATASTORE_BACKUP),
+                Some(&auth_id),
+            )?;
+            for group in groups {
+                let group = group?;
+                if group.backup_type() != BackupType::Host {
+                    continue;
+                }
+                let owner = group.get_owner()?;
+                let ns = group.backup_ns();
+                if !host_backup_matches(
+                    &name,
+                    &device_ns,
+                    ns,
+                    group.group().id.as_str(),
+                    &owner,
+                    credentials.as_ref(),
+                ) {
+                    continue;
+                }
+                for info in group.list_backups()? {
+                    let snapshot = crate::tools::backup_info_to_snapshot_list_item(&info, &owner);
+                    result.push(HostSnapshotListItem {
+                        store: store.clone(),
+                        ns: if ns.is_root() { None } else { Some(ns.clone()) },
+                        backup_id: Some(snapshot.backup.group.id),
+                        backup_time: snapshot.backup.time,
+                        comment: snapshot.comment,
+                        size: snapshot.size,
+                        protected: snapshot.protected,
+                    });
+                }
             }
         }
-
-        result.sort_by(|a, b| b.backup_time.cmp(&a.backup_time));
+        result.sort_by(|a, b| {
+            b.backup_time
+                .cmp(&a.backup_time)
+                .then_with(|| a.store.cmp(&b.store))
+                .then_with(|| {
+                    a.ns.as_ref()
+                        .map(ToString::to_string)
+                        .cmp(&b.ns.as_ref().map(ToString::to_string))
+                })
+                .then_with(|| a.backup_id.cmp(&b.backup_id))
+        });
         Ok::<_, Error>(result)
     })
     .await
     .map_err(|err| anyhow::format_err!("failed to await host snapshot listing: {err}"))?
+}
+
+fn host_device_namespace(host: &str) -> Result<BackupNamespace, Error> {
+    // Host IDs are ASCII safe IDs; use the same 32-character components as Android/the job form.
+    let parts: Vec<&str> = host
+        .as_bytes()
+        .chunks(32)
+        .map(|part| std::str::from_utf8(part))
+        .collect::<Result<_, _>>()?;
+    format!("devices/{}", parts.join("/")).parse()
+}
+
+fn host_backup_matches(
+    host: &str,
+    device_ns: &BackupNamespace,
+    ns: &BackupNamespace,
+    backup_id: &str,
+    owner: &Authid,
+    credentials: Option<&crate::server::host::HostAgentCredentialRecord>,
+) -> bool {
+    backup_id == host
+        || device_ns.contains(ns).is_some()
+        || credentials.is_some_and(|record| record.known_owner(&owner.to_string()))
 }
 
 #[api(
@@ -341,6 +390,7 @@ pub fn run_backup(name: String, id: String) -> Result<HostBackupRunCommand, Erro
             name: { schema: HOST_ID_SCHEMA },
             store: { schema: DATASTORE_SCHEMA },
             ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
+            "backup-id": { optional: true, schema: BACKUP_ID_SCHEMA },
             "backup-time": { schema: BACKUP_TIME_SCHEMA },
             sources: {
                 optional: true,
@@ -370,6 +420,7 @@ pub fn run_restore(
     name: String,
     store: String,
     ns: Option<BackupNamespace>,
+    backup_id: Option<String>,
     backup_time: i64,
     sources: Option<Vec<String>>,
     destination: String,
@@ -403,7 +454,7 @@ pub fn run_restore(
 
     crate::server::host::queue_host_restore(
         &target_host,
-        &name,
+        backup_id.as_deref().unwrap_or(&name),
         &store,
         ns,
         backup_time,
@@ -436,3 +487,73 @@ const ITEM_ROUTER: Router = Router::new()
 pub const ROUTER: Router = Router::new()
     .get(&API_METHOD_LIST_HOSTS)
     .match_all("name", &ITEM_ROUTER);
+
+#[cfg(test)]
+mod host_history_tests {
+    use super::*;
+
+    #[test]
+    fn histories_follow_namespace_generated_owners_and_legacy_ids() {
+        let host = "test-phone";
+        let device_ns = host_device_namespace(host).unwrap();
+        let root = BackupNamespace::root();
+        let other: BackupNamespace = "shared/elsewhere".parse().unwrap();
+        let owner: Authid = "root@pam!manual".parse().unwrap();
+        let credentials: crate::server::host::HostAgentCredentialRecord =
+            serde_json::from_value(serde_json::json!({
+                "certificate-fingerprint": "fixture",
+                "backup-auth-id": "root@pam!current",
+                "previous-backup-auth-ids": ["root@pam!retained"],
+                "retired-backup-auth-ids": ["root@pam!revoked"],
+                "issued": 1,
+            }))
+            .unwrap();
+        let matches = |ns: &BackupNamespace, id: &str, owner: &Authid| {
+            host_backup_matches(host, &device_ns, ns, id, owner, Some(&credentials))
+        };
+        assert!(matches(&root, host, &owner));
+        assert!(matches(&device_ns, "photos", &owner));
+        assert!(matches(
+            &"devices/test-phone/old".parse().unwrap(),
+            "photos",
+            &owner
+        ));
+        assert!(!matches(
+            &"devices/test-phone-other".parse().unwrap(),
+            "photos",
+            &owner
+        ));
+        assert!(!matches(&root, "photos", &owner));
+        for key in ["current", "retained", "revoked"] {
+            assert!(matches(
+                &other,
+                "custom-id",
+                &format!("root@pam!{key}").parse().unwrap()
+            ));
+        }
+        assert!(!matches(&other, "custom-id", &owner));
+        assert!(host_backup_matches(
+            host, &device_ns, &device_ns, "photos", &owner, None
+        ));
+    }
+
+    #[test]
+    fn long_device_namespace_matches_complete_components() {
+        let host = "a".repeat(64);
+        let device_ns = host_device_namespace(&host).unwrap();
+        assert_eq!(
+            device_ns.to_string(),
+            format!("devices/{}/{}", "a".repeat(32), "a".repeat(32))
+        );
+        assert!(
+            device_ns
+                .contains(&format!("{device_ns}/photos").parse().unwrap())
+                .is_some()
+        );
+        assert!(
+            device_ns
+                .contains(&format!("devices/{}", "a".repeat(32)).parse().unwrap())
+                .is_none()
+        );
+    }
+}

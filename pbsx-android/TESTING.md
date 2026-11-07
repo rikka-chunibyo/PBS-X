@@ -6,6 +6,12 @@ Phone target: Samsung S20 FE, Android 13 / One UI 5.1, unrooted with Shizuku.
 The Samsung phone was surveyed read-only; this version was built and tested in
 an Android 13 emulator. No phone update or actual provider-data export was performed.
 
+The subsequent server Host → Backups fix includes custom Android histories and
+preserves their Backup IDs in queued restores. See
+[host-history validation](../docs/host-history-validation.md) for its Rust/UI
+checks, live PBS tests and test-VM deployment. Android production code and the
+0.4.0 APK below are unchanged by that fix.
+
 ## 0.4.0: optional device exports and per-app Shizuku selection
 
 Jobs can select particular apps for APK, Android/data and Android/obb sources,

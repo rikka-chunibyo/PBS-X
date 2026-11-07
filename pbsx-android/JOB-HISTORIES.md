@@ -50,3 +50,22 @@ default.
 Desktop Windows/Linux jobs still use the host ID as their default Backup ID;
 this version adds editable Backup IDs to Android's local jobs. Their existing
 agents remain compatible with the namespace ACL model.
+
+## Server host backup listing
+
+Host → Backups includes accessible host groups in `devices/<device-id>` and its
+descendants, groups owned by the device's current/retained/retired generated
+keys in any namespace, and legacy groups with the device ID. Long device IDs
+use the same 32-character namespace components as the job editor. Disabling,
+retargeting or deleting a server job does not hide those historical snapshots.
+The operator still needs Host.Audit and normal PBS namespace/owner access.
+
+Each row includes the actual Backup ID, which is sent independently of the
+source/destination device IDs when queueing a desktop-agent restore. Omitted
+Backup IDs retain the older device-ID fallback for API compatibility. Android
+restores continue to run locally in the app.
+
+For a manually managed/shared key, use the device namespace when you want
+custom IDs to appear under that device. Outside that namespace, such a shared
+key does not identify which device produced a group; the permission-derived
+global catalogue and Datastore → Content remain the complete views.

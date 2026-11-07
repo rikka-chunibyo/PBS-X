@@ -259,9 +259,15 @@ store names, contents and reported mtimes, with synthetic file modes. Android
 restore preserves contents and hierarchy, not POSIX ownership, ACLs, symlinks,
 device nodes, hardlinks, or provider-unsupported timestamps.
 
-Custom Android Backup IDs are visible in this app's Restore catalogue and the
-server's Datastore → Content view. The server's desktop Host → Backups view still
-filters by the host ID; it does not yet show every custom Android group.
+Custom Android Backup IDs are visible in this app's Restore catalogue,
+Datastore → Content and the server's Host → Backups view. The host page discovers
+accessible histories in the standard device namespace, groups owned by current
+or historical generated device keys, and legacy groups whose ID matches the
+device ID. It does not depend on enabled server jobs. A manual shared key with
+a custom ID outside the standard device namespace has no recorded device
+association; use the global Restore catalogue or Datastore → Content for those
+groups. The host page displays each actual Backup ID and preserves it when
+queueing a restore to a desktop agent.
 
 ## Research references
 

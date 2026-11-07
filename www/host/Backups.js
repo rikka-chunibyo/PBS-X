@@ -1,6 +1,6 @@
 Ext.define('pbsx-host-snapshot', {
     extend: 'Ext.data.Model',
-    fields: ['store', 'ns', 'backup-time', 'comment', 'size', 'protected'],
+    fields: ['store', 'ns', 'backup-id', 'backup-time', 'comment', 'size', 'protected'],
 });
 
 Ext.define('PBS.window.HostRestore', {
@@ -26,6 +26,7 @@ Ext.define('PBS.window.HostRestore', {
 		return values;
 	    },
 	    column1: [
+		{ xtype: 'displayfield', fieldLabel: gettext('Backup ID'), value: me.backupID || me.host },
 		{ xtype: 'displayfield', fieldLabel: gettext('Datastore'), value: me.store },
 		{ xtype: 'displayfield', fieldLabel: gettext('Namespace'), value: me.ns || '/' },
 		{
@@ -34,6 +35,7 @@ Ext.define('PBS.window.HostRestore', {
 		    value: Proxmox.Utils.render_timestamp(me.backupTime),
 		},
 		{ xtype: 'hiddenfield', name: 'store', value: me.store },
+		{ xtype: 'hiddenfield', name: 'backup-id', value: me.backupID || me.host },
 		{ xtype: 'hiddenfield', name: 'ns', value: me.ns || '' },
 		{ xtype: 'hiddenfield', name: 'backup-time', value: me.backupTime },
 	    ],
@@ -109,6 +111,7 @@ Ext.define('PBS.HostBackupSnapshotView', {
 		host: view.host,
 		store: data.store,
 		ns: data.ns,
+		backupID: data['backup-id'] || view.host,
 		backupTime: data['backup-time'],
 		listeners: {
 		    destroy: function(win) {
@@ -149,6 +152,7 @@ Ext.define('PBS.HostBackupSnapshotView', {
 	},
 	{ header: gettext('Datastore'), dataIndex: 'store', width: 150 },
 	{ header: gettext('Namespace'), dataIndex: 'ns', width: 150, renderer: value => value || '/' },
+	{ header: gettext('Backup ID'), dataIndex: 'backup-id', width: 180, renderer: Ext.String.htmlEncode },
 	{
 	    header: gettext('Size'),
 	    dataIndex: 'size',

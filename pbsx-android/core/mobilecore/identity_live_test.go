@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +112,47 @@ func TestLiveBackupIdentities(t *testing.T) {
 			t.Fatal("shared history merged unrelated sources")
 		}
 	}
+	type hostSnapshot struct {
+		Store string `json:"store"`
+		NS    string `json:"ns"`
+		ID    string `json:"backup-id"`
+		Time  int64  `json:"backup-time"`
+	}
+	hostSnapshots := func() []hostSnapshot {
+		t.Helper()
+		raw, err := exec.Command("proxmox-backup-debug", "api", "get", "/admin/host/"+cfg.HostID+"/snapshots", "--output-format", "json").Output()
+		if err != nil {
+			t.Fatalf("host snapshot list: %v", err)
+		}
+		var snapshots []hostSnapshot
+		if json.Unmarshal(raw, &snapshots) != nil {
+			t.Fatal("invalid host snapshot list")
+		}
+		seen := map[string]bool{}
+		for _, snapshot := range snapshots {
+			if snapshot.Store != "backup" || snapshot.ID == "" || snapshot.Time <= 0 {
+				t.Fatal("host snapshot lost datastore/group/time identity")
+			}
+			key := snapshot.Store + "/" + snapshot.NS + "/" + snapshot.ID + "/" + time.Unix(snapshot.Time, 0).String()
+			if seen[key] {
+				t.Fatal("host history duplicated a snapshot")
+			}
+			seen[key] = true
+		}
+		return snapshots
+	}
+	assertHistory := func(namespace, id string, count int) {
+		t.Helper()
+		found := 0
+		for _, snapshot := range hostSnapshots() {
+			if snapshot.NS == namespace && snapshot.ID == id {
+				found++
+			}
+		}
+		if found != count {
+			t.Fatalf("host page %s/%s: got %d snapshots, want %d", namespace, id, found, count)
+		}
+	}
 	backup(client, ns, "shared-photos", "scheduled-job", "Scheduled photos", photos)
 	first := snapshots(client, ns, "shared-photos")[0]
 	time.Sleep(1100 * time.Millisecond)
@@ -131,6 +173,24 @@ func TestLiveBackupIdentities(t *testing.T) {
 	if len(snapshots(client, ns, "shared-photos")) != 3 || len(snapshots(client, ns, "separate-documents")) != 1 {
 		t.Fatal("backup ID separation or cosmetic rename changed history")
 	}
+	assertHistory(ns, "shared-photos", 3)
+	assertHistory(ns, "separate-documents", 1)
+	if _, err := client.request(context.Background(), "GET", "/admin/host/"+cfg.HostID+"/snapshots", nil, false); err == nil {
+		t.Fatal("Host.Agent alone exposed the host backup list")
+	}
+	// A queued restore must retain the chosen custom group, not the enrolled host ID.
+	queued := api("create", "/admin/host/"+cfg.HostID+"/restore", "--store", "backup", "--ns", ns,
+		"--backup-id", "shared-photos", "--backup-time", strconv.FormatInt(first, 10), "--destination", "/unused-history-fixture", "--mode", "noattr")
+	var queuedID string
+	if json.Unmarshal(queued["backup-id"], &queuedID) != nil || queuedID != "shared-photos" {
+		t.Fatal("queued restore lost selected backup ID")
+	}
+	legacyQueued := api("create", "/admin/host/"+cfg.HostID+"/restore", "--store", "backup", "--ns", ns,
+		"--backup-time", strconv.FormatInt(first, 10), "--destination", "/unused-legacy-fixture", "--mode", "noattr")
+	if json.Unmarshal(legacyQueued["backup-id"], &queuedID) != nil || queuedID != cfg.HostID {
+		t.Fatal("legacy restore lost device-ID fallback")
+	}
+	// This disposable Android fixture has no desktop poller; commands are never executed.
 	t.Log("Different jobs share snapshots by Backup ID without merging contents; cosmetic renames preserve history; another ID creates another group")
 
 	// An administrator may add a namespace directly to the generated token.
@@ -148,6 +208,8 @@ func TestLiveBackupIdentities(t *testing.T) {
 	extraTime := snapshots(client, extra, "manual-share")[0]
 	restore(client, extra, "manual-share", extraTime, "Photos/camera.txt", "Documents/note.txt")
 	api("set", "/config/host-backup/"+job, "--enable", "false")
+	assertHistory(ns, "shared-photos", 3)
+	assertHistory(extra, "manual-share", 1)
 	if _, err := client.ListGroupSnapshots("backup", ns, "host", "shared-photos"); err == nil {
 		t.Fatal("disabled job retained its automatic grant")
 	}
@@ -175,6 +237,33 @@ func TestLiveBackupIdentities(t *testing.T) {
 	}
 	backup(manual, extra, "foreign-documents", "foreign-job", "Other owner", documents)
 	foreignTime := snapshots(manual, extra, "foreign-documents")[0]
+	assertHistory(extra, "foreign-documents", 0)
+	assertHistory(extra, "manual-share", 1)
+	// The operator has access only to this nested namespace, not its parent/root.
+	api("set", "/access/acl", "--path", "/host/"+cfg.HostID, "--auth-id", manualCfg.AuthID, "--role", "HostAudit", "--propagate", "false")
+	api("set", "/access/acl", "--path", "/datastore/backup/"+extra, "--auth-id", manualCfg.AuthID, "--role", "DatastoreReader", "--propagate", "false")
+	t.Cleanup(func() {
+		api("set", "/access/acl", "--path", "/host/"+cfg.HostID, "--auth-id", manualCfg.AuthID, "--role", "HostAudit", "--delete", "true")
+		api("set", "/access/acl", "--path", "/datastore/backup/"+extra, "--auth-id", manualCfg.AuthID, "--role", "DatastoreReader", "--delete", "true")
+	})
+	rawList, err := manual.request(context.Background(), "GET", "/admin/host/"+cfg.HostID+"/snapshots", nil, false)
+	if err != nil {
+		t.Fatal("namespace-only operator could not list host histories", err)
+	}
+	var filtered struct {
+		Data []hostSnapshot `json:"data"`
+	}
+	if json.Unmarshal(rawList, &filtered) != nil || len(filtered.Data) != 1 || filtered.Data[0].NS != extra || filtered.Data[0].ID != "manual-share" {
+		t.Fatal("host list leaked another namespace or an unrelated owner's group")
+	}
+	api("set", "/access/acl", "--path", "/datastore/backup/"+extra, "--auth-id", manualCfg.AuthID, "--role", "DatastoreReader", "--delete", "true")
+	rawList, err = manual.request(context.Background(), "GET", "/admin/host/"+cfg.HostID+"/snapshots", nil, false)
+	if err != nil || json.Unmarshal(rawList, &filtered) != nil || len(filtered.Data) != 0 {
+		t.Fatal("owner-limited operator saw another token's snapshots")
+	}
+	if _, err := manual.request(context.Background(), "POST", "/admin/host/"+cfg.HostID+"/restore", []byte(`{"store":"backup","ns":"`+extra+`","backup-id":"manual-share","backup-time":`+strconv.FormatInt(foreignTime, 10)+`,"destination":"/must-not-run"}`), false); err == nil {
+		t.Fatal("audit-only operator queued a restore")
+	}
 	if _, err := client.ListGroupArchive("backup", extra, "host", "foreign-documents", foreignTime, ".", 0, 100); err == nil {
 		t.Fatal("backup-only key read another token's group")
 	}
@@ -228,5 +317,51 @@ func TestLiveBackupIdentities(t *testing.T) {
 	if next.cfg.HostID != cfg.HostID || client.cfg.HostID != cfg.HostID {
 		t.Fatal("storage ID replaced device identity")
 	}
+	assertHistory(ns, "shared-photos", 4)
+	assertHistory(ns+"/nested/device", "provisioned-files", 1)
+	assertHistory(extra, "foreign-documents", 0)
+	// A manually managed storage key is attributable by the standard device namespace.
+	// Provision through the job API, then remove that job before listing the history.
+	rootNS, err := exec.Command("proxmox-backup-debug", "api", "get", "/admin/datastore/backup/namespace", "--max-depth", "1", "--output-format", "json").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var namespaces []struct {
+		NS string `json:"ns"`
+	}
+	if json.Unmarshal(rootNS, &namespaces) != nil {
+		t.Fatal("invalid namespace list")
+	}
+	devicesExisted := false
+	for _, namespace := range namespaces {
+		if namespace.NS == "devices" {
+			devicesExisted = true
+		}
+	}
+	if !devicesExisted {
+		t.Cleanup(func() {
+			api("delete", "/admin/datastore/backup/namespace", "--ns", "devices", "--delete-groups", "false")
+		})
+	}
+	deviceNS, deviceJob := "devices/"+cfg.HostID, job+"-d"
+	api("create", "/config/host-backup", "--id", deviceJob, "--host", cfg.HostID, "--store", "backup", "--ns", deviceNS, "--sources", "/fixture", "--enable", "false")
+	t.Cleanup(func() {
+		api("delete", "/admin/datastore/backup/namespace", "--ns", deviceNS, "--delete-groups", "true")
+	})
+	deviceJobPresent := true
+	t.Cleanup(func() {
+		if deviceJobPresent {
+			api("delete", "/config/host-backup/"+deviceJob)
+		}
+	})
+	api("set", "/access/acl", "--path", "/datastore/backup/"+deviceNS, "--auth-id", manualCfg.AuthID, "--role", "DatastoreBackup", "--propagate", "false")
+	t.Cleanup(func() {
+		api("set", "/access/acl", "--path", "/datastore/backup/"+deviceNS, "--auth-id", manualCfg.AuthID, "--role", "DatastoreBackup", "--delete", "true")
+	})
+	backup(manual, deviceNS, "custom-key-history", "manual-key-job", "Manual key in device namespace", documents)
+	api("delete", "/config/host-backup/"+deviceJob)
+	deviceJobPresent = false
+	assertHistory(deviceNS, "custom-key-history", 1)
+	t.Log("Host page preserves custom IDs, historical owners and manual namespaces; filters operator ACLs and unrelated groups; restore queue retains custom IDs")
 	t.Log("Nested namespace provisioning requires administrator permission; retained keys share arbitrary IDs without adopting device identity")
 }

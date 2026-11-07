@@ -44,7 +44,8 @@ needed. Returning to automatic mode does not undo ownership changes.
 
 Select a snapshot under the original host's Backups tab, choose Restore, select
 the destination host and enter a directory on that destination. The command
-keeps the original `backup-id` separately from the destination `host-id`.
+keeps the selected snapshot's actual `backup-id` separately from the destination
+`host-id`, including custom Android histories.
 Neither the source identity nor its snapshot history is renamed or adopted.
 
 There are two authorization checks:
