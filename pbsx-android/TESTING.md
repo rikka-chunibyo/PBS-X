@@ -1,8 +1,62 @@
-# Android preview validation — 2026-11-01
+# Android preview validation — 2026-11-06
 
 Branch: `pbsx-android-app`, based on PBS-X `026c165a2`.
 Phone target: Samsung S20 FE, Android 13 / One UI 5.1, unrooted with Shizuku.
 No physical Samsung phone was available for these checks.
+
+## 0.2.2: accessible backup catalogue
+
+Branch: `pbsx-android-backup-catalogue`, based on dark/progress commit
+`8b8424dac`. Restore now enumerates datastores, namespaces and backup groups
+using the storage credential, independently of local jobs and the enrolled host
+ID. The catalogue supports search, refresh and pages of 100 groups. Normal PBS
+ACL and ownership filtering still applies. Namespace-only keys can discover
+their groups without root-namespace access; unavailable locations produce a
+partial-list warning, while expired credentials and transport failures fail
+visibly. Refreshes are cancelled when leaving the screen, and changing saved
+credentials invalidates cached results.
+
+Each group's datastore, namespace, backup type and ID are preserved through
+snapshot listing, file browsing and selective restore. Host and container root
+file archives are supported. Image-only VM snapshots remain visible, with file
+browsing disabled and guidance to use PVE/PBS restore tools. Job **Snapshots**
+buttons open their configured history directly, without the old source-ID form.
+Existing job destinations and snapshots are preserved. Independent per-job
+histories are a proposal in [JOB-HISTORIES.md](JOB-HISTORIES.md), not an automatic
+migration in this version.
+
+Validation:
+
+- All 26 non-live Go tests passed with race detection. New cases cover storage
+  versus control credentials, other hosts and backup types, nested namespaces,
+  namespace-only access, duplicate locations, partial failures, expired keys,
+  invalid metadata, cancellation and preserving group identity in requests.
+- ARM64/x86-64 AAR and APK assembly, two Java unit tests and Android lint passed.
+  A final clean APK build, signature verification and 16 KiB ZIP alignment check
+  passed; the development signing certificate is unchanged. The APK is
+  `artifacts/pbsx-android-preview.apk` (version `0.2.2-preview`, code 5), SHA-256
+  `849bb5df4d6160b52da694c037d20ef8793310b65841a950cfa55f5b571f491c`.
+- All **18 Android 13 instrumentation tests passed with zero skips** against
+  a loopback HTTPS/PBS-reader fixture accepting dummy credentials only. The
+  catalogue shows six groups across two datastores and nested namespaces, finds
+  other hosts without local jobs, searches by namespace/type, and opens the
+  correct container source. A selected Unicode file restores through the real
+  native reader into SAF with its container identity intact. Image-only VM
+  snapshots disable file browsing. Existing navigation, Shizuku, progress,
+  schedules and all restore conflict-mode tests continue to pass.
+- The real PBS-X integration test passed on VM 104 with a disposable host, job,
+  namespace and automatically enrolled key. In addition to the existing three
+  snapshot/deduplication/historical/selective-restore checks, it verifies that
+  the catalogue contains only the key's authorized test group and reports all
+  three snapshots. Disposable server resources and uploaded tools were removed.
+  VM 104 was returned to its original stopped state and memory configuration;
+  the development VM was not stopped.
+
+Software renders of the actual laid-out Android views are in ignored
+`build/reports/android-ui/`, including `restore-catalogue.png` and
+`restore-vm-snapshots.png`. ATD does not render its physical display; Samsung
+system bars, document providers and background behavior still need phone
+testing. The emulator and dummy fixture were stopped after validation.
 
 ## 0.2.1: dark theme and live progress
 

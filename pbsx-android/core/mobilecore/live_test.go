@@ -129,6 +129,27 @@ func TestLivePBS(t *testing.T) {
 	if !strings.Contains(response.Data[2].Comment, "Photo job") {
 		t.Fatalf("snapshot list did not expose job name: %q", response.Data[2].Comment)
 	}
+	catalogueJSON, err := client.ListAccessibleBackups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalogue backupCatalogue
+	if err := json.Unmarshal([]byte(catalogueJSON), &catalogue); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, group := range catalogue.Groups {
+		if group.Store != "backup" || group.Namespace != namespace || group.Type != "host" || group.ID != cfg.HostID {
+			t.Fatalf("automatic key discovered an unauthorized group: %+v", group)
+		}
+		if group.Count != 3 {
+			t.Fatalf("catalogue snapshot count: %d", group.Count)
+		}
+		found = true
+	}
+	if !found || len(catalogue.Warnings) != 0 {
+		t.Fatalf("namespace-only key did not discover its group: %s", catalogueJSON)
+	}
 	// A destination identity does not adopt the source ID. The authorized key and
 	// explicit source group control reads, just as they do for normal PBS clients.
 	sourceID := cfg.HostID

@@ -93,11 +93,14 @@ public final class BackupService extends Service {
                 if (saved != null) job = BackupJob.from(new org.json.JSONObject(saved));
                 else job = JobStore.get(this, intent.getStringExtra("job_id"));
                 result =
-                    Operations.runJob(
+                    Operations.runGroupJob(
                         this,
                         job,
                         intent.getStringExtra("destination"),
                         intent.getStringExtra("source"),
+                        intent.getStringExtra("source_type") == null
+                            ? "host"
+                            : intent.getStringExtra("source_type"),
                         intent.getLongExtra("snapshot", 0),
                         intent.getStringExtra("selection") == null
                             ? "[\".\"]"

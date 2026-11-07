@@ -129,7 +129,6 @@ public class NavigationTest {
       restore = instrumentation.waitForMonitorWithTimeout(browser, 5000);
       instrumentation.removeMonitor(browser);
       assertNotNull(restore);
-      click(restore, "Load snapshots");
       click(restore, "Browse files");
       View photos = waitFor(restore, "Photos", false);
       instrumentation.runOnMainSync(() -> assertTrue(((View) photos.getParent()).performClick()));
@@ -174,8 +173,6 @@ public class NavigationTest {
       back(restore);
       waitFor(restore, "Browse files", false);
       back(restore);
-      waitFor(restore, "Load snapshots", false);
-      back(restore);
       restore = null;
       Instrumentation.ActivityMonitor edit =
           instrumentation.addMonitor(JobEditorActivity.class.getName(), null, false);
@@ -206,6 +203,86 @@ public class NavigationTest {
         c.getSharedPreferences("vault", 0).edit().remove("connection").commit();
       else Vault.save(c, oldVault);
       ScheduleService.configureAll(c);
+    }
+  }
+
+  private void search(Activity activity, String query, String absent) throws Exception {
+    android.widget.EditText field =
+        (android.widget.EditText) waitFor(activity, "Search backups", true);
+    instrumentation.runOnMainSync(() -> field.setText(query));
+    long deadline = System.currentTimeMillis() + 10000;
+    java.util.concurrent.atomic.AtomicBoolean gone =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    do {
+      instrumentation.runOnMainSync(
+          () -> gone.set(find(activity.findViewById(android.R.id.content), absent, false) == null));
+      if (!gone.get()) Thread.sleep(50);
+    } while (!gone.get() && System.currentTimeMillis() < deadline);
+    assertTrue("Search did not filter " + absent, gone.get());
+  }
+
+  @Test
+  public void restoreCatalogueFindsOtherHostsNamespacesAndBackupTypes() throws Exception {
+    String config = InstrumentationRegistry.getArguments().getString("pbsx_mock_config");
+    Assume.assumeTrue(config != null && !config.isEmpty());
+    Context c = instrumentation.getTargetContext();
+    String oldVault = Vault.load(c);
+    Activity main = null, restore = null;
+    try {
+      Vault.save(c, config);
+      main =
+          instrumentation.startActivitySync(
+              new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+      click(main, "Restore");
+      waitFor(main, "host/family-laptop", false);
+      waitFor(main, "host/grandmas-phone", false);
+      waitFor(main, "vm/100", false);
+      waitFor(main, "ct/101", false);
+      capture(main, "restore-catalogue");
+      search(main, "phones/kids", "host/family-laptop");
+      waitFor(main, "host/grandmas-phone", false);
+      search(main, "ct/101", "host/grandmas-phone");
+      View label = waitFor(main, "ct/101", false);
+      Instrumentation.ActivityMonitor browser =
+          instrumentation.addMonitor(RestoreActivity.class.getName(), null, false);
+      instrumentation.runOnMainSync(
+          () -> assertTrue(find((View) label.getParent(), "Snapshots", false).performClick()));
+      restore = instrumentation.waitForMonitorWithTimeout(browser, 5000);
+      instrumentation.removeMonitor(browser);
+      assertNotNull(restore);
+      assertEquals("ct", restore.getIntent().getStringExtra("source_type"));
+      assertEquals("101", restore.getIntent().getStringExtra("source"));
+      assertEquals("family", restore.getIntent().getStringExtra("store"));
+      click(restore, "Browse files");
+      waitFor(restore, "Snapshot contents", false);
+      back(restore);
+      waitFor(restore, "Browse files", false);
+      back(restore);
+      restore = null;
+      waitFor(main, "ct/101", false);
+      search(main, "vm/100", "ct/101");
+      View vm = waitFor(main, "vm/100", false);
+      browser = instrumentation.addMonitor(RestoreActivity.class.getName(), null, false);
+      instrumentation.runOnMainSync(
+          () -> assertTrue(find((View) vm.getParent(), "Snapshots", false).performClick()));
+      restore = instrumentation.waitForMonitorWithTimeout(browser, 5000);
+      instrumentation.removeMonitor(browser);
+      assertNotNull(restore);
+      View browse = waitFor(restore, "Browse files", false);
+      instrumentation.runOnMainSync(
+          () ->
+              assertFalse("Image-only snapshots must not offer file restore", browse.isEnabled()));
+      capture(restore, "restore-vm-snapshots");
+    } finally {
+      Activity a = restore, b = main;
+      instrumentation.runOnMainSync(
+          () -> {
+            if (a != null) a.finish();
+            if (b != null) b.finish();
+          });
+      if (oldVault.isEmpty())
+        c.getSharedPreferences("vault", 0).edit().remove("connection").commit();
+      else Vault.save(c, oldVault);
     }
   }
 }

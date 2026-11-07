@@ -63,6 +63,28 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	type group struct {
+		Store, NS, Kind, ID string
+		Files               []string
+	}
+	archives := []string{"root.mpxar.didx", "root.ppxar.didx"}
+	groups := []group{
+		{"backup", "", "host", "android-test", archives},
+		{"backup", "", "host", "family-laptop", archives},
+		{"backup", "", "vm", "100", []string{"drive-scsi0.img.fidx"}},
+		{"backup", "phones", "host", "android-test", archives},
+		{"backup", "phones/kids", "host", "grandmas-phone", archives},
+		{"family", "", "ct", "101", archives},
+	}
+	findGroup := func(r *http.Request) (group, bool) {
+		q := r.URL.Query()
+		for _, g := range groups {
+			if g.Store == q.Get("store") && g.NS == q.Get("ns") && g.Kind == q.Get("backup-type") && g.ID == q.Get("backup-id") {
+				return g, true
+			}
+		}
+		return group{}, false
+	}
 	readerHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var data []byte
 		var err error
@@ -101,6 +123,11 @@ func main() {
 			return
 		}
 		if r.URL.Path == "/api2/json/reader" {
+			g, ok := findGroup(r)
+			if !ok || g.Kind == "vm" || r.URL.Query().Get("backup-time") != "1700000000" {
+				http.Error(w, "unknown fixture snapshot", 400)
+				return
+			}
 			conn, rw, err := w.(http.Hijacker).Hijack()
 			if err != nil {
 				return
@@ -113,12 +140,50 @@ func main() {
 			(&http2.Server{}).ServeConn(conn, &http2.ServeConnOpts{Handler: readerHandler})
 			return
 		}
-		if r.URL.Path != "/api2/json/admin/datastore/backup/snapshots" {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api2/json/admin/datastore" {
+			fmt.Fprint(w, `{"data":[{"store":"backup"},{"store":"family"}]}`)
+			return
+		}
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api2/json/admin/datastore/"), "/")
+		if len(parts) != 2 {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"data":[{"backup-type":"host","backup-id":"android-test","backup-time":1700000000,"comment":"PBS-X Android: Photos"}]}`)
+		store, operation := parts[0], parts[1]
+		if store != "backup" && store != "family" {
+			http.NotFound(w, r)
+			return
+		}
+		if operation == "namespace" {
+			if store == "backup" {
+				fmt.Fprint(w, `{"data":[{"ns":""},{"ns":"phones"},{"ns":"phones/kids"}]}`)
+			} else {
+				fmt.Fprint(w, `{"data":[{"ns":""}]}`)
+			}
+			return
+		}
+		out := []map[string]any{}
+		for _, g := range groups {
+			if g.Store != store || g.NS != r.URL.Query().Get("ns") {
+				continue
+			}
+			if operation == "groups" {
+				out = append(out, map[string]any{"backup-type": g.Kind, "backup-id": g.ID, "last-backup": 1700000000, "backup-count": 1, "files": g.Files})
+			}
+			if operation == "snapshots" && g.Kind == r.URL.Query().Get("backup-type") && g.ID == r.URL.Query().Get("backup-id") {
+				files := []map[string]string{}
+				for _, name := range g.Files {
+					files = append(files, map[string]string{"filename": name, "crypt-mode": "none"})
+				}
+				out = append(out, map[string]any{"backup-type": g.Kind, "backup-id": g.ID, "backup-time": 1700000000, "comment": "PBS-X Android: Photos", "files": files})
+			}
+		}
+		if operation != "groups" && operation != "snapshots" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": out})
 	}))
 	defer server.Close()
 	endpoint, _ := url.Parse(server.URL)

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"path"
 	"sort"
-	"strings"
 
 	pxar "github.com/pbs-plus/pxar"
 	"github.com/pbs-plus/pxar/backupproxy"
@@ -24,6 +23,9 @@ type openSnapshot struct {
 func (s *openSnapshot) close() { close(s.stopped); s.fs.Close(); s.reader.Close() }
 
 func (c *Client) openSnapshot(ctx context.Context, store, namespace, source string, stamp int64) (*openSnapshot, error) {
+	return c.openGroupSnapshot(ctx, store, namespace, "host", source, stamp)
+}
+func (c *Client) openGroupSnapshot(ctx context.Context, store, namespace, backupType, source string, stamp int64) (*openSnapshot, error) {
 	cfg, err := c.pbsConfig(store, namespace)
 	if err != nil {
 		return nil, err
@@ -31,10 +33,10 @@ func (c *Client) openSnapshot(ctx context.Context, store, namespace, source stri
 	if source == "" {
 		source = c.cfg.HostID
 	}
-	if source == "." || safePath(source) != nil || strings.Contains(source, "/") || stamp <= 0 {
+	if validateGroup(backupType, source) != nil || stamp <= 0 {
 		return nil, errors.New("invalid snapshot")
 	}
-	reader := backupproxy.NewPBSReader(cfg, "host", source, stamp)
+	reader := backupproxy.NewPBSReader(cfg, backupType, source, stamp)
 	if err = reader.Connect(ctx); err != nil {
 		return nil, err
 	}
@@ -106,6 +108,9 @@ func directoryEntries(fs vfs.FileSystem, dir *pxar.FileInfo) ([]pxar.FileInfo, e
 
 // ListArchive returns one page of a snapshot directory; payloads are not fetched.
 func (c *Client) ListArchive(store, namespace, source string, stamp int64, relative string, offset, limit int64) (string, error) {
+	return c.ListGroupArchive(store, namespace, "host", source, stamp, relative, offset, limit)
+}
+func (c *Client) ListGroupArchive(store, namespace, backupType, source string, stamp int64, relative string, offset, limit int64) (string, error) {
 	if err := safePath(relative); err != nil {
 		return "", err
 	}
@@ -117,7 +122,7 @@ func (c *Client) ListArchive(store, namespace, source string, stamp int64, relat
 		return "", err
 	}
 	defer done()
-	snapshot, err := c.openSnapshot(ctx, store, namespace, source, stamp)
+	snapshot, err := c.openGroupSnapshot(ctx, store, namespace, backupType, source, stamp)
 	if err != nil {
 		return "", err
 	}

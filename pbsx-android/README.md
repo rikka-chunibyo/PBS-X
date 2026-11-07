@@ -23,7 +23,9 @@ preview, not a full device-image or private-app-data backup tool.
    `Documents`. Each job has its own sources, schedule and network settings.
 4. Tap the job's **Back up** button, initially using a small folder. Wi-Fi-only is enabled by
    default. Allow notifications to see progress and cancellation controls.
-5. Tap **Snapshots** on a job, or use the **Restore** tab. Browse a snapshot and
+5. Tap **Snapshots** on a job to open its configured destination, or use
+   **Restore** to see every backup group visible to your storage key across
+   datastores and namespaces. Search that list, open a group's snapshots, and
    check individual files or whole folders, including selections across folders.
    Tap **Restore selected**, choose a restore mode, then choose and confirm a
    writable destination. The default creates a fresh `PBS-X-restore-*` folder.
@@ -65,8 +67,8 @@ cloud backup and device transfer of this application's state are excluded.
 
 **Change storage API key** retains the automatically enrolled device identity
 while selecting another token for datastore access. A broader authorized key
-can list and restore another host's snapshots: enter that host's ID when
-browsing. Clearing both storage-key fields returns to the automatic key.
+can list and restore another host's snapshots through the global **Restore**
+catalogue. Clearing both storage-key fields returns to the automatic key.
 Normal PBS ownership and ACL checks continue to apply; IDs are not adopted or
 reassigned. This preview uses API tokens; password/ticket login is not included.
 
@@ -100,6 +102,18 @@ group. Each snapshot contains only the sources selected by the job that ran;
 the job name is saved in snapshot notes. Use distinct namespaces if separate
 retention or access boundaries are needed, and authorize each namespace in a
 server host backup job when using an automatic key.
+
+Independent per-job histories under a device namespace are proposed in
+[Job histories](JOB-HISTORIES.md). Manual and scheduled runs of one job would
+share that job's history. Version 0.2.2 preserves existing configured destinations
+and snapshots; it does not automatically create or move namespaces.
+
+The Restore catalogue includes host, VM and container groups. Supported root
+PXAR archives can be browsed for file restores, including container groups.
+Snapshots containing only disk images or other archive layouts remain visible
+with file browsing disabled and guidance to use PVE/PBS restore tools. The
+catalogue uses the selected storage key and reports partial listing failures;
+it does not derive access from the phone's local job list.
 
 On Samsung, consider adding PBS-X Backup to **Battery → Background usage limits
 → Never sleeping apps** if enabling a schedule. Scheduled jobs can be deferred
@@ -188,9 +202,10 @@ Shizuku instrumentation requires its service to be running with permission
 granted to PBS-X. These optional cases skip when their prerequisites are absent;
 the recorded validation supplies both. See
 [the validation report](TESTING.md) for tested cases and remaining device work.
-Version 0.2.0 passed all 13 instrumentation cases, including job migration,
-independent Android schedules, UI navigation, file browsing and native
-selective restores through SAF in each conflict mode.
+Version 0.2.2 passed all 18 instrumentation cases, including job migration,
+independent Android schedules, UI navigation, live progress, catalogue discovery,
+container file browsing and native selective restores through SAF in each
+conflict mode.
 
 No test uses a real person's phone data. Document providers with unknown file
 sizes are rejected. Individual SAF directories are limited to 40,000 entries;

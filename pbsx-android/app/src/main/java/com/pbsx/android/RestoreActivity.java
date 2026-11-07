@@ -26,8 +26,8 @@ public final class RestoreActivity extends Activity {
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
   private final TreeSet<String> selected = new TreeSet<>();
   private LinearLayout page, footer;
-  private EditText storeInput, namespaceInput, sourceInput;
   private String store = "backup", namespace = "", source = "", relative = ".", mode = "fail";
+  private String sourceType = "host";
   private long snapshot, offset, total;
   private int stage, generation, snapshotOffset;
   private boolean loading;
@@ -43,6 +43,9 @@ public final class RestoreActivity extends Activity {
       if (config.isEmpty()) throw new Exception("Connect to PBS-X in Settings first");
       JSONObject cfg = new JSONObject(config);
       source = cfg.getString("host_id");
+      if (getIntent().hasExtra("source")) source = getIntent().getStringExtra("source");
+      if (getIntent().hasExtra("source_type"))
+        sourceType = getIntent().getStringExtra("source_type");
       store =
           getIntent().getStringExtra("store") == null
               ? Settings.store(this)
@@ -66,6 +69,7 @@ public final class RestoreActivity extends Activity {
         store = saved.getString("store", store);
         namespace = saved.getString("namespace", namespace);
         source = saved.getString("source", source);
+        sourceType = saved.getString("source_type", sourceType);
         relative = saved.getString("relative", ".");
         snapshot = saved.getLong("snapshot", 0);
         mode = saved.getString("mode", "fail");
@@ -77,47 +81,31 @@ public final class RestoreActivity extends Activity {
           return;
         }
       }
-      setup();
+      loadSnapshots();
     } catch (Exception e) {
       message(e.getMessage());
     }
   }
 
-  private void setup() {
+  private void showError(String error) {
     stage = 0;
     loading = false;
     page.removeAllViews();
     footer.removeAllViews();
-    Ui.title(page, "Choose a backup source");
-    Ui.hint(page, "Use this host or another host your storage API key can read.");
-    LinearLayout card = Ui.card(page);
-    sourceInput = Ui.input(card, "Source host ID", source, false);
-    storeInput = Ui.input(card, "Datastore", store, false);
-    namespaceInput = Ui.input(card, "Namespace · blank means root", namespace, false);
+    Ui.title(page, "Could not load this backup");
     Ui.hint(
-        card,
-        "Jobs using the same host and destination share its snapshot history. New backups show the"
-            + " job name.");
-    Ui.button(
         page,
-        "Load snapshots",
-        true,
-        v -> {
-          try {
-            source = sourceInput.getText().toString().trim();
-            store = storeInput.getText().toString().trim();
-            namespace = namespaceInput.getText().toString().trim();
-            if (!source.matches("[A-Za-z0-9_][A-Za-z0-9_.-]{1,63}"))
-              throw new Exception("Enter a valid source host ID");
-            BackupJob check = new BackupJob();
-            check.store = store;
-            check.namespace = namespace;
-            check.validate(false);
-            loadSnapshots();
-          } catch (Exception e) {
-            message(e.getMessage());
-          }
-        });
+        sourceType
+            + "/"
+            + source
+            + " · "
+            + store
+            + " / "
+            + (namespace.isEmpty() ? "root" : namespace));
+    Ui.hint(
+        Ui.card(page), error == null ? "Check the connection and storage key, then retry." : error);
+    Ui.button(page, "Retry snapshots", true, v -> loadSnapshots());
+    Ui.button(footer, "Back", false, v -> finish());
   }
 
   interface Fetch {
@@ -154,8 +142,7 @@ public final class RestoreActivity extends Activity {
                   try {
                     result.show(response);
                   } catch (Exception e) {
-                    message(e.getMessage());
-                    setup();
+                    showError(e.getMessage());
                   }
                 });
           } catch (Exception e) {
@@ -163,8 +150,7 @@ public final class RestoreActivity extends Activity {
                 () -> {
                   if (ticket != generation || isDestroyed() || isFinishing()) return;
                   loading = false;
-                  message(e.getMessage());
-                  setup();
+                  showError(e.getMessage());
                 });
           }
         });
@@ -173,7 +159,7 @@ public final class RestoreActivity extends Activity {
   private void loadSnapshots() {
     fetch(
         "Loading snapshots",
-        c -> c.listSnapshots(store, namespace, source),
+        c -> c.listGroupSnapshots(store, namespace, sourceType, source),
         value -> {
           JSONArray all = new JSONObject(value).getJSONArray("data");
           ArrayList<JSONObject> list = new ArrayList<>();
@@ -191,7 +177,15 @@ public final class RestoreActivity extends Activity {
     page.removeAllViews();
     footer.removeAllViews();
     Ui.title(page, "Snapshots");
-    Ui.hint(page, source + " · " + store + " / " + (namespace.isEmpty() ? "root" : namespace));
+    Ui.hint(
+        page,
+        sourceType
+            + "/"
+            + source
+            + " · "
+            + store
+            + " / "
+            + (namespace.isEmpty() ? "root" : namespace));
     if (snapshots.length() == 0)
       Ui.hint(Ui.card(page), "No completed snapshots are available for this source.");
     for (int i = snapshotOffset; i < Math.min(snapshotOffset + 100, snapshots.length()); i++) {
@@ -202,18 +196,26 @@ public final class RestoreActivity extends Activity {
       Ui.text(card, date(time), 19, Ui.TEXT);
       String comment = item.optString("comment", "");
       if (!comment.isEmpty()) Ui.hint(card, comment);
-      Ui.button(
-          card,
-          "Browse files",
-          true,
-          v -> {
-            snapshot = time;
-            relative = ".";
-            selected.clear();
-            offset = 0;
-            stage = 2;
-            loadDirectory(".", 0);
-          });
+      boolean browsable = canBrowse(item);
+      if (!browsable)
+        Ui.hint(
+            card,
+            "This snapshot has no supported root file archive. Use PVE/PBS tools to restore disk"
+                + " images or other archive layouts.");
+      Button browse =
+          Ui.button(
+              card,
+              "Browse files",
+              true,
+              v -> {
+                snapshot = time;
+                relative = ".";
+                selected.clear();
+                offset = 0;
+                stage = 2;
+                loadDirectory(".", 0);
+              });
+      browse.setEnabled(browsable);
     }
     LinearLayout pager = Ui.row(this);
     if (snapshotOffset > 0)
@@ -235,7 +237,31 @@ public final class RestoreActivity extends Activity {
             showSnapshots();
           });
     page.addView(pager);
-    Ui.button(footer, "Change source", false, v -> setup());
+    LinearLayout controls = Ui.row(this);
+    Ui.button(controls, "Refresh snapshots", false, v -> loadSnapshots());
+    Ui.button(
+        controls,
+        getIntent().getBooleanExtra("from_catalogue", false) ? "Back to backups" : "Back to jobs",
+        false,
+        v -> finish());
+    footer.addView(controls);
+  }
+
+  private boolean canBrowse(JSONObject item) {
+    JSONArray files = item.optJSONArray("files");
+    if (files == null) return sourceType.equals("host");
+    boolean metadata = false, payload = false;
+    for (int i = 0; i < files.length(); i++) {
+      Object file = files.opt(i);
+      String name =
+          file instanceof JSONObject
+              ? ((JSONObject) file).optString("filename")
+              : String.valueOf(file);
+      if (name.equals("root.pxar.didx")) return true;
+      if (name.equals("root.mpxar.didx")) metadata = true;
+      if (name.equals("root.ppxar.didx")) payload = true;
+    }
+    return metadata && payload;
   }
 
   private void loadDirectory(String path, long start) {
@@ -244,7 +270,7 @@ public final class RestoreActivity extends Activity {
     stage = 2;
     fetch(
         "Opening folder",
-        c -> c.listArchive(store, namespace, source, snapshot, path, start, 200),
+        c -> c.listGroupArchive(store, namespace, sourceType, source, snapshot, path, start, 200),
         value -> {
           JSONObject result = new JSONObject(value);
           entries = result.getJSONArray("entries");
@@ -550,6 +576,7 @@ public final class RestoreActivity extends Activity {
                         .putExtra("job_config", target.json().toString())
                         .putExtra("destination", uri.toString())
                         .putExtra("source", source)
+                        .putExtra("source_type", sourceType)
                         .putExtra("snapshot", snapshot)
                         .putExtra("selection", selectionJSON())
                         .putExtra("mode", mode));
@@ -579,11 +606,11 @@ public final class RestoreActivity extends Activity {
     }
     if (stage == 2) {
       if (snapshots.length() > 0) showSnapshots();
-      else setup();
+      else loadSnapshots();
       return;
     }
     if (stage == 1) {
-      setup();
+      finish();
       return;
     }
     finish();
@@ -609,14 +636,10 @@ public final class RestoreActivity extends Activity {
   @Override
   protected void onSaveInstanceState(Bundle out) {
     super.onSaveInstanceState(out);
-    if (stage == 0 && storeInput != null) {
-      store = storeInput.getText().toString();
-      namespace = namespaceInput.getText().toString();
-      source = sourceInput.getText().toString();
-    }
     out.putString("store", store);
     out.putString("namespace", namespace);
     out.putString("source", source);
+    out.putString("source_type", sourceType);
     out.putString("relative", relative);
     out.putLong("snapshot", stage == 2 ? snapshot : 0);
     out.putLong("offset", offset);

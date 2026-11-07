@@ -39,6 +39,7 @@ public final class MainActivity extends Activity {
   private long fingerprint;
   private boolean busy;
   private ConnectionDialogs connections;
+  private BackupCatalogue catalogue;
   private final Runnable refresh =
       new Runnable() {
         public void run() {
@@ -72,6 +73,15 @@ public final class MainActivity extends Activity {
     if (state != null) tab = state.getInt("tab", 0);
     Shizuku.addRequestPermissionResultListener(permission);
     connections = new ConnectionDialogs(this, this::background, this::render);
+    catalogue =
+        new BackupCatalogue(
+            this,
+            this::browseGroup,
+            () -> {
+              tab = 3;
+              render();
+            },
+            state);
     root = Ui.column(this);
     root.setBackgroundColor(Ui.BG);
     Ui.systemBars(this);
@@ -129,12 +139,14 @@ public final class MainActivity extends Activity {
 
   @Override
   protected void onPause() {
+    catalogue.setActive(false);
     handler.removeCallbacks(refresh);
     super.onPause();
   }
 
   @Override
   protected void onDestroy() {
+    catalogue.close();
     Shizuku.removeRequestPermissionResultListener(permission);
     executor.shutdown();
     super.onDestroy();
@@ -143,6 +155,7 @@ public final class MainActivity extends Activity {
   @Override
   protected void onSaveInstanceState(Bundle out) {
     out.putInt("tab", tab);
+    catalogue.save(out);
     super.onSaveInstanceState(out);
   }
 
@@ -187,6 +200,7 @@ public final class MainActivity extends Activity {
 
   private void render() {
     if (page == null || isDestroyed() || isFinishing()) return;
+    catalogue.setActive(tab == 1);
     page.removeAllViews();
     nav.removeAllViews();
     transferBar = null;
@@ -344,28 +358,23 @@ public final class MainActivity extends Activity {
   }
 
   private void restore(JSONObject cfg) throws Exception {
-    Ui.title(page, "Restore files");
-    Ui.hint(
-        page,
-        "Browse a snapshot, choose files or folders, then choose a destination and conflict mode.");
-    LinearLayout intro = Ui.card(page);
-    Ui.text(intro, "Only what you need", 21, Ui.TEXT);
-    Ui.hint(
-        intro,
-        "Select individual files across folders, an entire directory, or the whole snapshot."
-            + " Restore into a fresh folder, skip existing files, replace different files, or keep"
-            + " both with Rename.");
-    Ui.button(intro, "Browse backups", true, v -> browse(null));
-    for (BackupJob job : JobStore.all(this)) {
-      LinearLayout card = Ui.card(page);
-      Ui.text(card, job.name, 18, Ui.TEXT);
-      Ui.hint(card, job.target());
-      Ui.button(card, "Browse this destination", false, v -> browse(job));
+    LinearLayout content = Ui.column(this);
+    page.addView(content);
+    catalogue.render(content);
+  }
+
+  private void browseGroup(JSONObject group) {
+    if (busy) {
+      message("Connection setup is still running");
+      return;
     }
-    Ui.hint(
-        page,
-        "To restore another host's backups, enter its source host ID in the browser. Your storage"
-            + " key must have access to that group.");
+    startActivity(
+        new Intent(this, RestoreActivity.class)
+            .putExtra("store", group.optString("store"))
+            .putExtra("namespace", group.optString("namespace"))
+            .putExtra("source", group.optString("backup_id"))
+            .putExtra("source_type", group.optString("backup_type"))
+            .putExtra("from_catalogue", true));
   }
 
   private void activity() throws Exception {

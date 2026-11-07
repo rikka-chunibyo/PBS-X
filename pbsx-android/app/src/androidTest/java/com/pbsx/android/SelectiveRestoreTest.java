@@ -18,6 +18,27 @@ import org.junit.runner.RunWith;
 
 @RunWith(AndroidJUnit4.class)
 public class SelectiveRestoreTest {
+  @Test
+  public void containerGroupIdentityReachesTheReaderAndSelectiveRestore() throws Exception {
+    Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    Client client = client(c);
+    JSONObject listing = new JSONObject(client.listAccessibleBackups());
+    assertEquals(6, listing.getJSONArray("groups").length());
+    JSONObject root =
+        new JSONObject(client.listGroupArchive("family", "", "ct", "101", 1700000000, ".", 0, 200));
+    assertEquals(3, root.getInt("total"));
+    String unique = "ct-" + System.nanoTime();
+    File base = new File(c.getCacheDir(), "document-fixture/" + unique);
+    assertTrue(base.mkdirs());
+    Uri uri = DocumentsContract.buildTreeDocumentUri(FixtureProvider.AUTHORITY, "root:" + unique);
+    try (AndroidDocuments docs =
+        new AndroidDocuments(new DocumentTree(c.getContentResolver(), uri))) {
+      client.restoreGroupSelected(
+          "family", "", "ct", "101", 1700000000, "[\"Photos/nested/猫.jpg\"]", "fail", docs, null);
+    }
+    assertEquals("image fixture", read(base, "Photos/nested/猫.jpg"));
+  }
+
   private Client client(Context c) throws Exception {
     String config = InstrumentationRegistry.getArguments().getString("pbsx_mock_config");
     Assume.assumeTrue("Requires the loopback archive fixture", config != null && !config.isEmpty());

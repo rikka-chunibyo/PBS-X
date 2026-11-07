@@ -61,6 +61,9 @@ func selections(raw string) ([]string, error) {
 // Modes: fail (fresh folder), skip (existing files untouched), replace (only
 // differing files overwritten), rename (conflicting incoming files keep both).
 func (c *Client) RestoreSelected(store, namespace, source string, stamp int64, selectionJSON, mode string, docs Documents, progress Progress) (string, error) {
+	return c.RestoreGroupSelected(store, namespace, "host", source, stamp, selectionJSON, mode, docs, progress)
+}
+func (c *Client) RestoreGroupSelected(store, namespace, backupType, source string, stamp int64, selectionJSON, mode string, docs Documents, progress Progress) (string, error) {
 	paths, err := selections(selectionJSON)
 	if err != nil {
 		return "", err
@@ -76,7 +79,7 @@ func (c *Client) RestoreSelected(store, namespace, source string, stamp int64, s
 	report := newTransferReporter(ctx, c.details)
 	defer report.close()
 	report.phase("Opening snapshot", "", -1)
-	snapshot, err := c.openSnapshot(ctx, store, namespace, source, stamp)
+	snapshot, err := c.openGroupSnapshot(ctx, store, namespace, backupType, source, stamp)
 	if err != nil {
 		return "", err
 	}

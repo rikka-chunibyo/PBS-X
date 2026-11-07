@@ -63,6 +63,12 @@ type Client struct {
 	details ProgressDetails
 }
 
+type responseError struct{ status int }
+
+func (e *responseError) Error() string {
+	return fmt.Sprintf("PBS request failed (%d); check credentials, datastore, namespace and the host backup job", e.status)
+}
+
 // SocketBinder binds an unconnected TCP socket to the selected Android network.
 // Java must duplicate the borrowed descriptor, bind it, then close the duplicate.
 type SocketBinder interface{ BindSocket(fd int64) error }
@@ -186,7 +192,7 @@ func (c *Client) request(ctx context.Context, method, endpoint string, body []by
 		return nil, errors.New("server response too large")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("PBS request failed (%d); check credentials, datastore, namespace and the host backup job", response.StatusCode)
+		return nil, &responseError{status: response.StatusCode}
 	}
 	return raw, nil
 }
@@ -240,7 +246,7 @@ func Enroll(code, hostname string) (string, error) {
 	}
 	cfg.Certificate = cert
 	cfg.PrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
-	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.2.1-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
+	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.2.2-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
 	response, err := c.request(context.Background(), "POST", "/pbsx/agent/bootstrap", body, false)
 	if err != nil {
 		return "", err
@@ -277,18 +283,26 @@ func (c *Client) pbsConfig(store, namespace string) (backupproxy.PBSConfig, erro
 }
 
 func (c *Client) ListSnapshots(store, namespace, sourceHost string) (string, error) {
+	if sourceHost == "" {
+		sourceHost = c.cfg.HostID
+	}
+	return c.ListGroupSnapshots(store, namespace, "host", sourceHost)
+}
+
+// ListGroupSnapshots lists any PBS group visible to the selected storage key.
+func (c *Client) ListGroupSnapshots(store, namespace, backupType, source string) (string, error) {
 	if _, err := c.pbsConfig(store, namespace); err != nil {
 		return "", err
 	}
-	if sourceHost == "" {
-		sourceHost = c.cfg.HostID
+	if err := validateGroup(backupType, source); err != nil {
+		return "", err
 	}
 	ctx, done, err := c.begin()
 	if err != nil {
 		return "", err
 	}
 	defer done()
-	q := url.Values{"backup-type": {"host"}, "backup-id": {sourceHost}}
+	q := url.Values{"backup-type": {backupType}, "backup-id": {source}}
 	if namespace != "" {
 		q.Set("ns", namespace)
 	}

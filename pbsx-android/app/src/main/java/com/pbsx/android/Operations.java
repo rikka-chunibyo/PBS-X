@@ -140,6 +140,31 @@ final class Operations {
       Progress progress,
       Cancellation cancellation)
       throws Exception {
+    return runGroupJob(
+        context,
+        job,
+        destination,
+        source,
+        "host",
+        snapshot,
+        selections,
+        mode,
+        progress,
+        cancellation);
+  }
+
+  static String runGroupJob(
+      Context context,
+      BackupJob job,
+      String destination,
+      String source,
+      String sourceType,
+      long snapshot,
+      String selections,
+      String mode,
+      Progress progress,
+      Cancellation cancellation)
+      throws Exception {
     job.validate(destination == null);
     if (!running.compareAndSet(false, true)) throw new BusyException();
     ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
@@ -207,8 +232,16 @@ final class Operations {
         try (AndroidDocuments docs = new AndroidDocuments(output)) {
           org.json.JSONObject stats =
               new org.json.JSONObject(
-                  client.restoreSelected(
-                      job.store, job.namespace, source, snapshot, selections, mode, docs, null));
+                  client.restoreGroupSelected(
+                      job.store,
+                      job.namespace,
+                      sourceType,
+                      source,
+                      snapshot,
+                      selections,
+                      mode,
+                      docs,
+                      null));
           result =
               "Restored "
                   + stats.getLong("files")
