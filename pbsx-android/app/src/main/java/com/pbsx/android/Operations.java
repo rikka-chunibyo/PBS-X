@@ -258,7 +258,14 @@ final class Operations {
       TransferState.phase("Preparing selected sources");
       publish.run();
       try (AndroidDocuments docs =
-          new AndroidDocuments(context, job.sources, job.shizuku, job.apks, job.data, job.obb)) {
+          new AndroidDocuments(
+              context,
+              job,
+              cancellation,
+              phase -> {
+                TransferState.phase(phase);
+                publish.run();
+              })) {
         org.json.JSONObject backup =
             new org.json.JSONObject(
                 client.backupGroupJob(

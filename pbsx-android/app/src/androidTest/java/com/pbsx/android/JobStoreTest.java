@@ -70,6 +70,53 @@ public class JobStoreTest {
   }
 
   @Test
+  public void savesPerJobAppFiltersAndExplicitExportChoices() throws Exception {
+    Context c = isolated();
+    BackupJob job = new BackupJob();
+    job.shizuku = true;
+    job.apks = true;
+    job.allApps = false;
+    job.packages.put("com.pbsx.android");
+    job.exports.put("sms").put("calendar");
+    JobStore.save(c, job);
+    BackupJob saved = JobStore.get(c, job.id);
+    assertFalse(saved.allApps);
+    assertEquals(job.packages.toString(), saved.packages.toString());
+    assertEquals(job.exports.toString(), saved.exports.toString());
+    saved.validate(true);
+    JSONObject legacy = job.json();
+    legacy.remove("all_apps");
+    legacy.remove("packages");
+    legacy.remove("exports");
+    BackupJob old = BackupJob.from(legacy);
+    assertTrue(old.allApps);
+    assertEquals(0, old.exports.length());
+    for (String key : new String[] {"all_apps", "packages", "exports"}) {
+      JSONObject malformed = job.json().put(key, "invalid");
+      try {
+        BackupJob.from(malformed);
+        fail("Malformed selection was silently accepted");
+      } catch (Exception expected) {
+      }
+    }
+    saved.packages = new JSONArray();
+    try {
+      saved.validate(true);
+      fail("Empty selected-app filter accepted");
+    } catch (Exception expected) {
+    }
+    saved.apks = false;
+    saved.exports = new JSONArray().put("contacts");
+    saved.validate(true);
+    saved.exports.put("contacts");
+    try {
+      saved.validate(true);
+      fail("Duplicate export accepted");
+    } catch (Exception expected) {
+    }
+  }
+
+  @Test
   public void migratesExistingFoldersAndScheduleExactlyOnce() throws Exception {
     Context c = isolated();
     JSONArray sources =

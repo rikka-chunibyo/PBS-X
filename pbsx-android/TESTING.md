@@ -1,9 +1,48 @@
-# Android preview validation — 2026-11-06
+# Android preview validation — 2026-11-07
 
-Latest branch: `pbsx-device-backup-identities`. The original Android series began
+Latest branch: `pbsx-android-shizuku-exports`. The original Android series began
 on `pbsx-android-app`, based on PBS-X `026c165a2`.
 Phone target: Samsung S20 FE, Android 13 / One UI 5.1, unrooted with Shizuku.
-No physical Samsung phone was available for these checks.
+The Samsung phone was surveyed read-only; this version was built and tested in
+an Android 13 emulator. No phone update or actual provider-data export was performed.
+
+## 0.4.0: optional device exports and per-app Shizuku selection
+
+Jobs can select particular apps for APK, Android/data and Android/obb sources,
+or retain the existing all-apps behavior. Independent, disabled-by-default
+Shizuku exports cover contacts, SMS, MMS with attachments, call history,
+calendar and nine explicitly allowed device preferences. They require Android
+12 or later. Normal SD-card selection continues through the document picker.
+
+Provider exports are staged in bounded private cache and backed up as
+`Device-data/<category>.zip`. Restores return ordinary files; automatic Android
+database import is not implemented. Contacts include a manually importable
+vCard. See [EXPORT-FORMAT.md](EXPORT-FORMAT.md) for contents, limits and restore
+scope. Secure Folder and encryption remain future work.
+
+Passed validation:
+
+- **All 29 Android 13 instrumentation tests passed, with zero skips.** Real
+  Shizuku Binder calls read synthetic provider records under shell UID 2000.
+  Tests cover all six categories, typed Unicode/BLOB/null values, vCards and
+  photos, MMS attachments and safe paths, deterministic unchanged exports,
+  denied/oversized records, cancellation, cache cleanup, app filtering and
+  saved editor selections. Existing catalogue, restore, progress, scheduling
+  and native-reader checks also pass.
+- All 26 non-live Go tests passed with race detection. ARM64/x86-64 native
+  bindings, clean APK/test-APK and release assembly, two Java unit tests and
+  Android lint passed. APK signature and 16 KiB ZIP alignment checks passed;
+  the development signing certificate is unchanged.
+- A release DEX scan confirmed that debug-only provider/service fixtures are
+  excluded. Production uses real provider readers; there is no mock-data mode.
+
+APK: `artifacts/pbsx-android-preview.apk`, version `0.4.0-preview`, code 7.
+SHA-256: `2a3409a44708a6355651ea106b73b0095b67c59c6c5a5da6c2621c8e208e9436`.
+A software render of the actual editor view is in ignored
+`build/reports/android-ui/shizuku-source-options.png`. The emulator and loopback
+fixture were stopped after testing. No server changes were made in this
+version, and the live PBS suites were not rerun; their preceding validation is
+recorded below. Samsung-specific provider behavior still needs phone testing.
 
 ## 0.3.0: editable backup histories and namespace permissions
 

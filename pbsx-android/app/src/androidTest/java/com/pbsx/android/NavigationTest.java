@@ -56,7 +56,14 @@ public class NavigationTest {
 
   private void click(Activity activity, String label) throws Exception {
     View v = waitFor(activity, label, false);
-    instrumentation.runOnMainSync(() -> assertTrue(v.performClick()));
+    instrumentation.runOnMainSync(
+        () -> {
+          boolean consumed = v.performClick();
+          // CompoundButton toggles even when no ordinary click listener consumes it.
+          assertTrue(
+              "Click was not consumed: " + label,
+              consumed || v instanceof android.widget.CompoundButton);
+        });
   }
 
   private void back(Activity activity) throws Exception {
@@ -295,6 +302,89 @@ public class NavigationTest {
             if (b != null) b.finish();
             if (d != null) d.finish();
             if (e != null) e.finish();
+          });
+      if (job != null) JobStore.delete(c, job.id);
+      if (oldVault.isEmpty())
+        c.getSharedPreferences("vault", 0).edit().remove("connection").commit();
+      else Vault.save(c, oldVault);
+      ScheduleService.configureAll(c);
+    }
+  }
+
+  @Test
+  public void editorSavesAppSelectionAndIndependentDeviceExports() throws Exception {
+    Assume.assumeTrue(rikka.shizuku.Shizuku.pingBinder());
+    Assume.assumeTrue(
+        rikka.shizuku.Shizuku.checkSelfPermission()
+            == android.content.pm.PackageManager.PERMISSION_GRANTED);
+    Context c = instrumentation.getTargetContext();
+    String config = InstrumentationRegistry.getArguments().getString("pbsx_mock_config");
+    Assume.assumeTrue(config != null && !config.isEmpty());
+    String oldVault = Vault.load(c);
+    Activity editor = null;
+    BackupJob job = null;
+    try {
+      Vault.save(c, config);
+      job = BackupJob.create(c);
+      job.name = "Source choices";
+      job.shizuku = true;
+      job.apks = true;
+      job.allApps = false;
+      job.packages.put("com.pbsx.android");
+      job.exports.put("sms");
+      JobStore.save(c, job);
+      editor =
+          instrumentation.startActivitySync(
+              new Intent(c, JobEditorActivity.class)
+                  .putExtra("job_id", job.id)
+                  .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+      click(editor, "Contacts");
+      click(editor, "Call history");
+      click(editor, "Choose apps");
+      AtomicReference<View> options = new AtomicReference<>();
+      long deadline = System.currentTimeMillis() + 15000;
+      do {
+        instrumentation.runOnMainSync(
+            () -> {
+              for (View window : android.view.inspector.WindowInspector.getGlobalWindowViews())
+                if (find(window, "Choose apps and app folders", false) != null) options.set(window);
+            });
+        if (options.get() == null) Thread.sleep(50);
+      } while (options.get() == null && System.currentTimeMillis() < deadline);
+      assertNotNull("App picker did not appear", options.get());
+      instrumentation.runOnMainSync(
+          () -> assertTrue(find(options.get(), "Use selected", false).performClick()));
+      deadline = System.currentTimeMillis() + 5000;
+      java.util.concurrent.atomic.AtomicBoolean attached =
+          new java.util.concurrent.atomic.AtomicBoolean(true);
+      do {
+        instrumentation.runOnMainSync(() -> attached.set(options.get().isAttachedToWindow()));
+        if (attached.get()) Thread.sleep(50);
+      } while (attached.get() && System.currentTimeMillis() < deadline);
+      assertFalse("App picker did not close", attached.get());
+      waitFor(editor, "Selected apps: 1", false);
+      View title = waitFor(editor, "Optional Shizuku sources", false);
+      instrumentation.runOnMainSync(
+          () -> {
+            android.view.ViewParent parent = title.getParent();
+            while (parent != null && !(parent instanceof android.widget.ScrollView))
+              parent = parent.getParent();
+            if (parent != null)
+              ((android.widget.ScrollView) parent).scrollTo(0, ((View) title.getParent()).getTop());
+          });
+      capture(editor, "shizuku-source-options");
+      click(editor, "Save job");
+      editor = null;
+      BackupJob saved = JobStore.get(c, job.id);
+      assertFalse(saved.allApps);
+      assertTrue(saved.apks);
+      assertEquals("[\"com.pbsx.android\"]", saved.packages.toString());
+      assertEquals("[\"contacts\",\"sms\",\"calls\"]", saved.exports.toString());
+    } finally {
+      Activity a = editor;
+      instrumentation.runOnMainSync(
+          () -> {
+            if (a != null) a.finish();
           });
       if (job != null) JobStore.delete(c, job.id);
       if (oldVault.isEmpty())

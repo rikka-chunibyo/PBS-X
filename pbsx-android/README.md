@@ -144,9 +144,40 @@ job's editor, enable Shizuku mode, then opt into individual sources:
   `/storage/emulated/0/Android/data`.
 - **Android/obb:** shell-readable expansion files under
   `/storage/emulated/0/Android/obb`.
+- **Contacts:** records, groups, photos and a standard `contacts.vcf` export.
+- **SMS messages**, **MMS messages and attachments**, **Call history** and
+  **Calendars and events:** independent structured-data exports.
+- **Selected device preferences:** an explicit list of display/rotation,
+  screen-timeout and feedback preferences. Account credentials and lock settings
+  are excluded.
 
-The UserService is read-only and restricts reads to those roots and package
-manager-reported APK locations. There is no arbitrary command or path API.
+**All apps and external app folders** keeps the previous behavior for the three
+file sources. **Choose apps** restricts APKs, Android/data and Android/obb to
+selected packages/folders for that job. Device-data categories are independent
+of that filter, disabled by default and require Android 12 or later. Missing
+permissions or providers fail the selected export visibly; records are not
+silently skipped. Older jobs keep All apps and have no device exports enabled.
+
+SD-card folders already work through the ordinary folder picker. Shizuku is not
+required to select those folders, and no separate SD-card mode was added.
+
+Device exports appear under `Device-data/<category>.zip`, with versioned JSON
+records and binary attachments; contacts also include `contacts.vcf`. Restoring
+them uses the normal file restore flow. **Automatic import into Android's live
+contacts/messages/calendar databases is not implemented.** The vCard can be
+imported manually using a contacts application. See [Export format](EXPORT-FORMAT.md).
+
+Unlike ordinary file sources, provider exports need temporary app-private cache
+so the streaming backup engine knows each archive's size. This preview allows
+up to 512 MiB combined exports per run, reserves 32 MiB of free space and times
+out a category after ten minutes. It also limits provider records/field sizes.
+Preparation shows the active category and bytes prepared; cancellation stops
+the reader. Cache files are removed on normal completion/failure/cancellation;
+orphaned files from process termination are removed on the next app start.
+
+The UserService is read-only. File access is restricted to those roots and
+package-manager-reported APK locations; exports use fixed provider categories.
+There is no arbitrary command, path, SQL or provider-URI API.
 Permission loss, inaccessible directories, duplicate names or oversized Binder
 directory listings fail visibly; disable an unavailable source and retry.
 Shizuku is only contacted when enabled with a selected Shizuku source.
@@ -161,8 +192,11 @@ silently install them or write data back into applications. Reinstallation of
 a split package needs its entire APK set and a compatible Android installer
 (or `adb install-multiple` with the restored set).
 
-No root mode, SMS/contact/settings extraction, client-side encrypted PBS key
-import or device-image restore is implemented yet.
+Private app databases, RCS/private messenger databases, root backup and
+device-image restore remain outside this preview. Secure Folder support will
+require running the app inside that profile, with encryption planned separately;
+it is not enabled by these additions. Client-side encrypted PBS key import is
+also not implemented.
 
 ## Build and tests
 
@@ -219,7 +253,8 @@ discovery, container file browsing and selective SAF restore conflict modes.
 No test uses a real person's phone data. Document providers with unknown file
 sizes are rejected. Individual SAF directories are limited to 40,000 entries;
 Shizuku Binder listings have a smaller explicit message-size bound. Files are
-streamed; selected datasets are not staged into a second copy. Portable archives
+streamed; ordinary file datasets are not staged into a second copy. Structured
+provider exports use the bounded private staging described above. Portable archives
 store names, contents and reported mtimes, with synthetic file modes. Android
 restore preserves contents and hierarchy, not POSIX ownership, ACLs, symlinks,
 device nodes, hardlinks, or provider-unsupported timestamps.

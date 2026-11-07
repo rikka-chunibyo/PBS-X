@@ -14,6 +14,13 @@ public final class JobEditorActivity extends Activity {
   private BackupJob job;
   private EditText name, store, namespace, backupID, hours;
   private CheckBox wifi, charging, shizuku, apks, data, obb;
+  private CheckBox allApps;
+  private final CheckBox[] exportOptions = new CheckBox[DeviceExport.CATEGORIES.size()];
+  private final java.util.concurrent.ExecutorService executor =
+      java.util.concurrent.Executors.newSingleThreadExecutor();
+  private TextView appSummary;
+  private Button chooseApps;
+  private boolean choosingApps;
   private LinearLayout folders;
 
   @Override
@@ -25,6 +32,7 @@ public final class JobEditorActivity extends Activity {
       if (state != null) {
         job.id = state.getString("job_id", job.id);
         job.sources = new JSONArray(state.getString("sources", "[]"));
+        job.packages = new JSONArray(state.getString("packages", job.packages.toString()));
       }
       LinearLayout root = Ui.screen(this, id == null ? "New backup job" : "Edit backup job"),
           page = Ui.scroll(root);
@@ -72,6 +80,30 @@ public final class JobEditorActivity extends Activity {
       apks = Ui.check(extra, "Installed application APKs", job.apks);
       data = Ui.check(extra, "Android/data", job.data);
       obb = Ui.check(extra, "Android/obb", job.obb);
+      allApps = Ui.check(extra, "All apps and external app folders", job.allApps);
+      Ui.hint(
+          extra,
+          "All apps includes third-party APKs and all external app folders. Choose apps to limit"
+              + " these three sources together.");
+      appSummary = Ui.hint(extra, "Selected apps: " + job.packages.length());
+      chooseApps = Ui.button(extra, "Choose apps", false, v -> chooseApps());
+      chooseApps.setEnabled(shizuku.isChecked());
+      shizuku.setOnCheckedChangeListener(
+          (button, checked) -> chooseApps.setEnabled(checked && !choosingApps));
+      Ui.text(extra, "Device data exports", 18, Ui.TEXT);
+      for (int i = 0; i < exportOptions.length; i++) {
+        String category = DeviceExport.CATEGORIES.get(i);
+        boolean checked = false;
+        for (int j = 0; j < job.exports.length(); j++)
+          if (category.equals(job.exports.getString(j))) checked = true;
+        exportOptions[i] = Ui.check(extra, DeviceExport.LABELS[i], checked);
+      }
+      Ui.hint(
+          extra,
+          "Exports require Android 12+ and Shizuku. They are ZIP files with structured records and"
+              + " attachments, restored as files. Importing them into Android databases is not"
+              + " implemented. Up to 512 MiB of private temporary cache is used per run and then"
+              + " removed. Sources can change while apps are running.");
       Ui.hint(
           extra,
           "Grant Shizuku permission in the app's Settings. Private app data is not included;"
@@ -113,10 +145,81 @@ public final class JobEditorActivity extends Activity {
         apks.setChecked(state.getBoolean("apks", job.apks));
         data.setChecked(state.getBoolean("data", job.data));
         obb.setChecked(state.getBoolean("obb", job.obb));
+        allApps.setChecked(state.getBoolean("all_apps", job.allApps));
+        for (int i = 0; i < exportOptions.length; i++)
+          exportOptions[i].setChecked(
+              state.getBoolean("export_" + i, exportOptions[i].isChecked()));
       }
     } catch (Exception e) {
       error(e);
     }
+  }
+
+  private void chooseApps() {
+    if (choosingApps) return;
+    choosingApps = true;
+    chooseApps.setEnabled(false);
+    executor.execute(
+        () -> {
+          try (ShizukuBridge bridge = new ShizukuBridge(this)) {
+            JSONArray inventory = new JSONArray(bridge.files().apps());
+            if (inventory.length() > 500)
+              throw new Exception("App picker supports at most 500 apps");
+            String[] packages = new String[inventory.length()],
+                labels = new String[inventory.length()];
+            boolean[] checked = new boolean[inventory.length()];
+            for (int i = 0; i < packages.length; i++) {
+              packages[i] = inventory.getString(i);
+              labels[i] = packages[i];
+              try {
+                android.content.pm.PackageManager pm = getPackageManager();
+                labels[i] =
+                    pm.getApplicationLabel(pm.getApplicationInfo(packages[i], 0))
+                        + "\n"
+                        + packages[i];
+              } catch (Exception ignored) {
+              }
+              for (int j = 0; j < job.packages.length(); j++)
+                if (packages[i].equals(job.packages.getString(j))) checked[i] = true;
+            }
+            runOnUiThread(
+                () -> {
+                  if (isDestroyed() || isFinishing()) return;
+                  choosingApps = false;
+                  chooseApps.setEnabled(shizuku.isChecked());
+                  new AlertDialog.Builder(this)
+                      .setTitle("Choose apps and app folders")
+                      .setMultiChoiceItems(
+                          labels, checked, (dialog, which, value) -> checked[which] = value)
+                      .setNegativeButton("Cancel", null)
+                      .setPositiveButton(
+                          "Use selected",
+                          (dialog, which) -> {
+                            job.packages = new JSONArray();
+                            for (int i = 0; i < checked.length; i++)
+                              if (checked[i]) job.packages.put(packages[i]);
+                            allApps.setChecked(false);
+                            appSummary.setText("Selected apps: " + job.packages.length());
+                          })
+                      .show();
+                });
+          } catch (Exception e) {
+            runOnUiThread(
+                () -> {
+                  if (!isDestroyed() && !isFinishing()) {
+                    choosingApps = false;
+                    chooseApps.setEnabled(shizuku.isChecked());
+                    error(e);
+                  }
+                });
+          }
+        });
+  }
+
+  @Override
+  protected void onDestroy() {
+    executor.shutdownNow();
+    super.onDestroy();
   }
 
   private void renderFolders() {
@@ -234,6 +337,10 @@ public final class JobEditorActivity extends Activity {
       job.apks = apks.isChecked();
       job.data = data.isChecked();
       job.obb = obb.isChecked();
+      job.allApps = allApps.isChecked();
+      job.exports = new JSONArray();
+      for (int i = 0; i < exportOptions.length; i++)
+        if (exportOptions[i].isChecked()) job.exports.put(DeviceExport.CATEGORIES.get(i));
       job.validate(true);
       JobStore.save(this, job);
       ScheduleService.configureAll(this);
@@ -267,5 +374,9 @@ public final class JobEditorActivity extends Activity {
     out.putBoolean("apks", apks.isChecked());
     out.putBoolean("data", data.isChecked());
     out.putBoolean("obb", obb.isChecked());
+    out.putBoolean("all_apps", allApps.isChecked());
+    out.putString("packages", job.packages.toString());
+    for (int i = 0; i < exportOptions.length; i++)
+      out.putBoolean("export_" + i, exportOptions[i].isChecked());
   }
 }

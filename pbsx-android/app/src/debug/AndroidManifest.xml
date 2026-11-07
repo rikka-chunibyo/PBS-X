@@ -3,5 +3,7 @@
         <!-- Private fixture storage for instrumentation. Invisible to other apps. -->
         <provider android:name=".FixtureProvider" android:authorities="${applicationId}.fixture"
             android:exported="false" />
+        <provider android:name=".ExportFixtureProvider" android:authorities="${applicationId}.export-fixture"
+            android:exported="true" android:permission="android.permission.DUMP" />
     </application>
 </manifest>

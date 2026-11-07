@@ -29,10 +29,14 @@ final class ShizukuBridge implements AutoCloseable {
       };
 
   ShizukuBridge(Context context) throws Exception {
+    this(context, PrivilegedFiles.class);
+  }
+
+  ShizukuBridge(Context context, Class<?> service) throws Exception {
     if (!Shizuku.pingBinder() || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED)
       throw new Exception("Start Shizuku and grant PBS-X permission in Settings");
     args =
-        new Shizuku.UserServiceArgs(new ComponentName(context, PrivilegedFiles.class))
+        new Shizuku.UserServiceArgs(new ComponentName(context, service))
             // Removal is asynchronous. Each operation needs its own connection
             // identity so the previous reader's death cannot cancel a new one.
             .tag("pbsx-reader-" + UUID.randomUUID())
@@ -41,9 +45,12 @@ final class ShizukuBridge implements AutoCloseable {
             .debuggable(BuildConfig.DEBUG)
             .version(BuildConfig.VERSION_CODE);
     Shizuku.bindUserService(args, connection);
-    if (!ready.await(15, TimeUnit.SECONDS) || files == null) {
+    try {
+      if (!ready.await(15, TimeUnit.SECONDS) || files == null)
+        throw new Exception("Shizuku reader did not start");
+    } catch (Exception e) {
       close();
-      throw new Exception("Shizuku reader did not start");
+      throw e;
     }
   }
 

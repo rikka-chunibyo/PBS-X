@@ -14,8 +14,9 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Read-only Shizuku UserService. No arbitrary command or filesystem API. */
-public final class PrivilegedFiles extends IPrivilegedFiles.Stub {
+public class PrivilegedFiles extends IPrivilegedFiles.Stub {
   private final int owner;
+  private boolean exporting;
 
   public PrivilegedFiles(Context context) {
     owner = context.getApplicationInfo().uid;
@@ -58,9 +59,12 @@ public final class PrivilegedFiles extends IPrivilegedFiles.Stub {
     if (index < 0 || index >= paths.size() || !paths.get(index).startsWith("package:"))
       throw new Exception("APK no longer exists");
     File f = new File(paths.get(index).substring(8)).getCanonicalFile();
-    if (!f.getPath().startsWith("/data/app/")
-        && !f.getPath().startsWith("/system/")
-        && !f.getPath().startsWith("/product/")) throw new Exception("Unexpected APK location");
+    boolean trusted = false;
+    for (String root :
+        new String[] {
+          "/data/app/", "/system/", "/product/", "/system_ext/", "/vendor/", "/odm/", "/apex/"
+        }) if (f.getPath().startsWith(root)) trusted = true;
+    if (!trusted || !f.getName().endsWith(".apk")) throw new Exception("Unexpected APK location");
     return f;
   }
 
@@ -150,6 +154,7 @@ public final class PrivilegedFiles extends IPrivilegedFiles.Stub {
         } else if (v.length == 2) {
           packageName(v[1]);
           ArrayList<String> paths = command("/system/bin/pm", "path", v[1]);
+          if (paths.isEmpty()) throw new Exception("Selected app is no longer installed");
           for (int i = 0; i < paths.size(); i++) out.put(entry(apk(v[1], i + ".apk"), i + ".apk"));
         } else throw new Exception("Not a directory");
       } else {
@@ -175,6 +180,110 @@ public final class PrivilegedFiles extends IPrivilegedFiles.Stub {
       if (!file.isFile()) throw new Exception("Not a regular file");
       return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
     } catch (Exception e) {
+      throw error(e);
+    }
+  }
+
+  @Override
+  public String apps() {
+    authorize();
+    try {
+      java.util.TreeSet<String> apps = new java.util.TreeSet<>();
+      for (String line :
+          command(
+              "/system/bin/pm", "list", "packages", "-3", "--user", String.valueOf(owner / 100000)))
+        if (line.startsWith("package:")) apps.add(line.substring(8));
+      for (String root :
+          new String[] {"/storage/emulated/0/Android/data", "/storage/emulated/0/Android/obb"}) {
+        if (!new File(root).exists() || !new File(root).canRead()) continue;
+        File base = allowed(root);
+        File[] children = base.listFiles();
+        if (children == null) continue;
+        for (File child : children)
+          if (child.isDirectory() && child.getName().matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))
+            apps.add(child.getName());
+      }
+      JSONArray out = new JSONArray();
+      for (String pkg : apps) {
+        packageName(pkg);
+        out.put(pkg);
+      }
+      if (out.toString().length() > 300000) throw new Exception("App selection list is too large");
+      return out.toString();
+    } catch (Exception e) {
+      throw error(e);
+    }
+  }
+
+  protected DeviceExport.Source exportSource() throws Exception {
+    return new ShellProviderSource(owner / 100000);
+  }
+
+  @Override
+  public synchronized ParcelFileDescriptor openExport(String category) {
+    authorize();
+    if (!DeviceExport.CATEGORIES.contains(category))
+      throw new IllegalArgumentException("Unknown device export");
+    if (android.os.Build.VERSION.SDK_INT < 31)
+      throw new IllegalArgumentException("Device exports require Android 12 or later");
+    if (exporting) throw new IllegalStateException("Another export is running");
+    try {
+      ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createReliablePipe();
+      exporting = true;
+      Thread producer =
+          new Thread(
+              () -> {
+                String failure = null;
+                ParcelFileDescriptor.AutoCloseOutputStream output =
+                    new ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]);
+                try (DeviceExport.Source source = exportSource()) {
+                  java.io.OutputStream bounded =
+                      new java.io.FilterOutputStream(output) {
+                        long total;
+
+                        public void write(int value) throws java.io.IOException {
+                          byte[] one = {(byte) value};
+                          write(one, 0, 1);
+                        }
+
+                        public void write(byte[] bytes, int start, int count)
+                            throws java.io.IOException {
+                          total += count;
+                          if (total > DeviceExport.MAX_BYTES)
+                            throw new java.io.IOException("Device export exceeds 512 MiB");
+                          out.write(bytes, start, count);
+                        }
+                      };
+                  DeviceExport.write(category, source, bounded);
+                } catch (Throwable e) {
+                  String message = e.getMessage();
+                  failure =
+                      "Could not export "
+                          + category
+                          + ": "
+                          + (message == null
+                              ? e.getClass().getSimpleName()
+                              : message.substring(0, Math.min(256, message.length())));
+                } finally {
+                  synchronized (PrivilegedFiles.this) {
+                    exporting = false;
+                  }
+                  try {
+                    if (failure != null) pipe[1].closeWithError(failure);
+                  } catch (Exception ignored) {
+                  }
+                  try {
+                    output.close();
+                  } catch (Exception ignored) {
+                  }
+                }
+              },
+              "pbsx-device-export");
+      producer.setDaemon(true);
+      producer.start();
+      return pipe[0];
+    } catch (Exception e) {
+      exporting = false;
       throw error(e);
     }
   }

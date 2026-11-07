@@ -18,6 +18,31 @@ import rikka.shizuku.Shizuku;
 @RunWith(AndroidJUnit4.class)
 public class ShizukuTest {
   @Test
+  public void selectedAppsRestrictBothListingAndDirectReads() throws Exception {
+    Assume.assumeTrue(Shizuku.pingBinder());
+    Assume.assumeTrue(Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED);
+    Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    BackupJob j = new BackupJob();
+    j.shizuku = true;
+    j.apks = true;
+    j.allApps = false;
+    j.packages.put("com.pbsx.android");
+    try (AndroidDocuments docs =
+        new AndroidDocuments(c, j, new Operations.Cancellation(), text -> {})) {
+      JSONArray apps = new JSONArray(docs.listJSON("Installed-APKs"));
+      assertEquals(1, apps.length());
+      assertEquals("com.pbsx.android", apps.getJSONObject(0).getString("name"));
+      try {
+        docs.statJSON("Installed-APKs/moe.shizuku.privileged.api");
+        fail("Unselected app was readable");
+      } catch (SecurityException expected) {
+        assertTrue(expected.getMessage().contains("not selected"));
+      }
+      assertTrue(new JSONArray(docs.listJSON("Installed-APKs/com.pbsx.android")).length() > 0);
+    }
+  }
+
+  @Test
   public void readsInstalledApksAndRejectsPrivatePaths() throws Exception {
     Assume.assumeTrue(
         "Shizuku is an optional, separately started test dependency", Shizuku.pingBinder());

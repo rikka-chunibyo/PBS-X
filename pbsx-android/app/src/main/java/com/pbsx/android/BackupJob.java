@@ -11,6 +11,8 @@ final class BackupJob {
   JSONArray sources = new JSONArray();
   int hours = 0, schedulerId = 0;
   boolean wifi = true, charging = true, shizuku = false, apks = false, data = false, obb = false;
+  boolean allApps = true;
+  JSONArray packages = new JSONArray(), exports = new JSONArray();
 
   JSONObject json() throws Exception {
     return new JSONObject()
@@ -27,10 +29,18 @@ final class BackupJob {
         .put("shizuku", shizuku)
         .put("apks", apks)
         .put("data", data)
-        .put("obb", obb);
+        .put("obb", obb)
+        .put("all_apps", allApps)
+        .put("packages", packages)
+        .put("exports", exports);
   }
 
   static BackupJob from(JSONObject value) throws Exception {
+    if (value.has("all_apps") && !(value.opt("all_apps") instanceof Boolean))
+      throw new Exception("Invalid saved app selection mode");
+    for (String key : new String[] {"packages", "exports"})
+      if (value.has(key) && !(value.opt(key) instanceof JSONArray))
+        throw new Exception("Invalid saved " + key + " selection");
     BackupJob j = new BackupJob();
     j.id = value.getString("id");
     j.name = value.getString("name");
@@ -51,6 +61,17 @@ final class BackupJob {
     j.apks = value.optBoolean("apks", false);
     j.data = value.optBoolean("data", false);
     j.obb = value.optBoolean("obb", false);
+    j.allApps = value.optBoolean("all_apps", true);
+    j.packages =
+        new JSONArray(
+            value.optJSONArray("packages") == null
+                ? "[]"
+                : value.getJSONArray("packages").toString());
+    j.exports =
+        new JSONArray(
+            value.optJSONArray("exports") == null
+                ? "[]"
+                : value.getJSONArray("exports").toString());
     j.validate(false);
     return j;
   }
@@ -69,6 +90,22 @@ final class BackupJob {
       throw new Exception("Enter a valid datastore name");
     if (!namespace.isEmpty()) Paths.parts(namespace);
     if (hours < 0 || hours > 720) throw new Exception("Schedule interval must be 0–720 hours");
+    java.util.HashSet<String> selectedApps = new java.util.HashSet<>(),
+        selectedExports = new java.util.HashSet<>();
+    if (packages.length() > 500) throw new Exception("Select at most 500 apps");
+    for (int i = 0; i < packages.length(); i++) {
+      String pkg = packages.getString(i);
+      if (pkg.length() > 255
+          || !pkg.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")
+          || !selectedApps.add(pkg)) throw new Exception("Invalid or duplicate selected app");
+    }
+    for (int i = 0; i < exports.length(); i++) {
+      String category = exports.getString(i);
+      if (!DeviceExport.CATEGORIES.contains(category) || !selectedExports.add(category))
+        throw new Exception("Invalid or duplicate device export");
+    }
+    if (runnable && shizuku && (apks || data || obb) && !allApps && packages.length() == 0)
+      throw new Exception("Choose apps or enable All apps");
     java.util.HashSet<String> labels = new java.util.HashSet<>(), uris = new java.util.HashSet<>();
     for (int i = 0; i < sources.length(); i++) {
       JSONObject s = sources.getJSONObject(i);
@@ -77,12 +114,15 @@ final class BackupJob {
           || label.equals("Installed-APKs")
           || label.equals("Android-data")
           || label.equals("Android-obb")
+          || (label.equals("Device-data") && shizuku && exports.length() > 0)
           || !labels.add(label)) throw new Exception("Folder labels must be unique simple names");
       String uri = s.getString("uri");
       if (!uri.startsWith("content://") || !uris.add(uri))
         throw new Exception("Choose each folder only once in this job");
     }
-    if (runnable && sources.length() == 0 && !(shizuku && (apks || data || obb)))
+    if (runnable
+        && sources.length() == 0
+        && !(shizuku && (apks || data || obb || exports.length() > 0)))
       throw new Exception("Add a folder or enable a Shizuku source for this job");
   }
 
@@ -120,6 +160,7 @@ final class BackupJob {
   }
 
   int sourceCount() {
-    return sources.length() + (shizuku ? (apks ? 1 : 0) + (data ? 1 : 0) + (obb ? 1 : 0) : 0);
+    return sources.length()
+        + (shizuku ? (apks ? 1 : 0) + (data ? 1 : 0) + (obb ? 1 : 0) + exports.length() : 0);
   }
 }
