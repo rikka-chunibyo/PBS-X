@@ -39,6 +39,7 @@ public final class MainActivity extends Activity {
   private long fingerprint;
   private boolean busy;
   private ConnectionDialogs connections;
+  private SettingsTransferUi settingsTransfer;
   private BackupCatalogue catalogue;
   private final Runnable refresh =
       new Runnable() {
@@ -73,6 +74,7 @@ public final class MainActivity extends Activity {
     if (state != null) tab = state.getInt("tab", 0);
     Shizuku.addRequestPermissionResultListener(permission);
     connections = new ConnectionDialogs(this, this::background, this::render);
+    settingsTransfer = new SettingsTransferUi(this, this::render);
     catalogue =
         new BackupCatalogue(
             this,
@@ -148,8 +150,16 @@ public final class MainActivity extends Activity {
   protected void onDestroy() {
     catalogue.close();
     Shizuku.removeRequestPermissionResultListener(permission);
+    if (settingsTransfer != null) settingsTransfer.close();
     executor.shutdown();
     super.onDestroy();
+  }
+
+  @Override
+  protected void onActivityResult(int request, int result, Intent intent) {
+    super.onActivityResult(request, result, intent);
+    if (settingsTransfer != null && (request == 401 || request == 402))
+      settingsTransfer.activityResult(request, result, intent);
   }
 
   @Override
@@ -509,6 +519,7 @@ public final class MainActivity extends Activity {
                     android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                     Uri.parse("package:" + getPackageName()))));
     Ui.hint(page, "PBS-X Android " + BuildConfig.VERSION_NAME);
+    settingsTransfer.render(page);
   }
 
   private void edit(String id) {

@@ -198,6 +198,23 @@ public class KeyVaultTest {
         to.getSharedPreferences("vault", 0).getString("connection", "").contains("journal-secret"));
   }
 
+  @Test
+  public void memorizedPassphraseRecreatesKeyAfterReset() throws Exception {
+    String passphrase = "fixture custom key 0123456789A";
+    Context original = isolated(), reset = isolated();
+    String first =
+        KeyProfiles.addKey(original, "Original", Mobilecore.deriveEncryptionKey(passphrase));
+    String next =
+        KeyProfiles.addKey(
+            reset, "Re-entered after reset", Mobilecore.deriveEncryptionKey(passphrase));
+    JSONObject a = KeyProfiles.find(Vault.data(original), "keys", first),
+        b = KeyProfiles.find(Vault.data(reset), "keys", next);
+    assertEquals(a.getString("fingerprint"), b.getString("fingerprint"));
+    assertEquals(a.getString("key"), b.getString("key"));
+    assertFalse(Vault.data(original).toString().contains(passphrase));
+    assertFalse(Vault.data(reset).toString().contains(passphrase));
+  }
+
   private static final class MapSnapshot {
     final java.util.Map<String, ?> settings, jobs;
 

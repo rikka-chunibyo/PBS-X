@@ -115,3 +115,39 @@ func TestEncryptedChunkAuthenticationAndDigest(t *testing.T) {
 		t.Fatal("tampered chunk accepted")
 	}
 }
+
+func TestCustomPassphraseRecoveryIsDeviceIndependent(t *testing.T) {
+	const passphrase = "fixture custom key 0123456789A" // Exactly 30 characters.
+	// Independently computed with Python hashlib.scrypt. This is a permanent
+	// recovery vector: changing v1 must never make a memorized key unusable.
+	const expected = "462800aab5ba6f765e55ea99fae5591e9718dbe906c26c1fcf2c713079a51c9d"
+	first, err := DeriveEncryptionKey(passphrase)
+	if err != nil || first != expected {
+		t.Fatal("v1 recovery contract changed", err)
+	}
+	recovered, err := DeriveEncryptionKey(passphrase)
+	if err != nil || recovered != first {
+		t.Fatal("same passphrase did not recover key", err)
+	}
+	cc, _ := parseBackupKey(first)
+	other, _ := parseBackupKey(recovered)
+	blob, err := datastore.EncodeEncryptedBlob(nil, []byte("restore after phone reset"), cc, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := datastore.DecodeEncryptedBlob(nil, blob, other)
+	if err != nil || string(data) != "restore after phone reset" {
+		t.Fatal("recovered key cannot decrypt backup", err)
+	}
+	for _, changed := range []string{passphrase + " ", "Fixture custom key 0123456789A", " " + passphrase} {
+		key, e := DeriveEncryptionKey(changed)
+		if e != nil || key == first {
+			t.Fatal("passphrase silently normalized", e)
+		}
+	}
+	for _, bad := range []string{"", strings.Repeat("x", 4097)} {
+		if _, e := DeriveEncryptionKey(bad); e == nil {
+			t.Fatal("invalid passphrase accepted")
+		}
+	}
+}

@@ -43,6 +43,22 @@ func GenerateEncryptionKey() (string, error) {
 	}
 	return hex.EncodeToString(key[:]), nil
 }
+
+// DeriveEncryptionKey is a portable recovery contract: identical UTF-8 input
+// always produces the same PBS key, independent of device, server and account.
+// Never change this salt or the v1 parameters; future schemes must keep v1.
+// A fixed domain salt is intentional so recovery needs only the passphrase.
+func DeriveEncryptionKey(passphrase string) (string, error) {
+	if passphrase == "" || len(passphrase) > 4096 {
+		return "", errors.New("enter a custom key of 1 to 4096 UTF-8 bytes")
+	}
+	key, err := scrypt.Key([]byte(passphrase), []byte("PBS-X backup encryption passphrase v1"), 65536, 8, 1, 32)
+	if err != nil {
+		return "", errors.New("could not derive backup encryption key")
+	}
+	defer clear(key)
+	return hex.EncodeToString(key), nil
+}
 func connectionKeys(cfg configuration) (*datastore.CryptConfig, map[string]*datastore.CryptConfig, error) {
 	keys := map[string]*datastore.CryptConfig{}
 	if len(cfg.DecryptionKeys) > 100 {

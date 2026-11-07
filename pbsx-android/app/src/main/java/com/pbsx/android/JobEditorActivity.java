@@ -97,9 +97,8 @@ public final class JobEditorActivity extends Activity {
               + " these three sources together.");
       appSummary = Ui.hint(extra, "Selected apps: " + job.packages.length());
       chooseApps = Ui.button(extra, "Choose apps", false, v -> chooseApps());
-      chooseApps.setEnabled(shizuku.isChecked());
-      shizuku.setOnCheckedChangeListener(
-          (button, checked) -> chooseApps.setEnabled(checked && !choosingApps));
+      updateShizukuControls();
+      shizuku.setOnCheckedChangeListener((button, checked) -> updateShizukuControls());
       Ui.text(extra, "Device data exports", 18, Ui.TEXT);
       for (int i = 0; i < exportOptions.length; i++) {
         String category = DeviceExport.CATEGORIES.get(i);
@@ -160,9 +159,24 @@ public final class JobEditorActivity extends Activity {
           exportOptions[i].setChecked(
               state.getBoolean("export_" + i, exportOptions[i].isChecked()));
       }
+      updateShizukuControls();
     } catch (Exception e) {
       error(e);
     }
+  }
+
+  private void updateShizukuControls() {
+    boolean enabled = shizuku.isChecked();
+    for (android.view.View option : new android.view.View[] {apks, data, obb, allApps, appSummary})
+      shizukuControl(option, enabled);
+    shizukuControl(chooseApps, enabled && !choosingApps);
+    for (CheckBox option : exportOptions) shizukuControl(option, enabled);
+  }
+
+  private static void shizukuControl(android.view.View option, boolean enabled) {
+    if (option == null) return;
+    option.setEnabled(enabled);
+    option.setAlpha(enabled ? 1f : 0.4f);
   }
 
   private void credentialLabels() throws Exception {
@@ -215,7 +229,7 @@ public final class JobEditorActivity extends Activity {
   private void chooseApps() {
     if (choosingApps) return;
     choosingApps = true;
-    chooseApps.setEnabled(false);
+    updateShizukuControls();
     executor.execute(
         () -> {
           try (ShizukuBridge bridge = new ShizukuBridge(this)) {
@@ -243,7 +257,7 @@ public final class JobEditorActivity extends Activity {
                 () -> {
                   if (isDestroyed() || isFinishing()) return;
                   choosingApps = false;
-                  chooseApps.setEnabled(shizuku.isChecked());
+                  updateShizukuControls();
                   new AlertDialog.Builder(this)
                       .setTitle("Choose apps and app folders")
                       .setMultiChoiceItems(
@@ -265,7 +279,7 @@ public final class JobEditorActivity extends Activity {
                 () -> {
                   if (!isDestroyed() && !isFinishing()) {
                     choosingApps = false;
-                    chooseApps.setEnabled(shizuku.isChecked());
+                    updateShizukuControls();
                     error(e);
                   }
                 });

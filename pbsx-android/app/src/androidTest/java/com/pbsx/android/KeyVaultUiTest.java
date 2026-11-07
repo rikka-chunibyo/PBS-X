@@ -92,7 +92,7 @@ public class KeyVaultUiTest {
       old.put(section, p.getAll());
       p.edit().clear().commit();
     }
-    Activity editor = null, keys = null;
+    Activity editor = null, keys = null, main = null;
     try {
       KeyProfiles.addConnection(c, "Phone access", config("phone-secret").toString());
       String second =
@@ -120,7 +120,49 @@ public class KeyVaultUiTest {
               new Intent(c, KeysActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
       assertNotNull(global("PBS connections"));
       assertNotNull(global("Backup encryption keys"));
+      Activity keyScreen = keys;
+      i.runOnMainSync(
+          () -> {
+            assertNull(find(keyScreen.findViewById(android.R.id.content), "Export all settings"));
+            assertNull(find(keyScreen.findViewById(android.R.id.content), "Import all settings"));
+          });
+      click("Create encryption key");
+      select("Use custom passphrase");
+      final String memorable = "fixture custom key 0123456789A";
+      i.runOnMainSync(
+          () -> {
+            java.util.ArrayList<EditText> fields = new java.util.ArrayList<>();
+            for (View root : WindowInspector.getGlobalWindowViews()) findEdits(root, fields);
+            assertEquals(3, fields.size());
+            fields.get(0).setText("Memorable fixture");
+            assertFalse(fields.get(1).isSaveEnabled());
+            assertFalse(fields.get(2).isSaveEnabled());
+            fields.get(1).setText(memorable);
+            fields.get(2).setText(memorable);
+          });
+      click("Save");
+      assertNotNull(global("Memorable fixture"));
+      String recovered = Mobilecore.deriveEncryptionKey(memorable);
+      assertEquals(
+          Mobilecore.encryptionFingerprint(recovered),
+          Vault.data(c).getJSONArray("keys").getJSONObject(1).getString("fingerprint"));
+      assertFalse(Vault.data(c).toString().contains(memorable));
+      i.runOnMainSync(keyScreen::finish);
+      i.waitForIdleSync();
+      main =
+          i.startActivitySync(
+              new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+      click("Settings");
       assertNotNull(global("Import all settings"));
+      View heading = global("Settings export & import");
+      i.runOnMainSync(
+          () -> {
+            ViewGroup card = (ViewGroup) heading.getParent(), page = (ViewGroup) card.getParent();
+            assertEquals(
+                "Settings transfer must be the last section",
+                page.getChildCount() - 1,
+                page.indexOfChild(card));
+          });
       click("Export all settings");
       assertNotNull(global("Plain JSON"));
       click("Use password");
@@ -134,13 +176,14 @@ public class KeyVaultUiTest {
           });
       click("Cancel");
       assertFalse(Vault.data(c).toString().contains("export-password-fixture"));
-      assertEquals(1, Vault.data(c).getJSONArray("keys").length());
+      assertEquals(2, Vault.data(c).getJSONArray("keys").length());
     } finally {
-      Activity a = editor, b = keys;
+      Activity a = editor, b = keys, m = main;
       i.runOnMainSync(
           () -> {
             if (a != null) a.finish();
             if (b != null) b.finish();
+            if (m != null) m.finish();
           });
       i.waitForIdleSync();
       for (String section : old.keySet()) {
@@ -163,6 +206,13 @@ public class KeyVaultUiTest {
       }
       ScheduleService.configureAll(c);
     }
+  }
+
+  private void findEdits(View root, java.util.List<EditText> out) {
+    if (root instanceof EditText && root.isShown()) out.add((EditText) root);
+    if (root instanceof ViewGroup)
+      for (int n = 0; n < ((ViewGroup) root).getChildCount(); n++)
+        findEdits(((ViewGroup) root).getChildAt(n), out);
   }
 
   private void findEdit(View root, AtomicReference<EditText> out) {

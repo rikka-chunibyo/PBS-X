@@ -12,7 +12,7 @@ final class BackupJob {
   JSONArray sources = new JSONArray();
   int hours = 0, schedulerId = 0;
   boolean wifi = true, charging = true, shizuku = false, apks = false, data = false, obb = false;
-  boolean allApps = true;
+  boolean allApps = false;
   JSONArray packages = new JSONArray(), exports = new JSONArray();
 
   JSONObject json() throws Exception {

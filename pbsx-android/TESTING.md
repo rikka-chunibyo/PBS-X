@@ -12,6 +12,35 @@ preserves their Backup IDs in queued restores. See
 checks, live PBS tests and test-VM deployment. Android production code and the
 0.4.0 APK below are unchanged by that fix.
 
+## 0.5.1: repeatable custom keys, Settings transfer placement and Shizuku defaults
+
+Settings import/export now appears as the final card on Settings and is absent
+from Keys & credentials. Custom passphrases deterministically recreate the same
+backup key after reset, independent of device, account or server. The phrase is
+not stored; the fixed v1 scheme has an independent known-answer test. Export
+password encryption continues to use fresh random salts and nonces per file.
+
+New jobs have no Shizuku sources selected, including All apps. Shizuku-dependent
+source/export controls and app selection are disabled and dimmed while the
+master switch is off; toggling it preserves choices already made.
+
+Validation: all **36 Android 13 instrumentation tests passed with zero skips**,
+including real Shizuku. New coverage exercises custom key creation, matching
+fingerprints across a fresh app context, no saved passphrases, Settings footer
+placement, password-dialog behavior, unchecked defaults and dependent controls
+re-enabling without losing selections. All **31 Go core tests passed with the
+race detector**, including the permanent 30-character recovery vector and
+successful decryption with a recreated key. APK/AAR builds, Java unit tests,
+Android lint and final packaging/signing/alignment checks passed. No live VMs
+or the physical phone were touched for this follow-up; the backup wire format
+is unchanged from the bidirectionally verified 0.5.0 implementation.
+
+APK SHA-256: `84fec4bcd770bd0da1a0eddc4cabfa66f87d1f6e4827e76f630348d026ca9131`.
+
+Version: `0.5.1-preview`, code 10. Vault and settings formats remain compatible
+with 0.5.0; existing keys and jobs are retained. Logs are under
+`build/reports/custom-key-*.log`. See [settings/key format](SETTINGS-FORMAT.md).
+
 ## 0.5.0: key vault, optional backup encryption and complete settings transfer
 
 The keys page, job connection/encryption selectors, Restore connection selection

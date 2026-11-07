@@ -17,8 +17,28 @@ ordinary storage credentials, ACLs and ownership.
 
 ## Backup encryption
 
-Keys are randomly generated 256-bit keys. **Import encryption key** accepts a
-64-character hexadecimal key; a complete settings import also transfers keys.
+**Create encryption key** offers a random key or a **custom passphrase**.
+The exact same custom passphrase recreates the same PBS key after a phone reset,
+on another device, or with another server/account. No export, device secret or
+random salt is needed for that recovery. The passphrase itself is never saved;
+the derived 256-bit key is stored in the vault. Names do not affect derivation.
+Spaces, capitalization and exact UTF-8 bytes matter; input is not trimmed or
+normalized. Use a long, unique passphrase; derivation cannot add entropy to a
+predictable phrase.
+
+The permanent v1 recovery contract is scrypt with N=65536, r=8, p=1, output
+length 32 bytes, and the fixed public domain salt
+`PBS-X backup encryption passphrase v1` (UTF-8). This fixed salt is deliberate:
+recovery must depend only on the memorized phrase. A golden test vector,
+independently calculated using Python's hashlib.scrypt, guards compatibility.
+Future derivation schemes must retain v1 recovery unchanged. The 30-character
+test phrase `fixture custom key 0123456789A` derives to
+`462800aab5ba6f765e55ea99fae5591e9718dbe906c26c1fcf2c713079a51c9d`.
+
+**Import encryption key** accepts an existing raw 64-character hexadecimal key;
+a complete settings import also transfers keys. Random keys still require a
+separately saved recovery copy. Passphrase recovery recreates the encryption
+key; connect to PBS with valid storage credentials to access the snapshots.
 Secrets are stored in the existing Android Keystore-backed encrypted vault.
 The device's Keystore wrapping key remains local; portable backup keys and API
 credentials are inside that vault and are included in explicit settings exports.
@@ -47,7 +67,8 @@ the standard Rust `proxmox-backup-client` verify compatibility.
 
 ## Complete export
 
-**Export all settings** asks **Encrypt exported JSON?**:
+**Export all settings**, at the bottom of **Settings**, asks
+**Encrypt exported JSON?**:
 
 - **Plain JSON** writes the complete configuration, including secrets.
 - **Use password** asks for one password and encrypts the complete JSON. It
@@ -104,8 +125,17 @@ activity entries are recovered as interrupted, without claiming a completed run.
 Limits are 16 MiB of plain settings JSON, 32 MiB input for encrypted envelopes,
 100 jobs, 100 connections, 100 encryption keys and the app's existing 100-entry
 activity history. Export/password fields are not saved in Android instance state.
-The keys screen also disables screenshots using Android's secure window flag.
+The keys screen and settings-export password dialogs also disable screenshots
+using Android's secure window flag.
 
 This is a testing-format change. Clear 0.4.x app storage and reconnect before
 using 0.5.0; no old-vault migration is provided. The user's phone is not modified
 by development/testing. App settings are **not** added as a backup source.
+
+## Shizuku defaults
+
+New jobs start with Shizuku disabled, all source/export checkboxes unchecked,
+All apps unchecked and no selected packages. While Shizuku is disabled, its
+source checkboxes, app controls and export choices are disabled and dimmed.
+Toggling the master switch preserves the job's choices. Existing saved jobs
+retain their explicit selections.

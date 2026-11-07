@@ -13,7 +13,12 @@ backup keys, and independent **Connection** / **Encryption** selectors in each
 job. Automatic enrollment adds a connection; existing API keys are supported.
 Restore can select a connection and finds imported encryption keys by fingerprint.
 
-**Export all settings** includes every job, source selection, schedule, saved
+**Create encryption key → Use custom passphrase** accepts a memorable key.
+Enter exactly the same passphrase after a reset to recreate the same backup
+key, without an export file. The passphrase is not saved. Random generation
+and raw-key import remain available.
+
+At the bottom of **Settings**, **Export all settings** includes every job, source selection, schedule, saved
 preference, connection, credential, encryption key and activity entry. Choose
 plain JSON or password-encrypted JSON. The export password is used for that
 file only and is not saved. Import validates and replaces the saved state;
@@ -154,7 +159,9 @@ new destination folder; check activity status before using its files.
 ## Optional Shizuku sources
 
 Start Shizuku and grant PBS-X permission using the button in **Settings**. In a
-job's editor, enable Shizuku mode, then opt into individual sources:
+job's editor, enable Shizuku mode, then opt into individual sources. New jobs
+start with nothing selected; Shizuku-dependent options are disabled and greyed
+out until its master switch is enabled:
 
 - **Installed application APKs:** third-party installed packages, including
   base and split APKs, under `Installed-APKs/<package>/<index>.apk`.
