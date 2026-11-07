@@ -101,21 +101,8 @@ fn upgrade_to_backup_reader_protocol(
 
         let backup_dir = pbs_api_types::BackupDir::deserialize(&param)?;
 
-        // PBS-X agent tokens get a second identity check in addition to ordinary PBS ACL/owner
-        // enforcement. Even if an ACL is accidentally widened later, an agent may only read its
-        // own Host group and only from a datastore/namespace configured for that host.
-        if let Some(host_id) = crate::server::host::host_for_upload_auth(&auth_id)? {
-            if backup_dir.ty() != pbs_api_types::BackupType::Host
-                || backup_dir.id() != host_id.as_str()
-            {
-                bail!("PBS-X agent token is bound to host '{host_id}'");
-            }
-            if !crate::server::host::upload_target_allowed(&host_id, &store, &backup_ns)? {
-                bail!(
-                    "PBS-X host '{host_id}' has no enabled backup job targeting this datastore/namespace"
-                );
-            }
-        }
+        // Namespace ACLs are authoritative, including administrator-added grants.
+        crate::server::host::host_for_upload_auth(&auth_id)?;
 
         let protocols = parts
             .headers
@@ -139,11 +126,13 @@ fn upgrade_to_backup_reader_protocol(
         let backup_dir = datastore.backup_dir(backup_ns, backup_dir)?;
         if !priv_read {
             let owner = backup_dir.get_owner()?;
-            let correct_owner = owner == auth_id
-                || (owner.is_token() && Authid::from(owner.user().clone()) == auth_id);
-            if !correct_owner {
-                bail!("backup owner check failed!");
-            }
+            crate::server::host::check_host_backup_owner(
+                &owner,
+                &auth_id,
+                &store,
+                backup_dir.backup_ns(),
+                backup_dir.as_ref(),
+            )?;
         }
 
         if !backup_dir.full_path().exists() {

@@ -21,6 +21,7 @@ Ext.define('PBS.window.HostBackupJobEdit', {
 	return {
 	    host: initialConfig.host,
 	    isCreate: me.isCreate,
+	    namespace: me.isCreate ? 'devices/' + initialConfig.host.match(/.{1,32}/g).join('/') : undefined,
 	};
     },
 
@@ -85,7 +86,9 @@ Ext.define('PBS.window.HostBackupJobEdit', {
 		xtype: 'pbsNamespaceSelector',
 		name: 'ns',
 		fieldLabel: gettext('Namespace'),
-		cbind: { deleteEmpty: '{!isCreate}' },
+		forceSelection: false,
+		cbind: { deleteEmpty: '{!isCreate}', value: '{namespace}' },
+		emptyText: gettext('Root (shared datastore namespace)'),
 	    },
 	    {
 		xtype: 'pbsCalendarEvent',
@@ -129,6 +132,10 @@ Ext.define('PBS.window.HostBackupJobEdit', {
 	],
 
 	columnB: [
+	    {
+		xtype: 'displayfield',
+		value: gettext('New jobs default to a device namespace. Missing namespaces are created if you have Datastore.Modify permission. Generated keys can use any backup ID in their authorized namespace; additional access can be granted in Permissions.'),
+	    },
 	    {
 		xtype: 'textarea',
 		name: 'sources',

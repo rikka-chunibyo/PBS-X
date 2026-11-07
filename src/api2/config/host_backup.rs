@@ -5,7 +5,7 @@ use proxmox_router::{Permission, Router, RpcEnvironment};
 use proxmox_schema::{api, param_bail};
 
 use pbs_api_types::{
-    Authid, JOB_ID_SCHEMA, PRIV_DATASTORE_AUDIT, PRIV_DATASTORE_BACKUP,
+    Authid, BackupNamespace, JOB_ID_SCHEMA, Operation, PRIV_DATASTORE_AUDIT, PRIV_DATASTORE_BACKUP,
     PROXMOX_CONFIG_DIGEST_SCHEMA,
 };
 use pbs_config::CachedUserInfo;
@@ -16,6 +16,54 @@ use pbsx_api_types::{
 fn host_exists(host: &str) -> Result<bool, Error> {
     let (config, _digest) = pbs_config::host::config()?;
     Ok(config.sections.contains_key(host))
+}
+
+// Creating an approved job may provision its namespace, but only with the same
+// Datastore.Modify checks as the ordinary namespace API. Device keys receive
+// DatastoreBackup, never namespace creation privileges.
+fn ensure_job_namespace(
+    job: &HostBackupJobConfig,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<(), Error> {
+    let Some(ns) = &job.ns else {
+        return Ok(());
+    };
+    if ns.is_root() {
+        return Ok(());
+    }
+    let auth_id: Authid = rpcenv.get_auth_id().unwrap().parse()?;
+    let datastore = pbs_datastore::DataStore::lookup_datastore(crate::tools::lookup_with(
+        &job.store,
+        Operation::Write,
+    ))?;
+    let mut parent = BackupNamespace::root();
+    let mut missing = Vec::new();
+    for part in ns.components() {
+        let child = BackupNamespace::from_parent_ns(&parent, part.to_string())?;
+        if !datastore.namespace_exists(&child) {
+            crate::backup::check_ns_modification_privs(&job.store, &child, &auth_id)?;
+            missing.push((parent, part.to_string()));
+        }
+        parent = child;
+    }
+    let backup_user = pbs_config::backup_user()?;
+    let options = proxmox_sys::fs::CreateOptions::new()
+        .owner(backup_user.uid)
+        .group(backup_user.gid)
+        .perm(nix::sys::stat::Mode::from_bits_truncate(0o0750));
+    for (parent, part) in missing {
+        // This protected API runs as root, whereas native backup uploads run
+        // as backup. Create only missing directories with backup ownership,
+        // including each namespace's intermediate `ns/` container.
+        let child = BackupNamespace::from_parent_ns(&parent, part.clone())?;
+        proxmox_sys::fs::create_path(
+            datastore.namespace_path(&child),
+            Some(options),
+            Some(options),
+        )?;
+        datastore.create_namespace(&parent, part)?;
+    }
+    Ok(())
 }
 
 fn check_read_access(
@@ -122,6 +170,8 @@ pub fn create_host_backup_job(
         param_bail!("id", "job '{}' already exists", config.id);
     }
 
+    ensure_job_namespace(&config, rpcenv)?;
+    crate::server::host::initialize_host_upload_acl_tracking(&config.host)?;
     section_config.set_data(&config.id, "host-backup", &config)?;
     pbs_config::host_backup::save_config(&section_config)?;
     crate::server::jobstate::create_state_file("hostbackup", &config.id)?;
@@ -217,6 +267,8 @@ pub fn update_host_backup_job(
         bail!("permission check failed");
     }
 
+    crate::server::host::initialize_host_upload_acl_tracking(&previous_host)?;
+
     if let Some(delete) = delete {
         for prop in delete {
             match prop {
@@ -269,6 +321,10 @@ pub fn update_host_backup_job(
         bail!("permission check failed for updated target");
     }
 
+    ensure_job_namespace(&data, rpcenv)?;
+    if data.host != previous_host {
+        crate::server::host::initialize_host_upload_acl_tracking(&data.host)?;
+    }
     config.set_data(&id, "host-backup", &data)?;
     pbs_config::host_backup::save_config(&config)?;
     crate::server::host::sync_host_upload_acl(&previous_host)?;
@@ -311,6 +367,7 @@ pub fn delete_host_backup_job(
         bail!("permission check failed");
     }
 
+    crate::server::host::initialize_host_upload_acl_tracking(&job.host)?;
     config.sections.remove(&id);
     pbs_config::host_backup::save_config(&config)?;
     crate::server::jobstate::remove_state_file("hostbackup", &id)?;

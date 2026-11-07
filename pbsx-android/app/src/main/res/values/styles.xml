@@ -1,0 +1,14 @@
+<resources>
+    <style name="Theme.PBSX" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:colorAccent">#9CB6FF</item>
+        <item name="android:colorControlActivated">#9CB6FF</item>
+        <item name="android:colorBackground">#0E1624</item>
+        <item name="android:windowBackground">#0E1624</item>
+        <item name="android:textColorPrimary">#EDF2FC</item>
+        <item name="android:textColorSecondary">#A7B4CA</item>
+        <item name="android:colorButtonNormal">#26344B</item>
+        <item name="android:statusBarColor">#142033</item>
+        <item name="android:navigationBarColor">#0E1624</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

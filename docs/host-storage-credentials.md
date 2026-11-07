@@ -44,7 +44,8 @@ needed. Returning to automatic mode does not undo ownership changes.
 
 Select a snapshot under the original host's Backups tab, choose Restore, select
 the destination host and enter a directory on that destination. The command
-keeps the original `backup-id` separately from the destination `host-id`.
+keeps the selected snapshot's actual `backup-id` separately from the destination
+`host-id`, including custom Android histories.
 Neither the source identity nor its snapshot history is renamed or adopted.
 
 There are two authorization checks:
@@ -53,7 +54,8 @@ There are two authorization checks:
    `Datastore.Read` on the selected datastore/namespace.
 2. The destination's storage API key must be authorized by the PBS reader to
    access the source group. A suitable read key can access multiple groups;
-   an automatic device key remains restricted to its own group.
+   an automatic device key is initially limited to its approved namespace.
+   Administrators can extend its normal PBS ACLs in Permissions.
 
 This permits restoring backups whose original computer is offline. It does not
 give devices unrestricted access merely because they appear in the Host list.
@@ -83,3 +85,66 @@ the destination agent and server together for cross-host restores.
 The live credential test exercises the production agent runners and PBS reader;
 the new server queue API and dialogs have build/unit validation but have not yet
 been deployed for a complete browser-to-queue cross-host test.
+
+## Optional revocation when generating enrollment
+
+The Generate Enrollment popup has a **Revoke existing keys** checkbox,
+**unchecked (`false`) by default**. Changing it regenerates the one-time code;
+the Copy button stays disabled until the server returns the new grant. A failed
+regeneration clears the displayed code and can be retried with Regenerate code.
+Storage secrets are encoded locally and are never sent to the grant endpoint.
+
+- **Unchecked:** enrollment issues another independent, narrowly scoped API
+  token. Earlier generated keys retain backup and restore access to this host's
+  configured destinations, including its existing snapshots.
+- **Checked:** successful redemption revokes this host's earlier generated keys.
+  Merely generating a code, abandoning it, or submitting an expired, invalid or
+  already-used code does not revoke them. Independently managed API keys and
+  other hosts' keys are unaffected.
+- **Agent control:** only the newest enrollment can send this host's heartbeats
+  or claim/report its queued jobs. Earlier retained keys have storage access
+  only. This avoids multiple devices competing for one host's server jobs;
+  another independently managed host should have its own host definition and
+  can select an authorized storage key separately.
+
+The API accepts optional `revoke-existing-keys` on
+`POST /config/host/{host}/enrollment-token`; omission means `false`. The choice is
+stored with the grant digest and enforced during bootstrap, not supplied by the
+enrolling client. Existing agents and enrollment-code formats remain compatible.
+The new web UI and server must be upgraded together.
+
+Generated keys have distinct token IDs. The host's credential registry tracks
+the current controller, retained keys and retired key IDs, without storing API
+secrets. Old single-key records load without migration or re-enrollment. Job
+edits refresh ACLs for all retained keys, and deleting a host revokes all its
+generated keys. Normal PBS user/token owner checks remain unchanged for manual
+credentials. Generated keys additionally recognize the same host's earlier
+generated owners after normal namespace permission checks;
+this keeps backups usable after rotation without changing their recorded owner.
+No host IDs, backup groups or owners are adopted or renamed.
+
+## Device namespaces and Android backup IDs
+
+Generated keys appear under Access Control → API Tokens. Namespace ACLs are
+authoritative for storage access, including grants added manually through
+Permissions. The server no longer requires a generated key's backup ID to equal
+its host ID or checks enabled server jobs after a manual ACL permits access.
+PBS group ownership still applies; a read grant is not permission to append to
+another owner's existing group.
+
+New server job forms suggest `devices/<host-id>`. Long IDs are split into
+32-character namespace components. Missing namespaces can be provisioned when
+saving a job, with normal `Datastore.Modify` checks and backup-service filesystem
+ownership. The device key receives `DatastoreBackup` only on the approved
+namespace, without propagation or namespace-creation privileges. Clearing the
+namespace explicitly selects root; existing job configurations are unchanged.
+
+Automatic ACL synchronization records its managed paths rather than deleting
+every ACL for the key. Job edits remove obsolete automatic grants and preserve
+manually added namespaces, other roles and administrator-widened propagation.
+Legacy records initialize tracking before their next configuration edit.
+
+Android 0.3.0 separates cosmetic Job name from Backup ID. Its internal job UUID
+continues to identify settings and scheduling. Jobs with equal datastore,
+namespace and Backup ID share snapshots, without merging contents. Desktop
+Windows/Linux orchestration still uses the host ID as its default Backup ID.

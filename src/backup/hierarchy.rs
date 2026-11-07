@@ -166,10 +166,18 @@ impl Iterator for ListAccessibleBackupGroups<'_> {
                             return Some(Ok(group));
                         }
                         if let Some(auth_id) = &self.auth_id {
-                            match self
-                                .store
-                                .owns_backup(group.backup_ns(), group.group(), auth_id)
-                            {
+                            match self.store.get_owner(group.backup_ns(), group.group()).map(
+                                |owner| {
+                                    crate::server::host::check_host_backup_owner(
+                                        &owner,
+                                        auth_id,
+                                        self.store.name(),
+                                        group.backup_ns(),
+                                        group.group(),
+                                    )
+                                    .is_ok()
+                                },
+                            ) {
                                 Ok(is_owner) if is_owner => return Some(Ok(group)),
                                 Ok(_) => continue,
                                 Err(err) => return Some(Err(err)),
