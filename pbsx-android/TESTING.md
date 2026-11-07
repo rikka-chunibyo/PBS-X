@@ -1,6 +1,6 @@
 # Android preview validation — 2026-11-07
 
-Latest branch: `pbsx-android-shizuku-exports`. The original Android series began
+Latest integrated branch: `pbs-x`. The original Android series began
 on `pbsx-android-app`, based on PBS-X `026c165a2`.
 Phone target: Samsung S20 FE, Android 13 / One UI 5.1, unrooted with Shizuku.
 The Samsung phone was surveyed read-only; this version was built and tested in
@@ -11,6 +11,24 @@ preserves their Backup IDs in queued restores. See
 [host-history validation](../docs/host-history-validation.md) for its Rust/UI
 checks, live PBS tests and test-VM deployment. Android production code and the
 0.4.0 APK below are unchanged by that fix.
+
+## 0.4.1: reader cancellation and backup identity validation
+
+The preview now cancels stalled native reader handshakes and active downloads,
+and accepts existing PBS backup IDs independently of the device ID rules,
+including one-character IDs, leading underscores and IDs longer than 64
+characters. The desktop restore safety changes are documented in
+[restore audit fixes](../docs/restore-audit-fixes.md).
+
+All 27 Android core tests passed with the Go race detector. All 29 Android 13
+instrumentation tests passed with zero skips, including real Shizuku UID 2000.
+The live PBS suites for round trips, backup identities and enrollment keys
+also passed. Java unit tests, lint, preview assembly, signing and 16 KiB ZIP
+alignment checks passed. The actual Samsung phone was untouched.
+
+APK: `artifacts/pbsx-android-preview.apk`, version `0.4.1-preview`, code 8.
+SHA-256: `1fd538f5cfd6861f3a80754cca431bc7085170c0baf91e46b27a0a1e96f8da9e`.
+Logs: `build/reports/code-audit-fixes-*.log` (ignored build output).
 
 ## 0.4.0: optional device exports and per-app Shizuku selection
 

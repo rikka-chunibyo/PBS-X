@@ -87,7 +87,7 @@ func TestWindowsPBSRoundTripCases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	job := nativebackup.Job{ID: "windows-edge-cases", HostID: host, Datastore: store,
+	job := nativebackup.Job{ID: "windows-edge-cases", HostID: host, Datastore: store, Namespace: os.Getenv("PBSX_WINDOWS_TEST_NAMESPACE"),
 		Sources: sources, Excludes: []string{"excluded"}, SnapshotMode: "snapshot", ChangeDetectionMode: "metadata"}
 	backup := func(t *testing.T) *nativebackup.Result {
 		t.Helper()
@@ -101,7 +101,7 @@ func TestWindowsPBSRoundTripCases(t *testing.T) {
 	restore := func(t *testing.T, result *nativebackup.Result, name, mode string, paths []string) string {
 		t.Helper()
 		dest := filepath.Join(base, name)
-		if err := nativerestore.Run(t.Context(), nativerestore.Job{ID: name, HostID: host, Datastore: store,
+		if err := nativerestore.Run(t.Context(), nativerestore.Job{ID: name, HostID: host, Datastore: store, Namespace: os.Getenv("PBSX_WINDOWS_TEST_NAMESPACE"),
 			BackupTime: result.BackupTime, Destination: dest, Mode: mode, Sources: paths}); err != nil {
 			t.Fatal(err)
 		}
@@ -284,7 +284,7 @@ func TestWindowsPBSRejectsOversizedADS(t *testing.T) {
 		t.Fatal(closeErr)
 	}
 	_, err = nativebackup.Run(t.Context(), nativebackup.Job{
-		ID: "windows-oversized-ads", HostID: host, Datastore: store,
+		ID: "windows-oversized-ads", HostID: host, Datastore: store, Namespace: os.Getenv("PBSX_WINDOWS_TEST_NAMESPACE"),
 		Sources: []string{source}, SnapshotMode: "snapshot", ChangeDetectionMode: "data",
 	})
 	if err == nil || !strings.Contains(err.Error(), "streams larger than") {

@@ -13,108 +13,6 @@ import (
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/agentfs/fswire"
 )
 
-// TestShouldUpdateFileTypeAfterDeserialization verifies that shouldUpdateFile
-// correctly identifies file types using the CBOR-serialized FileType field
-// rather than the unexported isDir/isSymlink booleans that are lost during
-// wire transmission (CBOR deserialization).
-func TestShouldUpdateFileTypeAfterDeserialization(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	mkDir := func(p string) { _ = os.MkdirAll(p, 0o755) }
-	mkFile := func(p string) { _ = os.WriteFile(p, []byte("hello"), 0o644) }
-	mkEmpty := func(string) {}
-
-	tests := []struct {
-		name       string
-		fileType   pxar.FileType
-		rawSize    uint64
-		setupPath  func(string)
-		wantUpdate bool
-	}{
-		{
-			name:       "file entry when path does not exist",
-			fileType:   pxar.FileTypeFile,
-			setupPath:  mkEmpty,
-			wantUpdate: true,
-		},
-		{
-			name:       "file entry when path is a directory",
-			fileType:   pxar.FileTypeFile,
-			setupPath:  mkDir,
-			wantUpdate: true,
-		},
-		{
-			name:       "file entry when path is a matching file",
-			fileType:   pxar.FileTypeFile,
-			rawSize:    5, // matches len("hello")
-			setupPath:  mkFile,
-			wantUpdate: false,
-		},
-		{
-			name:       "directory entry when path does not exist",
-			fileType:   pxar.FileTypeDirectory,
-			setupPath:  mkEmpty,
-			wantUpdate: true,
-		},
-		{
-			name:       "directory entry when path is a file",
-			fileType:   pxar.FileTypeDirectory,
-			setupPath:  mkFile,
-			wantUpdate: true,
-		},
-		{
-			name:       "directory entry when path is a directory",
-			fileType:   pxar.FileTypeDirectory,
-			setupPath:  mkDir,
-			wantUpdate: false,
-		},
-		{
-			name:       "symlink entry when path does not exist",
-			fileType:   pxar.FileTypeSymlink,
-			setupPath:  mkEmpty,
-			wantUpdate: true,
-		},
-		{
-			name:       "symlink entry when path is a file",
-			fileType:   pxar.FileTypeSymlink,
-			setupPath:  mkFile,
-			wantUpdate: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(tmpDir, tt.name)
-			tt.setupPath(path)
-
-			// Construct a FileInfo with only FileType set (isDir/isSymlink remain
-			// zero, simulating post-CBOR-deserialization state).
-			info := pxar.FileInfo{
-				FileType: tt.fileType,
-				RawSize:  tt.rawSize,
-			}
-
-			got, err := shouldUpdateFile(path, info, true)
-			if err != nil {
-				t.Fatalf("shouldUpdateFile returned error: %v", err)
-			}
-			if got != tt.wantUpdate {
-				t.Errorf("shouldUpdateFile(%q, FileType=%v) = %v, want %v",
-					path, tt.fileType, got, tt.wantUpdate)
-			}
-		})
-	}
-}
-
-// TestParseXattrUnixSecs pins the contract for how the restore decodes a
-// serialized xattr timestamp. The backup writer (internal/server/vfs/arpcfs,
-// both legacy and current modes) stores user.lastaccesstime /
-// user.lastwritetime / user.creationtime as a decimal string of an int64
-// Unix-SECONDS value on both Unix and Windows agents. parseXattrUnixSecs is
-// shared by restore_unix.go and restore_windows.go so a cross-platform
-// restore (Linux->Windows, Windows->Linux) decodes the same value the same
-// way. It must never return an out-of-range value that would produce an
-// invalid time on the restored file.
 func TestParseXattrUnixSecs(t *testing.T) {
 	const sec2020 int64 = 1609459200 // 2020-12-31T23:00:00Z
 
@@ -357,7 +255,7 @@ func TestProcessJobRoutesFileByFileType(t *testing.T) {
 	job := restoreJob{dest: dest, info: info}
 	st := &restoreState{fsCap: filesystemCapabilities{}, noAttr: true}
 
-	// processJob → restoreFile → shouldUpdateFile → os.OpenFile creates the
+	// processJob → restoreFile → streamToTemp creates the
 	// empty file → applies metadata (nil client). We expect an error from the
 	// nil client path, confirming correct routing.
 	err := processJob(t.Context(), st, job)

@@ -11,7 +11,6 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
@@ -190,7 +189,7 @@ func applyMetaSymlink(ctx context.Context, st *restoreState, path string, e pxar
 	}
 
 	if st.fsCap.supportsChown {
-		st.reportErr(ctx, "lchown", path, unix.Lchown(path, uid, gid))
+		st.reportErr(ctx, "lchown", path, restoreSymlinkChown(st, path, uid, gid))
 	}
 
 	if lerr == nil && st.fsCap.supportsXAttrs {
@@ -198,25 +197,40 @@ func applyMetaSymlink(ctx context.Context, st *restoreState, path string, e pxar
 			if IsCanonicalXAttr(name) {
 				continue
 			}
-			st.reportErr(ctx, "lsetxattr "+name, path, unix.Lsetxattr(path, name, val, 0))
+			st.reportErr(ctx, "lsetxattr "+name, path, restoreSymlinkXattr(st, path, name, val))
 		}
 	}
 	return nil
 }
 
 // applyTempMode sets a freshly-written temp file to 0666 (subject to umask)
-func applyTempMode(path string, rawMode uint64) error {
+func applyTempMode(st *restoreState, path string, rawMode uint64) error {
 	mode := os.FileMode(0o666)
 	if rawMode != 0 {
 		mode = os.FileMode(rawMode & 0o777)
 	}
-	return os.Chmod(path, mode)
+	target, closeTarget, err := st.destinationFS(path)
+	if err != nil {
+		return err
+	}
+	defer closeTarget()
+	file, err := target.open(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Chmod(mode)
 }
 
 func restoreDir(ctx context.Context, st *restoreState, job restoreJob) error {
 	dst := job.dest
 	dirEntry := job.info
-	if err := os.MkdirAll(dst, 0o755); err != nil {
+	targetFS, closeTarget, err := st.destinationFS(dst)
+	if err != nil {
+		return err
+	}
+	defer closeTarget()
+	if err := targetFS.mkdir(dst); err != nil {
 		return err
 	}
 
@@ -226,6 +240,9 @@ func restoreDir(ctx context.Context, st *restoreState, job restoreJob) error {
 	}
 
 	for _, e := range entries {
+		if err := validRestoreName(e.Name()); err != nil {
+			return err
+		}
 		target := filepath.Join(dst, e.Name())
 		childSrc := path.Join(job.srcPath, e.Name())
 
@@ -241,32 +258,10 @@ func restoreDir(ctx context.Context, st *restoreState, job restoreJob) error {
 			}(target, childSrc, e)
 
 		case pxar.FileTypeFifo, pxar.FileTypeSocket:
-			var opErr error
-			mode := uint32(e.RawMode & 0777)
-			if e.FileType == pxar.FileTypeFifo {
-				opErr = syscall.Mkfifo(target, mode)
-			} else {
-				opErr = syscall.Mknod(target, syscall.S_IFSOCK|mode, 0)
+			if err := restoreSpecial(ctx, st, restoreJob{dest: target, srcPath: childSrc, info: e}); err != nil {
+				return err
 			}
 
-			if opErr == nil || os.IsExist(opErr) {
-				if f, openErr := os.OpenFile(target, os.O_RDONLY, 0); openErr == nil {
-					if !st.noAttr {
-						if err := applyMeta(ctx, st, f, e); err != nil {
-							log.Error(err, "")
-						}
-					} else {
-						if err := f.Close(); err != nil {
-							log.Error(err, "")
-						}
-					}
-				} else {
-					opErr = fmt.Errorf("open special file %q: %w", target, openErr)
-				}
-			}
-			if opErr != nil && !os.IsExist(opErr) {
-				return fmt.Errorf("create special file %q: %w", target, opErr)
-			}
 		}
 	}
 
@@ -292,14 +287,38 @@ func applyDeferredDirMeta(ctx context.Context, st *restoreState) error {
 
 	var errs []error
 	for _, d := range dirs {
-		df, err := os.Open(d.dest)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("dir meta open %q: %w", d.dest, err))
-			continue
-		}
-		if err := applyMeta(ctx, st, df, d.info); err != nil {
+		if err := restoreMetadata(ctx, st, d.dest, d.info, true); err != nil {
 			errs = append(errs, fmt.Errorf("dir meta %q: %w", d.dest, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func restoreMetadata(ctx context.Context, st *restoreState, p string, e pxar.FileInfo, directory bool) error {
+	target, closeTarget, err := st.destinationFS(p)
+	if err != nil {
+		return err
+	}
+	defer closeTarget()
+	flags := os.O_RDWR | unix.O_NOFOLLOW | unix.O_NONBLOCK
+	if directory {
+		flags = os.O_RDONLY | unix.O_NOFOLLOW | unix.O_NONBLOCK
+	}
+	file, err := target.open(p, flags, 0)
+	if err != nil {
+		return err
+	}
+	return applyMeta(ctx, st, file, e)
+}
+func restoreSymlinkChown(st *restoreState, p string, uid, gid int) error {
+	target, closeTarget, err := st.destinationFS(p)
+	if err != nil {
+		return err
+	}
+	defer closeTarget()
+	rel, err := target.relative(p)
+	if err != nil {
+		return err
+	}
+	return target.root.Lchown(rel, uid, gid)
 }

@@ -818,7 +818,7 @@ pub enum HostRestoreMode {
             description: "Unique PBS-X host restore run identifier.",
         },
         "host-id": { schema: HOST_ID_SCHEMA },
-        "backup-id": { optional: true, schema: HOST_ID_SCHEMA },
+        "backup-id": { optional: true, schema: BACKUP_ID_SCHEMA },
         store: { schema: DATASTORE_SCHEMA },
         ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
         "backup-time": { schema: BACKUP_TIME_SCHEMA },
@@ -921,7 +921,7 @@ pub struct HostRestoreRunProgress {
         "run-id": { type: String, description: "Unique PBS-X host restore run identifier." },
         "host-id": { schema: HOST_ID_SCHEMA },
         state: { type: HostRestoreRunState },
-        "backup-id": { optional: true, schema: HOST_ID_SCHEMA },
+        "backup-id": { optional: true, schema: BACKUP_ID_SCHEMA },
         store: { schema: DATASTORE_SCHEMA },
         ns: { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
         "backup-time": { schema: BACKUP_TIME_SCHEMA },
@@ -982,6 +982,26 @@ pub struct HostRestoreRunInfo {
 #[cfg(test)]
 mod restore_identity_tests {
     use super::*;
+
+    #[test]
+    fn restore_commands_and_history_use_backup_group_ids() {
+        use proxmox_schema::ApiType;
+        for id in ["a".to_string(), "_photos".to_string(), "a".repeat(100)] {
+            let mut value = serde_json::json!({
+                "run-id":"restore-test", "host-id":"destination-host", "backup-id":id,
+                "store":"backup", "backup-time":123, "sources":["/"],
+                "destination":"/tmp/restore", "mode":"normal", "requested-at":123
+            });
+            HostRestoreRunCommand::API_SCHEMA
+                .verify_json(&value)
+                .unwrap();
+            value["state"] = "queued".into();
+            value["processed-bytes"] = 0.into();
+            value["files"] = 0.into();
+            value["duration-ms"] = 0.into();
+            HostRestoreRunInfo::API_SCHEMA.verify_json(&value).unwrap();
+        }
+    }
 
     #[test]
     fn restore_source_and_destination_are_independent() {

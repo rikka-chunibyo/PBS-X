@@ -170,3 +170,16 @@ func TestGroupSnapshotRequestsPreserveBackupType(t *testing.T) {
 		t.Fatal("invalid group accepted")
 	}
 }
+
+func TestBackupGroupIDsUsePBSRules(t *testing.T) {
+	for _, id := range []string{"a", "_photos", strings.Repeat("a", 100)} {
+		if err := validateGroup("host", id); err != nil {
+			t.Fatal(id, err)
+		}
+	}
+	for _, id := range []string{"", ".", "..", "a/b", "a\\b", "has space", "a\nheader", "é"} {
+		if validateGroup("host", id) == nil {
+			t.Fatalf("invalid backup ID accepted: %q", id)
+		}
+	}
+}
