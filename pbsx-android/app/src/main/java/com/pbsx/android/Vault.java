@@ -10,6 +10,8 @@ import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /** Device-bound encrypted configuration. Android cloud/device backup is disabled. */
 final class Vault {
@@ -30,7 +32,7 @@ final class Vault {
     return generator.generateKey();
   }
 
-  static synchronized void save(Context c, String json) throws Exception {
+  private static synchronized void write(Context c, String json) throws Exception {
     Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
     cipher.init(Cipher.ENCRYPT_MODE, key());
     String value =
@@ -42,7 +44,7 @@ final class Vault {
       throw new Exception("Could not save connection");
   }
 
-  static synchronized String load(Context c) throws Exception {
+  private static synchronized String read(Context c) throws Exception {
     String value = c.getSharedPreferences("vault", 0).getString("connection", "");
     if (value.isEmpty()) return "";
     String[] parts = value.split(":", 2);
@@ -54,5 +56,61 @@ final class Vault {
         new GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)));
     return new String(
         cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), StandardCharsets.UTF_8);
+  }
+
+  static synchronized JSONObject data(Context c) throws Exception {
+    String raw = read(c);
+    if (raw.isEmpty())
+      return new JSONObject()
+          .put("version", 2)
+          .put("connections", new JSONArray())
+          .put("keys", new JSONArray())
+          .put("default_connection", "");
+    JSONObject value = new JSONObject(raw);
+    if (value.optInt("version") != 2)
+      throw new Exception(
+          "This test build uses a new vault format. Clear app storage and reconnect.");
+    if (value.has("pending_import")) {
+      SettingsTransfer.applyPreferences(c, value.getJSONObject("pending_import"));
+      value.remove("pending_import");
+      write(c, value.toString());
+    }
+    return value;
+  }
+
+  static synchronized void store(Context c, JSONObject value) throws Exception {
+    write(c, value.toString());
+  }
+
+  static synchronized void install(Context c, JSONObject value, JSONObject preferences)
+      throws Exception {
+    JSONObject next = new JSONObject(value.toString()).put("pending_import", preferences);
+    write(c, next.toString());
+    data(c); // Encrypted import journal completes interrupted preference writes on next startup.
+  }
+
+  static synchronized String load(Context c) throws Exception {
+    return KeyProfiles.config(c, "", "", false);
+  }
+
+  // Test fixtures can update the selected default connection without a network request.
+  static synchronized void save(Context c, String config) throws Exception {
+    JSONObject data = data(c), cfg = new JSONObject(config);
+    cfg.remove("decryption_keys");
+    cfg.remove("encryption_key");
+    cfg.remove("encryption_enabled");
+    String id = data.optString("default_connection");
+    JSONArray profiles = data.getJSONArray("connections");
+    JSONObject entry = null;
+    for (int i = 0; i < profiles.length(); i++)
+      if (profiles.getJSONObject(i).getString("id").equals(id)) entry = profiles.getJSONObject(i);
+    if (entry == null) {
+      id = java.util.UUID.randomUUID().toString();
+      entry = new JSONObject().put("id", id).put("name", "Default connection");
+      profiles.put(entry);
+    }
+    entry.put("config", cfg);
+    data.put("default_connection", id);
+    store(c, data);
   }
 }

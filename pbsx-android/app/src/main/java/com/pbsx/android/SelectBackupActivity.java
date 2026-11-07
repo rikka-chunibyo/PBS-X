@@ -24,11 +24,13 @@ public final class SelectBackupActivity extends Activity {
                   new Intent()
                       .putExtra("store", group.optString("store"))
                       .putExtra("namespace", group.optString("namespace"))
-                      .putExtra("backup_id", group.optString("backup_id")));
+                      .putExtra("backup_id", group.optString("backup_id"))
+                      .putExtra("connection_id", group.optString("connection_id")));
               finish();
             },
             this::finish,
             saved);
+    if (saved == null) catalogue.connection(getIntent().getStringExtra("connection_id"));
     catalogue.chooseHistory();
   }
 

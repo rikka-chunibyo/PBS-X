@@ -47,6 +47,7 @@ final class ConnectionDialogs {
         f,
         "Create a host and enrollment code in PBS-X → Hosts. Its enabled server job authorizes the"
             + " datastore and namespace used by your local jobs.");
+    EditText name = Ui.input(f, "Connection name", "My PBS", false);
     EditText code = Ui.input(f, "PBS-X enrollment code", "", true);
     new AlertDialog.Builder(a)
         .setTitle("Connect with enrollment code")
@@ -55,14 +56,16 @@ final class ConnectionDialogs {
         .setPositiveButton(
             "Enroll",
             (d, w) -> {
+              String profileName = name.getText().toString();
               String value = code.getText().toString().trim();
               code.setText("");
               background.run(
                   "Enrolling…",
                   () -> {
+                    KeyProfiles.label(profileName);
                     String config =
                         Mobilecore.enroll(value, Build.MANUFACTURER + " " + Build.MODEL);
-                    Vault.save(a, config);
+                    KeyProfiles.addConnection(a, profileName, config);
                     return "Connected. Your backup jobs can use an authorized datastore and"
                         + " namespace.";
                   });
@@ -76,7 +79,8 @@ final class ConnectionDialogs {
     Ui.hint(
         f,
         "Connect using a normal PBS API token and the server's SHA-256 certificate fingerprint."
-            + " This replaces the active connection, while keeping local jobs.");
+            + " Each saved connection can be selected independently by jobs.");
+    EditText name = Ui.input(f, "Connection name", "My PBS", false);
     EditText server = Ui.input(f, "HTTPS server", "https://", false),
         host = Ui.input(f, "Device ID", "", false),
         pin = Ui.input(f, "SHA-256 certificate fingerprint", "", false),
@@ -107,7 +111,7 @@ final class ConnectionDialogs {
                                 .put("auth_id", id.getText().toString().trim())
                                 .put("secret", secret.getText().toString().trim());
                         Mobilecore.newClient(cfg.toString());
-                        Vault.save(a, cfg.toString());
+                        KeyProfiles.addConnection(a, name.getText().toString(), cfg.toString());
                         secret.setText("");
                         dialog.dismiss();
                         changed.run();
@@ -119,6 +123,10 @@ final class ConnectionDialogs {
   }
 
   void storage() {
+    storage("");
+  }
+
+  void storage(String profileID) {
     if (!idle()) return;
     try {
       String raw = Vault.load(a);
@@ -126,7 +134,8 @@ final class ConnectionDialogs {
         message("Connect to PBS-X first");
         return;
       }
-      JSONObject cfg = new JSONObject(raw);
+      JSONObject entry = KeyProfiles.connection(a, profileID);
+      JSONObject cfg = entry.getJSONObject("config");
       LinearLayout f = Ui.form(a);
       Ui.hint(
           f,
@@ -156,7 +165,7 @@ final class ConnectionDialogs {
                             nextSecret = cfg.optString("storage_secret");
                           cfg.put("storage_auth_id", nextId).put("storage_secret", nextSecret);
                           Mobilecore.newClient(cfg.toString());
-                          Vault.save(a, cfg.toString());
+                          KeyProfiles.updateConnection(a, entry.getString("id"), cfg);
                           secret.setText("");
                           dialog.dismiss();
                           changed.run();

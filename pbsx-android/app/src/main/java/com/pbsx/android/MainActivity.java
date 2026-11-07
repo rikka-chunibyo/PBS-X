@@ -330,6 +330,16 @@ public final class MainActivity extends Activity {
           });
       card.addView(titleRow);
       Ui.hint(card, job.sourceCount() + " sources  ·  " + job.target());
+      try {
+        String connection = KeyProfiles.connection(this, job.connectionID).getString("name");
+        String encryption =
+            job.encryptionKeyID.isEmpty()
+                ? "Off"
+                : KeyProfiles.find(Vault.data(this), "keys", job.encryptionKeyID).getString("name");
+        Ui.hint(card, "Connection: " + connection + "\nEncryption: " + encryption);
+      } catch (Exception e) {
+        Ui.hint(card, "Saved credentials unavailable · edit this job");
+      }
       Ui.text(
           card, job.schedule() + (job.wifi ? "  ·  Wi-Fi only" : "  ·  any network"), 13, Ui.BLUE);
       JSONObject last = null;
@@ -374,6 +384,7 @@ public final class MainActivity extends Activity {
             .putExtra("namespace", group.optString("namespace"))
             .putExtra("source", group.optString("backup_id"))
             .putExtra("source_type", group.optString("backup_type"))
+            .putExtra("connection_id", group.optString("connection_id"))
             .putExtra("from_catalogue", true));
   }
 
@@ -414,7 +425,11 @@ public final class MainActivity extends Activity {
             : cfg.optString("server") + "\nBackup group: host/" + cfg.optString("host_id"));
     Ui.button(account, "Enroll with PBS-X code", true, v -> connections.enroll());
     Ui.button(account, "Use an existing API key", false, v -> connections.manual());
-    Ui.button(account, "Change storage API key", false, v -> connections.storage());
+    Ui.button(
+        account,
+        "Keys & credentials",
+        false,
+        v -> startActivity(new Intent(this, KeysActivity.class)));
     LinearLayout restore = Ui.card(page);
     Ui.text(restore, "Restore connection", 19, Ui.TEXT);
     CheckBox wifi =
@@ -425,6 +440,28 @@ public final class MainActivity extends Activity {
     wifi.setOnCheckedChangeListener(
         (b, value) -> Settings.prefs(this).edit().putBoolean("wifi", value).apply());
     Ui.hint(restore, "Backup jobs each have their own Wi-Fi setting.");
+    if (Settings.prefs(this).getBoolean("imported_schedule_hold", false)) {
+      Ui.hint(
+          restore,
+          "Imported schedules are paused. Review folder access and Shizuku permissions before"
+              + " resuming.");
+      Ui.button(
+          restore,
+          "Resume imported schedules",
+          false,
+          v -> {
+            Settings.prefs(this).edit().putBoolean("imported_schedule_hold", false).commit();
+            try {
+              ScheduleService.configureAll(this);
+              render();
+            } catch (Exception e) {
+              new AlertDialog.Builder(this)
+                  .setMessage(e.getMessage())
+                  .setPositiveButton("OK", null)
+                  .show();
+            }
+          });
+    }
     LinearLayout privileged = Ui.card(page);
     Ui.text(privileged, "Shizuku", 19, Ui.TEXT);
     String status = "Not running";
@@ -485,7 +522,9 @@ public final class MainActivity extends Activity {
       message("Connection setup is still running");
       return;
     }
-    Intent i = new Intent(this, RestoreActivity.class);
+    Intent i =
+        new Intent(this, RestoreActivity.class)
+            .putExtra("connection_id", job == null ? "" : job.connectionID);
     if (job != null) {
       try {
         i.putExtra("store", job.store)

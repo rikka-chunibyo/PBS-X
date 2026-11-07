@@ -1,0 +1,191 @@
+package com.pbsx.android;
+
+import android.content.Context;
+import com.pbsx.core.mobilecore.Mobilecore;
+import java.util.HashSet;
+import java.util.UUID;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+/** Portable secrets are wrapped by the device's Keystore-backed vault. Jobs store IDs only. */
+final class KeyProfiles {
+  static String selected(Context c) throws Exception {
+    return Vault.data(c).optString("default_connection");
+  }
+
+  static JSONObject find(JSONObject vault, String kind, String id) throws Exception {
+    JSONArray values = vault.getJSONArray(kind);
+    for (int i = 0; i < values.length(); i++)
+      if (id.equals(values.getJSONObject(i).getString("id"))) return values.getJSONObject(i);
+    throw new Exception(
+        kind.equals("keys")
+            ? "The selected encryption key is unavailable"
+            : "The selected connection is unavailable");
+  }
+
+  static JSONObject connection(Context c, String id) throws Exception {
+    JSONObject vault = Vault.data(c);
+    return find(vault, "connections", id.isEmpty() ? vault.optString("default_connection") : id);
+  }
+
+  static String config(Context c, String connection, String encryption, boolean backup)
+      throws Exception {
+    JSONObject vault = Vault.data(c);
+    String id = connection.isEmpty() ? vault.optString("default_connection") : connection;
+    if (id.isEmpty() && connection.isEmpty()) return "";
+    JSONObject cfg =
+        new JSONObject(find(vault, "connections", id).getJSONObject("config").toString());
+    JSONArray keys = vault.getJSONArray("keys"), raw = new JSONArray();
+    for (int i = 0; i < keys.length(); i++) raw.put(keys.getJSONObject(i).getString("key"));
+    cfg.put("decryption_keys", raw).put("encryption_enabled", backup && !encryption.isEmpty());
+    if (backup && !encryption.isEmpty())
+      cfg.put("encryption_key", find(vault, "keys", encryption).getString("key"));
+    return cfg.toString();
+  }
+
+  static void label(String name) throws Exception {
+    if (name.trim().isEmpty() || name.length() > 100 || name.indexOf('\n') >= 0)
+      throw new Exception("Enter a name of 1–100 characters");
+  }
+
+  static synchronized String addConnection(Context c, String name, String config) throws Exception {
+    if (Operations.running()) throw new Exception("Wait for the active transfer");
+    label(name);
+    Mobilecore.newClient(config);
+    JSONObject data = Vault.data(c);
+    JSONArray values = data.getJSONArray("connections");
+    if (values.length() >= 100) throw new Exception("At most 100 connections are supported");
+    String id = UUID.randomUUID().toString();
+    values.put(
+        new JSONObject()
+            .put("id", id)
+            .put("name", name.trim())
+            .put("config", new JSONObject(config)));
+    if (data.optString("default_connection").isEmpty()) data.put("default_connection", id);
+    Vault.store(c, data);
+    return id;
+  }
+
+  static synchronized String addKey(Context c, String name, String raw) throws Exception {
+    if (Operations.running()) throw new Exception("Wait for the active transfer");
+    label(name);
+    raw = raw.trim().toLowerCase(java.util.Locale.ROOT);
+    String fp = Mobilecore.encryptionFingerprint(raw);
+    JSONObject data = Vault.data(c);
+    JSONArray values = data.getJSONArray("keys");
+    if (values.length() >= 100) throw new Exception("At most 100 encryption keys are supported");
+    for (int i = 0; i < values.length(); i++)
+      if (fp.equals(values.getJSONObject(i).getString("fingerprint")))
+        throw new Exception("This key is already saved");
+    String id = UUID.randomUUID().toString();
+    values.put(
+        new JSONObject()
+            .put("id", id)
+            .put("name", name.trim())
+            .put("key", raw)
+            .put("fingerprint", fp));
+    Vault.store(c, data);
+    return id;
+  }
+
+  static synchronized void remove(Context c, String kind, String id) throws Exception {
+    if (Operations.running()) throw new Exception("Wait for the active transfer");
+    for (BackupJob job : JobStore.all(c))
+      if (id.equals(
+          kind.equals("keys")
+              ? job.encryptionKeyID
+              : job.connectionID.isEmpty() ? selected(c) : job.connectionID))
+        throw new Exception("Reassign jobs using this entry first");
+    JSONObject data = Vault.data(c);
+    JSONArray values = data.getJSONArray(kind), out = new JSONArray();
+    for (int i = 0; i < values.length(); i++)
+      if (!id.equals(values.getJSONObject(i).getString("id"))) out.put(values.get(i));
+    data.put(kind, out);
+    if (kind.equals("connections") && id.equals(data.optString("default_connection")))
+      data.put("default_connection", out.length() == 0 ? "" : out.getJSONObject(0).getString("id"));
+    Vault.store(c, data);
+  }
+
+  static synchronized void setDefault(Context c, String id) throws Exception {
+    if (Operations.running()) throw new Exception("Wait for the active transfer");
+    JSONObject data = Vault.data(c);
+    find(data, "connections", id);
+    data.put("default_connection", id);
+    Vault.store(c, data);
+  }
+
+  static synchronized void rename(Context c, String kind, String id, String name) throws Exception {
+    if (Operations.running()) throw new Exception("Wait for the active transfer");
+    label(name);
+    JSONObject data = Vault.data(c);
+    find(data, kind, id).put("name", name.trim());
+    Vault.store(c, data);
+  }
+
+  static synchronized void updateConnection(Context c, String id, JSONObject config)
+      throws Exception {
+    if (Operations.running()) throw new Exception("Wait for the active transfer");
+    Mobilecore.newClient(config.toString());
+    JSONObject data = Vault.data(c);
+    find(data, "connections", id).put("config", config);
+    Vault.store(c, data);
+  }
+
+  static void validate(JSONObject vault) throws Exception {
+    if (vault.getInt("version") != 2 || vault.has("pending_import"))
+      throw new Exception("Unsupported vault format");
+    HashSet<String> ids = new HashSet<>(), fps = new HashSet<>();
+    for (String kind : new String[] {"connections", "keys"}) {
+      JSONArray values = vault.getJSONArray(kind);
+      if (values.length() > 100) throw new Exception("Too many saved keys or connections");
+      for (int i = 0; i < values.length(); i++) {
+        JSONObject value = values.getJSONObject(i);
+        String id = value.getString("id");
+        if (!id.matches("[A-Za-z0-9_-]{1,64}") || !ids.add(id))
+          throw new Exception("Invalid or duplicate saved identity");
+        label(value.getString("name"));
+        if (kind.equals("connections")) {
+          JSONObject cfg = value.getJSONObject("config");
+          if (cfg.has("encryption_key")
+              || cfg.has("decryption_keys")
+              || cfg.has("encryption_enabled"))
+            throw new Exception("Connection contains unexpected encryption settings");
+          Mobilecore.newClient(cfg.toString());
+        } else {
+          String fp = Mobilecore.encryptionFingerprint(value.getString("key"));
+          if (!fp.equals(value.getString("fingerprint")) || !fps.add(fp))
+            throw new Exception("Invalid or duplicate encryption fingerprint");
+        }
+      }
+    }
+    String selected = vault.getString("default_connection");
+    if (!selected.isEmpty()) find(vault, "connections", selected);
+    if (selected.isEmpty() && vault.getJSONArray("connections").length() > 0)
+      throw new Exception("Select a default connection");
+  }
+
+  static void validateJob(Context c, BackupJob job) throws Exception {
+    JSONObject vault = Vault.data(c);
+    validateJob(vault, job);
+    // One history uses one key policy. Connection credentials may differ.
+    String server = connection(c, job.connectionID).getJSONObject("config").getString("server");
+    for (BackupJob other : JobStore.all(c))
+      if (!other.id.equals(job.id)
+          && other.store.equals(job.store)
+          && other.namespace.equals(job.namespace)
+          && other.backupID.equals(job.backupID)) {
+        String theirs =
+            connection(c, other.connectionID).getJSONObject("config").getString("server");
+        if (server.equals(theirs) && !other.encryptionKeyID.equals(job.encryptionKeyID))
+          throw new Exception(
+              "Jobs sharing this backup history must use the same encryption key setting");
+      }
+  }
+
+  static void validateJob(JSONObject vault, BackupJob job) throws Exception {
+    String id =
+        job.connectionID.isEmpty() ? vault.optString("default_connection") : job.connectionID;
+    find(vault, "connections", id);
+    if (!job.encryptionKeyID.isEmpty()) find(vault, "keys", job.encryptionKeyID);
+  }
+}

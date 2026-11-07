@@ -6,6 +6,26 @@ Minimum Android 8; the initial device target is an unrooted Samsung S20 FE,
 Android 13 / One UI 5.1, with Shizuku installed. This is an early file-backup
 preview, not a full device-image or private-app-data backup tool.
 
+## Keys, encryption and complete settings exports
+
+Preview 0.5.0 adds **Settings → Keys & credentials**, named connections and
+backup keys, and independent **Connection** / **Encryption** selectors in each
+job. Automatic enrollment adds a connection; existing API keys are supported.
+Restore can select a connection and finds imported encryption keys by fingerprint.
+
+**Export all settings** includes every job, source selection, schedule, saved
+preference, connection, credential, encryption key and activity entry. Choose
+plain JSON or password-encrypted JSON. The export password is used for that
+file only and is not saved. Import validates and replaces the saved state;
+imported schedules stay paused until permissions are reviewed. Folder access
+and Shizuku authorization must be granted on the destination device.
+
+This test build uses a new vault format. Clear the previous 0.4.x app storage
+and reconnect; no old-vault migration is included. Keep exported encryption
+keys somewhere other than the device being backed up. See
+[settings format and key management](SETTINGS-FORMAT.md) for details.
+App settings are not a backup source in this release.
+
 ## Try it
 
 1. Install `artifacts/pbsx-android-preview.apk`. Permit installation from the
@@ -44,9 +64,7 @@ The percentage is for the **current file**, not the whole job. Scanning,
 preparing sources, comparing files and saving the snapshot use an indeterminate
 bar. Reading unchanged files still advances progress even when PBS reuses every
 chunk and uploads zero new content. Job and Activity rows update while running.
-Existing folder and schedule settings migrate into a `Phone backup` job on
-upgrade; the existing connection and keys are retained. Editing or deleting a
-local job never deletes its PBS snapshots.
+Editing or deleting a local job never deletes its PBS snapshots.
 
 Restore modes reuse existing folders and keep unrelated destination files:
 
@@ -68,7 +86,7 @@ An existing PBS API token can be used instead of enrollment. Enter its full
 certificate** fingerprint. Credentials are encrypted with Android Keystore;
 cloud backup and device transfer of this application's state are excluded.
 
-**Change storage API key** retains the automatically enrolled device identity
+A saved connection’s **Change storage access key** retains the automatically enrolled device identity
 while selecting another token for datastore access. A broader authorized key
 can list and restore another host's snapshots through the global **Restore**
 catalogue. Clearing both storage-key fields returns to the automatic key.

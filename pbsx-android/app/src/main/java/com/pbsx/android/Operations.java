@@ -56,6 +56,19 @@ final class Operations {
     }
   }
 
+  interface SettingsChange {
+    void run() throws Exception;
+  }
+
+  static void changeSettings(SettingsChange action) throws Exception {
+    if (!running.compareAndSet(false, true)) throw new BusyException();
+    try {
+      action.run();
+    } finally {
+      running.set(false);
+    }
+  }
+
   static boolean running() {
     return running.get();
   }
@@ -197,7 +210,8 @@ final class Operations {
       publish.run();
       cancellation.check();
       checkNetwork(context, job.wifi);
-      String config = Vault.load(context);
+      String config =
+          KeyProfiles.config(context, job.connectionID, job.encryptionKeyID, destination == null);
       if (config.isEmpty()) throw new Exception("Enroll or configure an API key first");
       Client client = client(context, config, cancellation, job.wifi);
       cancellation.client = client;

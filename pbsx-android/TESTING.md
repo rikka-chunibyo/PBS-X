@@ -1,6 +1,6 @@
 # Android preview validation — 2026-11-07
 
-Latest integrated branch: `pbs-x`. The original Android series began
+Current feature branch: `pbsx-android-key-vault`, based on integrated `pbs-x`. The original Android series began
 on `pbsx-android-app`, based on PBS-X `026c165a2`.
 Phone target: Samsung S20 FE, Android 13 / One UI 5.1, unrooted with Shizuku.
 The Samsung phone was surveyed read-only; this version was built and tested in
@@ -11,6 +11,52 @@ preserves their Backup IDs in queued restores. See
 [host-history validation](../docs/host-history-validation.md) for its Rust/UI
 checks, live PBS tests and test-VM deployment. Android production code and the
 0.4.0 APK below are unchanged by that fix.
+
+## 0.5.0: key vault, optional backup encryption and complete settings transfer
+
+The keys page, job connection/encryption selectors, Restore connection selection
+and complete plain/password-encrypted settings exports are implemented. Exports
+include jobs, schedules, source selections, every saved preference, credentials,
+backup keys and activity history. The password is not saved. Imports validate
+before replacement, recover interrupted preference writes through an encrypted
+journal, and pause imported schedules until permission review. No migration of
+0.4.x vaults is included; clear this test app's storage before reconnecting.
+See [settings/key format](SETTINGS-FORMAT.md).
+
+Validation on 2026-11-07:
+
+- All **34 Android 13 instrumentation tests passed with zero skips**. Real
+  Shizuku ran as shell UID 2000. New tests cover job credential/key selectors,
+  the keys page/password dialog, complete settings round trips, all preference
+  types, history and source/schedule preservation, import validation without
+  state changes, referenced-key deletion protection and import-journal recovery.
+- All **30 Android Go core tests passed with the race detector**. Crypto tests
+  include random salt/nonce use, wrong password, modified ciphertext, malformed
+  envelopes, bounded KDF selection, missing/invalid backup keys, signed-manifest
+  tampering and encrypted chunk authentication/digest checks.
+- The live encryption suite passed on PBS-X VM104. It verifies encrypted stored
+  chunks, unchanged-chunk reuse, imported-key restore to a different destination
+  identity, refusal of wrong/missing keys and historical reads after rotation.
+  **Bidirectional encrypted interoperability with the standard Rust
+  `proxmox-backup-client` passed**, including signature verification.
+- All three existing live suites passed: round trips, backup identities and
+  enrollment keys. Each used its own automatically cleaned disposable fixture.
+- The shared PBS writer suite passed with the race detector, including the
+  standard-manifest signature regression and refusing encryption without a key
+  before network access. Linux desktop native-backup tests passed; the normal
+  native-restore package has no untagged tests. No Windows VM was needed for this
+  Android change.
+- ARM64/x86-64 AAR and APK assembly, Java unit tests, lint, unchanged signing
+  identity and 16 KiB APK ZIP alignment checks passed. No physical Samsung
+  backup/restore or 16 KiB-page device test was performed.
+
+Version: `0.5.0-preview`, code 9. Logs: `build/reports/key-vault-*.log`.
+APK SHA-256: `c06deb6d993541e8501b17139a8674d5169e073d17883e7b3f6f46c7601b8794`.
+The phone, dev VM and unrelated host services were untouched. Only PBS-X VM104
+and the local Android emulator were used; server code/services were not replaced.
+All seven disposable fixture identities were verified absent afterward. VM104
+was returned to its original stopped state and 8 GiB RAM / 4 GiB balloon setting;
+the emulator and loopback fixture were stopped.
 
 ## 0.4.1: reader cancellation and backup identity validation
 
