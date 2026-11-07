@@ -139,11 +139,9 @@ fn upgrade_to_backup_reader_protocol(
         let backup_dir = datastore.backup_dir(backup_ns, backup_dir)?;
         if !priv_read {
             let owner = backup_dir.get_owner()?;
-            let correct_owner = owner == auth_id
-                || (owner.is_token() && Authid::from(owner.user().clone()) == auth_id);
-            if !correct_owner {
-                bail!("backup owner check failed!");
-            }
+            crate::server::host::check_host_backup_owner(
+                &owner, &auth_id, &store, backup_dir.backup_ns(), backup_dir.as_ref(),
+            )?;
         }
 
         if !backup_dir.full_path().exists() {

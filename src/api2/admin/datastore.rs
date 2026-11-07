@@ -61,8 +61,8 @@ use pbs_datastore::index::IndexFile;
 use pbs_datastore::manifest::BackupManifest;
 use pbs_datastore::prune::compute_prune_info;
 use pbs_datastore::{
-    BackupDir, DataStore, LocalChunkReader, StoreProgress, check_backup_owner,
-    ensure_datastore_is_mounted, task_tracking,
+    BackupDir, DataStore, LocalChunkReader, StoreProgress, ensure_datastore_is_mounted,
+    task_tracking,
 };
 use pbs_tools::json::required_string_param;
 use proxmox_rest_server::{WorkerTask, formatter, worker_is_active};
@@ -94,7 +94,7 @@ fn check_privs_and_load_store(
 
     if limited {
         let owner = datastore.get_owner(ns, backup_group)?;
-        check_backup_owner(&owner, auth_id)?;
+        crate::server::host::check_host_backup_owner(&owner, auth_id, store, ns, backup_group)?;
     }
 
     Ok(datastore)
@@ -163,7 +163,16 @@ fn backup_group_to_group_list_item(
 ) -> Option<GroupListItem> {
     let owner = get_group_owner(datastore.name(), ns, &group)?;
 
-    if !list_all && check_backup_owner(&owner, auth_id).is_err() {
+    if !list_all
+        && crate::server::host::check_host_backup_owner(
+            &owner,
+            auth_id,
+            datastore.name(),
+            ns,
+            group.as_ref(),
+        )
+        .is_err()
+    {
         return None;
     }
 
@@ -348,7 +357,7 @@ pub fn move_group(
 
     if source_limited || target_limited {
         let owner = datastore.get_owner(&ns, &group)?;
-        check_backup_owner(&owner, &auth_id)?;
+        crate::server::host::check_host_backup_owner(&owner, &auth_id, &store, &ns, &group)?;
     }
 
     // Best-effort pre-checks for a fast synchronous error before spawning a worker.
@@ -590,7 +599,16 @@ pub(crate) unsafe fn list_snapshots_blocking(
             None => return Ok(snapshots),
         };
 
-        if !list_all && check_backup_owner(&owner, &auth_id).is_err() {
+        if !list_all
+            && crate::server::host::check_host_backup_owner(
+                &owner,
+                &auth_id,
+                &store,
+                &ns,
+                group.as_ref(),
+            )
+            .is_err()
+        {
             return Ok(snapshots);
         }
 
@@ -848,7 +866,13 @@ pub fn verify(
 
             if owner_check_required {
                 let owner = datastore.get_owner(dir.backup_ns(), dir.as_ref())?;
-                check_backup_owner(&owner, &auth_id)?;
+                crate::server::host::check_host_backup_owner(
+                    &owner,
+                    &auth_id,
+                    &store,
+                    dir.backup_ns(),
+                    dir.as_ref(),
+                )?;
             }
 
             backup_dir = Some(dir);
@@ -866,7 +890,9 @@ pub fn verify(
 
             if owner_check_required {
                 let owner = datastore.get_owner(&ns, &group)?;
-                check_backup_owner(&owner, &auth_id)?;
+                crate::server::host::check_host_backup_owner(
+                    &owner, &auth_id, &store, &ns, &group,
+                )?;
             }
 
             backup_group = Some(datastore.backup_group(ns.clone(), group));

@@ -38,4 +38,4 @@ values={'v':1,'host_id':host,'server_url':'https://127.0.0.1:8007','bootstrap_to
 code='pbsx1.'+base64.urlsafe_b64encode(json.dumps(values).encode()).decode().rstrip('=')
 (folder/'enrollment').write_text(code)
 PY
-PBSX_ANDROID_TEST_ENROLLMENT="$scratch/enrollment" PBSX_ANDROID_TEST_NAMESPACE="$test_id" PBSX_ANDROID_TEST_DISABLED_JOB="$test_id" "$binary" -test.run '^TestLivePBS$' -test.v -test.timeout 90s
+PBSX_ANDROID_TEST_ENROLLMENT="$scratch/enrollment" PBSX_ANDROID_TEST_NAMESPACE="$test_id" PBSX_ANDROID_TEST_DISABLED_JOB="$test_id" "$binary" -test.run "${PBSX_ANDROID_TEST_PATTERN:-^TestLivePBS$}" -test.v -test.timeout 90s

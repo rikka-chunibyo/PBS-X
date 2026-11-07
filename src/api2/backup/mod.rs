@@ -172,8 +172,14 @@ fn upgrade_to_backup_protocol(
         )?;
 
         // permission check
-        let correct_owner =
-            owner == auth_id || (owner.is_token() && Authid::from(owner.user().clone()) == auth_id);
+        let correct_owner = crate::server::host::check_host_backup_owner(
+            &owner,
+            &auth_id,
+            &store,
+            backup_group.backup_ns(),
+            backup_group.as_ref(),
+        )
+        .is_ok();
         if !correct_owner && worker_type != "benchmark" {
             // only the owner is allowed to create additional snapshots
             bail!("backup owner check failed ({} != {})", auth_id, owner);

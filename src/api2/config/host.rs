@@ -235,6 +235,12 @@ pub fn delete_host(name: String, digest: Option<String>) -> Result<(), Error> {
     input: {
         properties: {
             name: { schema: HOST_ID_SCHEMA },
+            "revoke-existing-keys": {
+                type: bool,
+                optional: true,
+                default: false,
+                description: "Revoke this host's previous generated keys when enrollment is redeemed.",
+            },
         },
     },
     returns: { type: HostEnrollmentToken },
@@ -243,13 +249,16 @@ pub fn delete_host(name: String, digest: Option<String>) -> Result<(), Error> {
     },
 )]
 /// Generate a short-lived one-time enrollment token for a host.
-pub fn generate_enrollment_token(name: String) -> Result<HostEnrollmentToken, Error> {
+pub fn generate_enrollment_token(
+    name: String,
+    revoke_existing_keys: Option<bool>,
+) -> Result<HostEnrollmentToken, Error> {
     let (config, _digest) = pbs_config::host::config()?;
     let host: HostConfig = config.lookup("host", &name)?;
     if !host.enable {
         bail!("host '{}' is disabled", name);
     }
-    crate::server::host::create_enrollment_token(&name)
+    crate::server::host::create_enrollment_token(&name, revoke_existing_keys.unwrap_or(false))
 }
 
 const ENROLLMENT_TOKEN_ROUTER: Router = Router::new().post(&API_METHOD_GENERATE_ENROLLMENT_TOKEN);
