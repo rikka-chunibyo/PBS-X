@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -134,6 +135,9 @@ func (s *pbsChunkSource) GetChunk(digest [32]byte) ([]byte, error) {
 // pbsReaderConn is a raw HTTP/2 client for the PBS reader protocol.
 type pbsReaderConn struct {
 	conn              net.Conn
+	stopCancel        func() bool
+	closeOnce         sync.Once
+	closeErr          error
 	framer            *http2.Framer
 	enc               *hpack.Encoder
 	dec               *hpack.Decoder
@@ -184,6 +188,24 @@ func dialPBSReaderH2(ctx context.Context, cfg PBSConfig, backupType, backupID st
 	conn, err := d.DialContext(ctx, "tcp", host)
 	if err != nil {
 		return nil, fmt.Errorf("TLS dial %s: %w", host, err)
+	}
+
+	// DialContext ends its ownership after TLS setup. Keep cancellation attached
+	// through the upgrade, H2 handshake and all subsequent reader operations.
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	connected := false
+	defer func() {
+		if !connected {
+			stopCancel()
+			_ = conn.Close()
+		}
+	}()
+	deadline := time.Now().Add(30 * time.Second)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("reader handshake deadline: %w", err)
 	}
 
 	// Send HTTP/1.1 upgrade request for reader protocol
@@ -280,10 +302,18 @@ func dialPBSReaderH2(ctx context.Context, cfg PBSConfig, backupType, backupID st
 		gotSettings = true
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		return nil, fmt.Errorf("clear reader handshake deadline: %w", err)
+	}
+	connected = true
 	hdrBuf := new(bytes.Buffer)
 	dec := hpack.NewDecoder(4096, nil)
 	return &pbsReaderConn{
 		conn:              conn,
+		stopCancel:        stopCancel,
 		framer:            framer,
 		enc:               hpack.NewEncoder(hdrBuf),
 		dec:               dec,
@@ -560,5 +590,14 @@ func (c *pbsReaderConn) readBinaryResponse(streamID uint32) ([]byte, error) {
 }
 
 func (c *pbsReaderConn) close() error {
-	return c.conn.Close()
+	c.closeOnce.Do(func() {
+		if c.stopCancel != nil {
+			c.stopCancel()
+		}
+		c.closeErr = c.conn.Close()
+		if errors.Is(c.closeErr, net.ErrClosed) {
+			c.closeErr = nil
+		}
+	})
+	return c.closeErr
 }

@@ -2,10 +2,14 @@ package backupproxy
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -311,5 +315,92 @@ func TestInitialSettings(t *testing.T) {
 
 	if err := <-errChan; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Cancellation must own the socket after TLS dialing, before the reader is
+// published, and during reads after Connect has returned.
+func TestPBSReaderCancellationAcrossHandshakeAndReads(t *testing.T) {
+	for _, phase := range []string{"upgrade", "settings", "download"} {
+		t.Run(phase, func(t *testing.T) {
+			reached := make(chan struct{})
+			release := make(chan struct{})
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if phase == "upgrade" {
+					close(reached)
+					<-release
+					w.WriteHeader(503)
+					return
+				}
+				conn, rw, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: proxmox-backup-reader-protocol-v1\r\n\r\n")
+				if rw.Flush() != nil {
+					return
+				}
+				if phase == "settings" {
+					close(reached)
+					<-release
+					return
+				}
+				preface := make([]byte, len(http2.ClientPreface))
+				if _, err = io.ReadFull(rw, preface); err != nil {
+					return
+				}
+				framer := http2.NewFramer(conn, rw)
+				if framer.WriteSettings() != nil {
+					return
+				}
+				for {
+					frame, err := framer.ReadFrame()
+					if err != nil {
+						return
+					}
+					if settings, ok := frame.(*http2.SettingsFrame); ok && !settings.IsAck() {
+						if framer.WriteSettingsAck() != nil {
+							return
+						}
+					}
+					if _, ok := frame.(*http2.HeadersFrame); ok {
+						close(reached)
+						<-release
+						return
+					}
+				}
+			}))
+			defer server.Close()
+			defer close(release)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			reader := NewPBSReader(PBSConfig{BaseURL: server.URL, Datastore: "fixture", AuthToken: "audit@pbs!fixture:dummy", SkipTLSVerify: true}, "host", "fixture", 1)
+			defer reader.Close()
+			done := make(chan error, 1)
+			go func() {
+				err := reader.Connect(ctx)
+				if err == nil && phase == "download" {
+					_, err = reader.DownloadFile("root.pxar.didx")
+				}
+				done <- err
+			}()
+			select {
+			case <-reached:
+			case err := <-done:
+				t.Fatalf("reader ended before %s: %v", phase, err)
+			case <-time.After(3 * time.Second):
+				t.Fatal("fixture was not reached")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("cancelled reader succeeded")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("cancelled reader did not close its socket")
+			}
+		})
 	}
 }

@@ -18,6 +18,11 @@ import (
 )
 
 func restoreAsZips(ctx context.Context, client *Client, sources []string, opts RestoreOptions) error {
+	target, err := openRestoreFS(opts.DestDir)
+	if err != nil {
+		return err
+	}
+	defer target.root.Close()
 	errCh := make(chan error, 100)
 	var errWg sync.WaitGroup
 	errWg.Go(func() {
@@ -38,7 +43,7 @@ func restoreAsZips(ctx context.Context, client *Client, sources []string, opts R
 		go func(src string) {
 			defer sourcesWg.Done()
 
-			if err := createZipForSource(ctx, client, src, opts, errCh); err != nil {
+			if err := createZipForSource(ctx, client, src, opts, target, errCh); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -54,7 +59,7 @@ func restoreAsZips(ctx context.Context, client *Client, sources []string, opts R
 	return ctx.Err()
 }
 
-func createZipForSource(ctx context.Context, client *Client, source string, opts RestoreOptions, errCh chan<- error) error {
+func createZipForSource(ctx context.Context, client *Client, source string, opts RestoreOptions, target *restoreFS, errCh chan<- error) error {
 	sourceAttr, err := client.LookupByPath(ctx, source)
 	if err != nil {
 		return fmt.Errorf("lookup source %q: %w", source, err)
@@ -65,8 +70,11 @@ func createZipForSource(ctx context.Context, client *Client, source string, opts
 		baseName = client.name
 	}
 
-	zipPath := filepath.Join(opts.DestDir, baseName+".zip")
-	zipFile, err := os.Create(zipPath)
+	if err := validRestoreName(baseName + ".zip"); err != nil {
+		return err
+	}
+	zipPath := filepath.Join(target.base, baseName+".zip")
+	zipFile, err := target.open(zipPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
 	if err != nil {
 		return fmt.Errorf("create zip %q: %w", zipPath, err)
 	}

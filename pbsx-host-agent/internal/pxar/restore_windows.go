@@ -131,25 +131,14 @@ func setBasicInfo(h windows.Handle, info *FILE_BASIC_INFO) error {
 // FILE_FLAG_BACKUP_SEMANTICS, then delegates to restoreWindowsACLsFromHandle.
 // SIDs are intentionally leaked — see restoreWindowsACLsFromHandle.
 func restoreWindowsACLsFromPath(ctx context.Context, st *restoreState, path string, xattrs map[string][]byte) {
-	pathPtr, err := windows.UTF16PtrFromString(path)
+	file, err := openWindowsRestoreFile(st, path, "", restoreSecurityAccess, false, false)
 	if err != nil {
 		st.reportErr(ctx, "open for acls", path, err)
 		return
 	}
-	h, err := windows.CreateFile(
-		pathPtr,
-		restoreSecurityAccess,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil,
-		windows.OPEN_EXISTING,
-		windows.FILE_FLAG_BACKUP_SEMANTICS,
-		0,
-	)
-	if err != nil {
-		st.reportErr(ctx, "open for acls", path, err)
-		return
-	}
-	defer windows.CloseHandle(h)
+	defer file.Close()
+	h := windows.Handle(file.Fd())
+
 	restoreWindowsACLsFromHandle(ctx, st, h, path, xattrs)
 }
 
@@ -224,12 +213,13 @@ func setSecurityInfoPart(h windows.Handle, info windows.SECURITY_INFORMATION, ow
 }
 
 func applyMetaSymlink(ctx context.Context, st *restoreState, linkPath string, e pxar.FileInfo) error {
-	h, err := openReparsePoint(linkPath, windows.FILE_WRITE_ATTRIBUTES|restoreSecurityAccess)
+	file, err := openWindowsRestoreFile(st, linkPath, "", windows.FILE_WRITE_ATTRIBUTES|restoreSecurityAccess, false, true)
 	if err != nil {
 		st.reportErr(ctx, "open symlink for metadata", linkPath, err)
 		return nil
 	}
-	defer windows.CloseHandle(h)
+	defer file.Close()
+	h := windows.Handle(file.Fd())
 
 	xattrs, lerr := st.client.ListXAttrs(ctx, e.EntryRangeStart, e.EntryRangeEnd)
 	if lerr != nil {
@@ -269,7 +259,7 @@ func applyMetaSymlink(ctx context.Context, st *restoreState, linkPath string, e 
 	return nil
 }
 
-func applyTempMode(path string, rawMode uint64) error { return nil }
+func applyTempMode(_ *restoreState, path string, rawMode uint64) error { return nil }
 
 func openReparsePoint(p string, access uint32) (windows.Handle, error) {
 	ptr, err := windows.UTF16PtrFromString(p)
@@ -334,7 +324,7 @@ func writeAlternateDataStreams(ctx context.Context, st *restoreState, name strin
 						continue
 					}
 				}
-				st.reportErr(ctx, "write ads "+entry.Name, name, os.WriteFile(name+":"+entry.Name, data, 0o666))
+				st.reportErr(ctx, "write ads "+entry.Name, name, writeRestoreADS(st, name, entry.Name, data))
 			}
 		}
 	}
@@ -355,7 +345,7 @@ func writeAlternateDataStreams(ctx context.Context, st *restoreState, name strin
 		if stream == "" || strings.ContainsAny(stream, `<>:"/\|?*`) {
 			continue
 		}
-		st.reportErr(ctx, "write ads "+k, name, os.WriteFile(name+":"+stream, v, 0o666))
+		st.reportErr(ctx, "write ads "+k, name, writeRestoreADS(st, name, stream, v))
 	}
 }
 
@@ -439,7 +429,12 @@ func buildDACLFromACEs(winACLs []fswire.WinACL) (acl *windows.ACL, sids []*windo
 func restoreDir(ctx context.Context, st *restoreState, job restoreJob) error {
 	dst := job.dest
 	dirEntry := job.info
-	if err := os.MkdirAll(dst, 0o755); err != nil {
+	targetFS, closeTarget, err := st.destinationFS(dst)
+	if err != nil {
+		return err
+	}
+	defer closeTarget()
+	if err := targetFS.mkdir(dst); err != nil {
 		return err
 	}
 
@@ -449,6 +444,9 @@ func restoreDir(ctx context.Context, st *restoreState, job restoreJob) error {
 	}
 
 	for _, e := range entries {
+		if err := validRestoreName(e.Name()); err != nil {
+			return err
+		}
 		target := filepath.Join(dst, e.Name())
 		childSrc := path.Join(job.srcPath, e.Name())
 
@@ -505,28 +503,20 @@ func applyDeferredDirMeta(ctx context.Context, st *restoreState) error {
 
 	var errs []error
 	for _, d := range dirs {
-		pathPtr, err := windows.UTF16PtrFromString(d.dest)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("dir meta %q: %w", d.dest, err))
-			continue
-		}
-		h, err := windows.CreateFile(
-			pathPtr,
-			windows.FILE_WRITE_ATTRIBUTES,
-			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-			nil,
-			windows.OPEN_EXISTING,
-			windows.FILE_FLAG_BACKUP_SEMANTICS,
-			0,
-		)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("dir meta open %q: %w", d.dest, err))
-			continue
-		}
-		df := os.NewFile(uintptr(h), d.dest)
-		if err := applyMeta(ctx, st, df, d.info); err != nil {
+		if err := restoreMetadata(ctx, st, d.dest, d.info, true); err != nil {
 			errs = append(errs, fmt.Errorf("dir meta %q: %w", d.dest, err))
 		}
 	}
 	return errors.Join(errs...)
+}
+func restoreMetadata(ctx context.Context, st *restoreState, p string, e pxar.FileInfo, directory bool) error {
+	access := uint32(windows.GENERIC_READ | windows.GENERIC_WRITE)
+	if directory {
+		access = windows.FILE_READ_ATTRIBUTES | windows.FILE_WRITE_ATTRIBUTES
+	}
+	file, err := openWindowsRestoreFile(st, p, "", access, false, false)
+	if err != nil {
+		return err
+	}
+	return applyMeta(ctx, st, file, e)
 }

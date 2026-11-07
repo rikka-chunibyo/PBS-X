@@ -10,6 +10,7 @@ import (
 )
 
 var hostIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var backupIDPattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
 
 // ValidateHostID mirrors the PBS PROXMOX_SAFE_ID constraints used by PBS-X.
 func ValidateHostID(id string) error {
@@ -18,6 +19,15 @@ func ValidateHostID(id string) error {
 	}
 	if !hostIDPattern.MatchString(id) {
 		return fmt.Errorf("host id %q contains unsupported characters", id)
+	}
+	return nil
+}
+
+// ValidateBackupID validates PBS host backup groups, not enrolled device IDs.
+// A group may have a one-character ID; device identities still require two.
+func ValidateBackupID(id string) error {
+	if !backupIDPattern.MatchString(id) {
+		return fmt.Errorf("backup id must contain only PBS safe ID characters")
 	}
 	return nil
 }

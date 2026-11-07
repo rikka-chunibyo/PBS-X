@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -89,8 +88,8 @@ func TestCrossHostStorageCredentialsLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = Run(t.Context(), job)
-	if err == nil || !strings.Contains(err.Error(), "bound to host") {
-		t.Fatalf("automatic key should reject foreign group: %v", err)
+	if err == nil {
+		t.Fatalf("automatic key should reject another owner without a read grant: %v", err)
 	}
 	if err := agent.SetStorageCredentials(credentials); err != nil {
 		t.Fatal(err)

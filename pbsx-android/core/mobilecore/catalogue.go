@@ -10,13 +10,14 @@ import (
 	"strings"
 )
 
+var backupID = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
 var catalogueID = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$`)
 
 func validateGroup(kind, id string) error {
 	if kind != "host" && kind != "vm" && kind != "ct" {
 		return errors.New("unsupported PBS backup type")
 	}
-	if len(id) > 64 || id == "." || safePath(id) != nil || strings.Contains(id, "/") {
+	if !backupID.MatchString(id) || safePath(id) != nil {
 		return errors.New("invalid backup group")
 	}
 	return nil

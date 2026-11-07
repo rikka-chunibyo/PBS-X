@@ -1,12 +1,10 @@
 package pxar
 
 import (
-	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
-
-	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
 
 // hardlinkIndex tracks restored entries so pxar hardlink entries
@@ -88,10 +86,10 @@ func finalIndex(s []string) int {
 }
 
 func linkFile(old, new string) error {
-	if _, err := os.Lstat(new); err == nil {
-		if err := os.Remove(new); err != nil && !os.IsNotExist(err) {
-			log.Error(err, "")
-		}
+	target, err := openRestoreFS(filepath.Dir(new))
+	if err != nil {
+		return err
 	}
-	return os.Link(old, new)
+	defer target.root.Close()
+	return target.link(old, new)
 }

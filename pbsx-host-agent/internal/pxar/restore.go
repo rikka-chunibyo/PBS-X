@@ -78,6 +78,7 @@ type restoreJob struct {
 
 type restoreState struct {
 	client         *Client
+	target         *restoreFS
 	fsCap          filesystemCapabilities
 	noAttr         bool
 	hl             *hardlinkIndex
@@ -264,34 +265,13 @@ func RestoreWithOptions(ctx context.Context, client *Client, sources []string, o
 	return restoreNormal(ctx, client, sources, opts, noAttr)
 }
 
-// cleanupStaleTemps removes leftover .pxar-restore-* temp files from a prior
-// crash, walking the destination root and deleting matches without aborting.
-func cleanupStaleTemps(root string) {
-	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		name := d.Name()
-		if strings.HasPrefix(name, ".pxar-restore-") {
-			if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
-				log.Warn("restore: could not remove stale temp file",
-
-					"error", rmErr.Error(), "path", path)
-
-			}
-		}
-		return nil
-	}); err != nil {
-		log.Error(err, "")
-	}
-}
-
 func restoreNormal(ctx context.Context, client *Client, sources []string, opts RestoreOptions, noAttr bool) error {
-	destDir := opts.DestDir
-	cleanupStaleTemps(destDir)
+	target, err := openRestoreFS(opts.DestDir)
+	if err != nil {
+		return err
+	}
+	defer target.root.Close()
+	destDir := target.base
 
 	prepareRestoreProcess()
 
@@ -308,6 +288,7 @@ func restoreNormal(ctx context.Context, client *Client, sources []string, opts R
 
 	st := &restoreState{
 		client:     client,
+		target:     target,
 		fsCap:      fsCap,
 		noAttr:     noAttr,
 		hl:         newHardlinkIndex(),
@@ -362,8 +343,21 @@ func restoreNormal(ctx context.Context, client *Client, sources []string, opts R
 				}
 				return
 			}
-			dest := filepath.Join(destDir, sourceAttr.Name())
-			srcPath := strings.TrimPrefix(filepath.ToSlash(sourceAttr.Name()), "/")
+			name := sourceAttr.Name()
+			// Native Windows archives name their root directory with a
+			// backslash. Treat only that directory marker as the destination
+			// itself; child names still pass the strict component checks.
+			if sourceAttr.FileType == pxar.FileTypeDirectory && (name == "/" || (filepath.Separator == '\\' && name == "\\")) {
+				name = ""
+			}
+			if name != "" && name != "/" && name != "." {
+				if err := validRestoreName(name); err != nil {
+					_ = client.SendError(workerCtx, err)
+					return
+				}
+			}
+			dest := filepath.Join(destDir, name)
+			srcPath := strings.TrimPrefix(filepath.ToSlash(name), "/")
 
 			wg.Add(1)
 			select {
@@ -414,7 +408,7 @@ func resolveDeferredHardlinks(ctx context.Context, st *restoreState) error {
 	var errs []error
 	for _, job := range st.hl.drainDeferred() {
 		if target, ok := st.hl.tryResolveNow(job); ok {
-			if err := linkFile(target, job.dest); err != nil {
+			if err := st.linkFile(target, job.dest); err != nil {
 				if ferr := restoreFileContent(ctx, st, job); ferr != nil {
 					errs = append(errs, fmt.Errorf("hardlink %q: %w", job.dest, ferr))
 				}
@@ -440,13 +434,15 @@ func processJob(ctx context.Context, st *restoreState, job restoreJob) error {
 	switch job.info.FileType {
 	case pxar.FileTypeDirectory:
 		err = restoreDir(ctx, st, job)
+	case pxar.FileTypeFifo, pxar.FileTypeSocket:
+		err = restoreSpecial(ctx, st, job)
 	case pxar.FileTypeSymlink:
 		err = restoreSymlink(ctx, st, job)
 	case pxar.FileTypeFile:
 		err = restoreFile(ctx, st, job)
 	case pxar.FileTypeHardlink:
 		if target, ok := st.hl.tryResolveNow(job); ok {
-			if lerr := linkFile(target, job.dest); lerr != nil {
+			if lerr := st.linkFile(target, job.dest); lerr != nil {
 				if cerr := restoreFileContent(ctx, st, job); cerr != nil {
 					return fmt.Errorf("hardlink %q: link failed (%v) and fallback failed: %w", job.dest, lerr, cerr)
 				}
@@ -465,26 +461,9 @@ func processJob(ctx context.Context, st *restoreState, job restoreJob) error {
 	return nil
 }
 
-// restoreFile skips content when size+whole-second mtime match (rsync-style
-// quick check) but still reconciles metadata. Otherwise writes to a temp and
-// atomically renames, so a crash never leaves a partial destination.
+// A matching size/mtime cannot prove content equality. Both restore modes
+// write the archived payload; content-only controls metadata application only.
 func restoreFile(ctx context.Context, st *restoreState, job restoreJob) error {
-	update, err := shouldUpdateFile(job.dest, job.info, st.noAttr)
-	if err != nil {
-		return fmt.Errorf("check file %q: %w", job.dest, err)
-	}
-
-	if !update {
-		if st.noAttr {
-			return nil
-		}
-		f, err := os.OpenFile(job.dest, os.O_RDWR, 0666)
-		if err != nil {
-			return fmt.Errorf("open file %q: %w", job.dest, err)
-		}
-		return applyMeta(ctx, st, f, job.info)
-	}
-
 	return restoreFileContent(ctx, st, job)
 }
 
@@ -502,18 +481,19 @@ func restoreFileContent(ctx context.Context, st *restoreState, job restoreJob) e
 		return err
 	}
 
-	if err := atomicSwap(tmpPath, job.dest); err != nil {
+	target, closeTarget, err := st.destinationFS(job.dest)
+	if err != nil {
+		return err
+	}
+	defer closeTarget()
+	if err := target.swap(tmpPath, job.dest); err != nil {
 		return err
 	}
 
 	if st.noAttr {
-		return applyTempMode(job.dest, e.RawMode)
+		return applyTempMode(st, job.dest, e.RawMode)
 	}
-	f, err := os.OpenFile(job.dest, os.O_RDWR, 0666)
-	if err != nil {
-		return fmt.Errorf("open restored file for metadata %q: %w", job.dest, err)
-	}
-	return applyMeta(ctx, st, f, e)
+	return restoreMetadata(ctx, st, job.dest, e, false)
 }
 
 // (so the final rename is same-filesystem atomic). On error the temp is
@@ -521,7 +501,12 @@ func streamToTemp(ctx context.Context, st *restoreState, job restoreJob) (tmpPat
 	e := job.info
 	dir := filepath.Dir(job.dest)
 
-	f, err := os.CreateTemp(dir, ".pxar-restore-*")
+	target, closeTarget, err := st.destinationFS(job.dest)
+	if err != nil {
+		return "", err
+	}
+	defer closeTarget()
+	f, err := target.temporary(dir)
 	if err != nil {
 		return "", fmt.Errorf("create temp for %q: %w", job.dest, err)
 	}
@@ -532,21 +517,27 @@ func streamToTemp(ctx context.Context, st *restoreState, job restoreJob) (tmpPat
 			if cerr := f.Close(); cerr != nil {
 				log.Error(cerr, "")
 			}
-			if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			if rmErr := target.remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
 				err = fmt.Errorf("%w (temp cleanup of %q failed: %v)", err, tmpPath, rmErr)
 			}
 			tmpPath = ""
 		}
 	}()
 
-	if e.RawSize > 0 && e.ContentRange != nil {
+	if e.RawSize > 0 && len(e.ContentRange) != 2 {
+		return tmpPath, fmt.Errorf("missing file content range")
+	}
+	if e.RawSize > 0 {
 		rc, rerr := st.client.ReadFileContentReader(ctx, e.ContentRange[0], e.ContentRange[1], e.RawSize)
 		if rerr != nil {
 			return tmpPath, fmt.Errorf("open content reader %q: %w", job.dest, rerr)
 		}
 		const bufSize = 256 * 1024
 		buf := make([]byte, bufSize)
-		_, werr := io.CopyBuffer(f, rc, buf)
+		n, werr := io.CopyBuffer(f, rc, buf)
+		if werr == nil && uint64(n) != e.RawSize {
+			werr = fmt.Errorf("restored content size mismatch: got %d, want %d", n, e.RawSize)
+		}
 		if cerr := rc.Close(); cerr != nil && werr == nil {
 			werr = cerr
 		}
@@ -564,78 +555,49 @@ func streamToTemp(ctx context.Context, st *restoreState, job restoreJob) (tmpPat
 	return tmpPath, nil
 }
 
-// atomicSwap moves tmpPath over dest via atomic rename, removing an
-// incompatible existing dest and retrying once, then falling back to a
-func atomicSwap(tmpPath, dest string) (retErr error) {
-	defer func() {
-		if retErr != nil {
-			if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
-				retErr = fmt.Errorf("%w (temp cleanup of %q failed: %v)", retErr, tmpPath, rmErr)
-			}
-		}
-	}()
-
-	if err := os.Rename(tmpPath, dest); err == nil {
-		return nil
+// Standalone wrapper retained for callers testing the atomic swap contract.
+func atomicSwap(tmpPath, dest string) error {
+	target, err := openRestoreFS(filepath.Dir(dest))
+	if err != nil {
+		return err
 	}
-
-	if rerr := os.Remove(dest); rerr != nil && !os.IsNotExist(rerr) {
-		return fmt.Errorf("replace %q: could not remove existing entry: %w", dest, rerr)
-	}
-	if err := os.Rename(tmpPath, dest); err == nil {
-		return nil
-	}
-
-	if err := copyFile(tmpPath, dest); err != nil {
-		return fmt.Errorf("swap %q -> %q: rename and copy fallback both failed: %w", tmpPath, dest, err)
-	}
-	return nil
+	defer target.root.Close()
+	return target.swap(tmpPath, dest)
 }
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
+func (st *restoreState) linkFile(old, new string) error {
+	target, closeTarget, err := st.destinationFS(new)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := in.Close(); err != nil {
-			log.Error(err, "")
-		}
-	}()
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o666)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		if err := out.Close(); err != nil {
-			log.Error(err, "")
-		}
-		return err
-	}
-	return out.Close()
+	defer closeTarget()
+	return target.link(old, new)
 }
 
 func restoreSymlink(ctx context.Context, st *restoreState, job restoreJob) error {
+	fs, closeTarget, err := st.destinationFS(job.dest)
+	if err != nil {
+		return err
+	}
+	defer closeTarget()
 	e := job.info
 	target, err := st.client.ReadLink(ctx, e.EntryRangeStart, e.EntryRangeEnd)
 	if err != nil {
 		return fmt.Errorf("readlink data %q: %w", job.dest, err)
 	}
 
-	if existingTarget, err := os.Readlink(job.dest); err == nil {
+	if existingTarget, err := fs.readlink(job.dest); err == nil {
 		if existingTarget == string(target) {
 			if !st.noAttr {
 				return applyMetaSymlink(ctx, st, job.dest, e)
 			}
 			return nil
 		}
-		if err := os.Remove(job.dest); err != nil && !os.IsNotExist(err) {
+		if err := fs.remove(job.dest); err != nil && !os.IsNotExist(err) {
 			log.Error(err, "")
 		}
 	}
 
-	if err := os.Symlink(string(target), job.dest); err != nil {
+	if err := fs.symlink(string(target), job.dest); err != nil {
 		return fmt.Errorf("symlink %q: %w", job.dest, err)
 	}
 
@@ -644,43 +606,4 @@ func restoreSymlink(ctx context.Context, st *restoreState, job restoreJob) error
 	}
 
 	return applyMetaSymlink(ctx, st, job.dest, e)
-}
-
-// matches on size and whole-second mtime (rsync-style quick check).
-func shouldUpdateFile(path string, archiveInfo pxar.FileInfo, noAttr bool) (bool, error) {
-	stat, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-
-	archiveIsDir := archiveInfo.FileType == pxar.FileTypeDirectory
-	archiveIsSymlink := archiveInfo.FileType == pxar.FileTypeSymlink
-	archiveIsFile := archiveInfo.FileType == pxar.FileTypeFile || archiveInfo.FileType == pxar.FileTypeHardlink
-
-	if stat.IsDir() != archiveIsDir {
-		return true, nil
-	}
-	if (stat.Mode()&os.ModeSymlink != 0) != archiveIsSymlink {
-		return true, nil
-	}
-
-	if archiveIsFile {
-		if stat.Size() != int64(archiveInfo.RawSize) {
-			return true, nil
-		}
-		if !noAttr {
-			if stat.ModTime().Unix() != archiveInfo.MtimeSecs {
-				return true, nil
-			}
-		}
-	}
-
-	if archiveIsSymlink {
-		return true, nil
-	}
-
-	return false, nil
 }

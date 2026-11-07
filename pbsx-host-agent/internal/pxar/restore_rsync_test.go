@@ -213,48 +213,6 @@ func TestAtomicSwapRefusesNonEmptyDir(t *testing.T) {
 	}
 }
 
-// TestQuickCheckSkipsOnSizeAndMtime pins rsync's default quick-check rule
-// (size + whole-second mtime): an existing file matching both is skipped
-// (noAttr=false exercises the mtime branch), while a mtime mismatch forces an
-// update even when sizes match.
-func TestQuickCheckSkipsOnSizeAndMtime(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "f")
-	const mtime int64 = 1700000000
-
-	info := pxar.FileInfo{FileType: pxar.FileTypeFile, RawSize: 5, MtimeSecs: mtime}
-
-	// matching size + mtime -> skip
-	writeFileWithMtime(t, p, []byte("hello"), mtime)
-	got, err := shouldUpdateFile(p, info, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got {
-		t.Fatal("shouldUpdateFile=true on matching size+mtime, want skip")
-	}
-
-	// matching size, different mtime -> update
-	writeFileWithMtime(t, p, []byte("hello"), mtime+60)
-	got, err = shouldUpdateFile(p, info, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got {
-		t.Fatal("shouldUpdateFile=false on mtime mismatch, want update")
-	}
-
-	// different size -> update regardless of mtime
-	writeFileWithMtime(t, p, []byte("toolong"), mtime)
-	got, err = shouldUpdateFile(p, info, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got {
-		t.Fatal("shouldUpdateFile=false on size mismatch, want update")
-	}
-}
-
 func writeFileWithMtime(t *testing.T, p string, content []byte, mtime int64) {
 	t.Helper()
 	if err := os.WriteFile(p, content, 0o644); err != nil {

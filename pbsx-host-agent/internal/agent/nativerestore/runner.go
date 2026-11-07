@@ -37,7 +37,7 @@ func Run(ctx context.Context, job Job) error {
 	if job.BackupID == "" {
 		job.BackupID = job.HostID
 	}
-	if err := agent.ValidateHostID(job.BackupID); err != nil {
+	if err := agent.ValidateBackupID(job.BackupID); err != nil {
 		return fmt.Errorf("invalid source backup ID: %w", err)
 	}
 	if strings.TrimSpace(job.Datastore) == "" || job.BackupTime <= 0 {

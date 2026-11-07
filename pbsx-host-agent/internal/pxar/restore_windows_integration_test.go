@@ -132,7 +132,7 @@ func TestIntegrationRestoreFileFullPipeline(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create a file with metadata but no content range.
-	// restoreFile → shouldUpdateFile (new file, returns true) →
+	// restoreFile always writes archived content →
 	// restoreFileContent → streamToTemp returns empty temp (nil ContentRange).
 	dest := filepath.Join(dir, "restored-file.txt")
 
@@ -205,15 +205,13 @@ func TestIntegrationAtomicSwapRaceCondition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Open dest to hold a handle  -  atomicSwap should remove and retry.
+	// Hold a handle that may deny atomic replacement on Windows.
 	f, err := os.OpenFile(dest, os.O_RDONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Swap in a separate goroutine  -  it will block on the remove because
-	// we hold the file open, but on Windows this should fail and fall
-	// through to the copy-fallback path.
+	// Replacement may fail with a sharing violation; the original must survive.
 	var swapErr error
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -228,8 +226,7 @@ func TestIntegrationAtomicSwapRaceCondition(t *testing.T) {
 	wg.Wait()
 
 	if swapErr != nil {
-		// On some Windows versions, rename of an open file fails
-		// permanently and the fallback copy also fails. Accept the error.
+		// A sharing violation is a safe failure; there is no destructive copy fallback.
 		t.Logf("atomicSwap with open dest: %v (acceptable)", swapErr)
 	}
 
@@ -394,56 +391,6 @@ func TestIntegrationConcurrentWorkers(t *testing.T) {
 	}
 }
 
-// TestIntegrationShouldUpdateFileQuickCheck verifies the rsync-style
-// quick check with a real file on disk.
-func TestIntegrationShouldUpdateFileQuickCheck(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "quick.txt")
-	const mtime int64 = 1700000000
-
-	// Write file with known size and mtime.
-	info := pxar.FileInfo{
-		FileType:  pxar.FileTypeFile,
-		RawSize:   5,
-		MtimeSecs: mtime,
-	}
-
-	if err := os.WriteFile(p, []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(p, time.Unix(mtime, 0), time.Unix(mtime, 0)); err != nil {
-		t.Fatal(err)
-	}
-
-	// Matching size + mtime → skip.
-	update, err := shouldUpdateFile(p, info, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if update {
-		t.Error("shouldUpdateFile=true on matching file, want skip")
-	}
-
-	// Remove and re-create with different mtime.
-	os.Remove(p)
-	if err := os.WriteFile(p, []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(p, time.Unix(mtime+60, 0), time.Unix(mtime+60, 0)); err != nil {
-		t.Fatal(err)
-	}
-
-	update, err = shouldUpdateFile(p, info, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !update {
-		t.Error("shouldUpdateFile=false on mtime mismatch, want update")
-	}
-}
-
-// TestIntegrationStreamToTemp exercises streamToTemp by writing content
-// via a pipe and verifying the temp file is created with correct content.
 func TestIntegrationStreamToTemp(t *testing.T) {
 	dir := t.TempDir()
 
@@ -509,7 +456,7 @@ func TestIntegrationApplyMetaNoAttrMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := applyTempMode(dest, 0o644); err != nil {
+	if err := applyTempMode(&restoreState{}, dest, 0o644); err != nil {
 		t.Logf("applyTempMode: %v", err)
 	}
 
@@ -574,70 +521,6 @@ func TestIntegrationRestoreSymlinkEndToEnd(t *testing.T) {
 	}
 }
 
-// TestIntegrationCopyFileFallback verifies the copyFile fallback used
-// when rename is unavailable in atomicSwap.
-func TestIntegrationCopyFileFallback(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src")
-	dst := filepath.Join(dir, "dst")
-
-	if err := os.WriteFile(src, []byte("fallback copy"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := copyFile(src, dst); err != nil {
-		t.Fatalf("copyFile: %v", err)
-	}
-
-	got, err := os.ReadFile(dst)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "fallback copy" {
-		t.Errorf("dst = %q, want 'fallback copy'", got)
-	}
-}
-
-// TestIntegrationCleanupStaleTemps verifies that stale .pxar-restore-*
-// temp files are cleaned up by cleanupStaleTemps.
-func TestIntegrationCleanupStaleTemps(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create fake stale temp files.
-	staleFiles := []string{
-		".pxar-restore-001",
-		".pxar-restore-abc",
-		".pxar-restore-tmp-123",
-	}
-	for _, name := range staleFiles {
-		p := filepath.Join(dir, name)
-		if err := os.WriteFile(p, []byte("stale"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Create a legitimate file that should NOT be removed.
-	legit := filepath.Join(dir, "legit-file")
-	if err := os.WriteFile(legit, []byte("keep"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cleanupStaleTemps(dir)
-
-	for _, name := range staleFiles {
-		p := filepath.Join(dir, name)
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
-			t.Errorf("stale temp %q was not cleaned up", name)
-		}
-	}
-
-	// Legitimate file must survive.
-	if _, err := os.Stat(legit); os.IsNotExist(err) {
-		t.Error("legitimate file was removed by cleanup")
-	}
-}
-
-// TestIntegrationStreamToTempErrorCleanup verifies that when an error
-// occurs during streamToTemp, the temp file is cleaned up.
 func TestIntegrationStreamToTempErrorCleanup(t *testing.T) {
 	dir := t.TempDir()
 
@@ -781,51 +664,6 @@ func TestIntegrationApplyMetaBuildsFileAttributes(t *testing.T) {
 	}
 }
 
-// TestIntegrationRestoreFileWithUpdateSkip verifies that restoreFile
-// skips the content rewrite when a matching file already exists.
-func TestIntegrationRestoreFileWithUpdateSkip(t *testing.T) {
-	dir := t.TempDir()
-	dest := filepath.Join(dir, "skip-file")
-	const mtime int64 = 1700000000
-
-	if err := os.WriteFile(dest, []byte("hello"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(dest, time.Unix(mtime, 0), time.Unix(mtime, 0)); err != nil {
-		t.Fatal(err)
-	}
-
-	st := &restoreState{
-		fsCap:  getFilesystemCapabilities(dir),
-		noAttr: true,
-		hl:     newHardlinkIndex(),
-	}
-
-	job := restoreJob{
-		dest:    dest,
-		srcPath: "test/skip-file",
-		info: pxar.FileInfo{
-			FileType:  pxar.FileTypeFile,
-			RawSize:   5,
-			MtimeSecs: mtime,
-		},
-	}
-
-	// restoreFile should skip: size and mtime match.
-	err := restoreFile(context.Background(), st, job)
-	if err != nil {
-		t.Fatalf("restoreFile: %v", err)
-	}
-
-	// Content must be unchanged.
-	got, _ := os.ReadFile(dest)
-	if string(got) != "hello" {
-		t.Error("file content was modified despite matching quick check")
-	}
-}
-
-// TestIntegrationWriteADSConcurrent verifies concurrent alternate data
-// stream writes to distinct files don't interfere.
 func TestIntegrationWriteADSConcurrent(t *testing.T) {
 	dir := t.TempDir()
 	mc := newMockClient()
@@ -988,10 +826,7 @@ func TestIntegrationApplyMetaWithWindowsXattrs(t *testing.T) {
 	}
 }
 
-// TestIntegrationAtomicSwapAllPaths exercises every branch of atomicSwap:
-// clean rename, conflicting-type retry, and copy-fallback when rename is
-// unavailable. The copy-fallback is tested by writing a temp then
-// simulating rename failure.
+// TestIntegrationAtomicSwapAllPaths covers replacement and safe type conflicts.
 func TestIntegrationAtomicSwapAllPaths(t *testing.T) {
 	dir := t.TempDir()
 
@@ -1095,7 +930,7 @@ func TestIntegrationRestoreFileContentWithTempSwap(t *testing.T) {
 	}
 
 	// Step 3: apply metadata (no-attr mode, just ensure perms).
-	if err := applyTempMode(dest, 0o644); err != nil {
+	if err := applyTempMode(&restoreState{}, dest, 0o644); err != nil {
 		t.Logf("applyTempMode: %v", err)
 	}
 
