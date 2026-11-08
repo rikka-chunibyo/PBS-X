@@ -116,11 +116,11 @@ func GetEntry(path string, key string, isSecret bool) (*RegistryEntry, error) {
 		k := toTomlKey(key)
 		section, ok := reg[p]
 		if !ok {
-			return fmt.Errorf("GetEntry error: path not found")
+			return fmt.Errorf("GetEntry error: path not found: %w", ErrNotFound)
 		}
 		val, ok := section[k]
 		if !ok {
-			return fmt.Errorf("GetEntry error: key not found")
+			return fmt.Errorf("GetEntry error: key not found: %w", ErrNotFound)
 		}
 		if isSecret {
 			decrypted, err := decrypt(val)

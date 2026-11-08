@@ -101,28 +101,58 @@ func WaitForServerURL(ctx context.Context) error {
 }
 
 func WaitForBootstrap(ctx context.Context) error {
+	if err := waitForBootstrap(ctx, bootstrapActions{
+		lookup: registry.GetEntry,
+		renew:  agent.RenewCertificateIfExpiring,
+		enroll: agent.Bootstrap,
+	}); err != nil {
+		return err
+	}
+	select {
+	case <-bootstrapDone:
+	default:
+		close(bootstrapDone)
+	}
+	return nil
+}
+
+type bootstrapActions struct {
+	lookup func(string, string, bool) (*registry.RegistryEntry, error)
+	renew  func() error
+	enroll func() error
+}
+
+func waitForBootstrap(ctx context.Context, actions bootstrapActions) error {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
-		cert, errCert := registry.GetEntry(registry.AUTH, "Cert", true)
-		priv, errPriv := registry.GetEntry(registry.AUTH, "Priv", true)
-		backupAuthID, errAuthID := registry.GetEntry(registry.AUTH, "BackupAuthID", false)
-		backupSecret, errSecret := registry.GetEntry(registry.AUTH, "BackupSecret", true)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		token, err := actions.lookup(registry.CONFIG, "BootstrapToken", false)
+		if err != nil && !errors.Is(err, registry.ErrNotFound) {
+			return fmt.Errorf("read pending enrollment: %w", err)
+		}
+		pending := token != nil && strings.TrimSpace(token.Value) != ""
+		// A newly supplied enrollment code takes precedence over a still-valid
+		// old identity. Keep the old credentials until bootstrap succeeds, but
+		// never start backup polling with them while enrollment is pending.
+		if !pending {
+			cert, errCert := actions.lookup(registry.AUTH, "Cert", true)
+			priv, errPriv := actions.lookup(registry.AUTH, "Priv", true)
+			backupAuthID, errAuthID := actions.lookup(registry.AUTH, "BackupAuthID", false)
+			backupSecret, errSecret := actions.lookup(registry.AUTH, "BackupSecret", true)
 
-		if errCert == nil && errPriv == nil && errAuthID == nil && errSecret == nil &&
-			cert != nil && priv != nil && backupAuthID != nil && backupSecret != nil {
-			if err := agent.RenewCertificateIfExpiring(); err == nil {
-				select {
-				case <-bootstrapDone:
-				default:
-					close(bootstrapDone)
-				}
+			if errCert == nil && errPriv == nil && errAuthID == nil && errSecret == nil &&
+				cert != nil && priv != nil && backupAuthID != nil && backupSecret != nil && actions.renew() == nil {
 				return nil
 			}
 		}
 
-		if err := agent.Bootstrap(); err != nil {
+		if err := actions.enroll(); err != nil {
 			log.Error(err, "")
+		} else {
+			continue // Verify the new persisted identity without another timer delay.
 		}
 		select {
 		case <-ctx.Done():
