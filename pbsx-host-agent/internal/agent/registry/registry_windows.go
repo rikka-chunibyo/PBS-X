@@ -5,6 +5,7 @@ package registry
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -159,13 +160,19 @@ func GetEntry(path string, key string, isSecret bool) (*RegistryEntry, error) {
 
 	baseKey, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
 	if err != nil {
+		if errors.Is(err, registry.ErrNotExist) {
+			return nil, fmt.Errorf("GetEntry error: %w", ErrNotFound)
+		}
 		return nil, fmt.Errorf("GetEntry error: %w", err)
 	}
 	defer baseKey.Close()
 
 	val, _, err := baseKey.GetStringValue(key)
 	if err != nil {
-		return nil, fmt.Errorf("GetEntry error: key not found")
+		if errors.Is(err, registry.ErrNotExist) {
+			return nil, fmt.Errorf("GetEntry error: key not found: %w", ErrNotFound)
+		}
+		return nil, fmt.Errorf("GetEntry error reading key: %w", err)
 	}
 
 	if isSecret {

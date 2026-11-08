@@ -143,8 +143,10 @@ impl PullParameters {
         let crypt_configs = if let Some(key_ids) = &decryption_keys {
             let mut crypt_configs = Vec::with_capacity(key_ids.len());
             for key_id in key_ids {
-                let crypt_config =
-                    crate::server::sync::check_privs_and_load_key_config(key_id, &owner, false)?;
+                crate::server::sync::check_key_access(key_id, &owner)?;
+                let (crypt_config, fingerprint) =
+                    crate::server::sync::load_key_config(key_id, false)?;
+                info!("Loaded decryption key '{key_id}' with fingerprint '{fingerprint}'");
                 crypt_configs.push((key_id.to_string(), crypt_config));
             }
             crypt_configs
@@ -183,26 +185,24 @@ async fn pull_index_chunks<I: IndexFile>(
 
     let start_time = SystemTime::now();
 
-    let stream = stream::iter(
-        (0..index.index_count())
-            .map(|pos| index.chunk_info(pos).unwrap())
-            .filter(|info| {
-                let guard = encountered_chunks.lock().unwrap();
-                match guard.check_reusable(&info.digest) {
-                    Some(reusable) => {
-                        if reusable.decrypted_digest.is_some() {
-                            // if there is a mapping, then the chunk digest must be rewritten to
-                            // the index, cannot skip here but optimized when processing the stream
-                            true
-                        } else {
-                            // reusable and already touched, can always skip
-                            !reusable.touched
-                        }
-                    }
-                    None => true,
+    let stream = stream::iter((0..index.index_count()).filter_map(|pos| {
+        let info = index.chunk_info(pos)?;
+        let guard = encountered_chunks.lock().unwrap();
+        match guard.check_reusable(&info.digest, info.size()) {
+            Ok(None) => Some(Ok(info)),
+            Ok(Some(reusable)) => {
+                if reusable.decrypted_digest.is_some() || !reusable.touched {
+                    // if there is a mapping, then the chunk digest must be rewritten to
+                    // the index, cannot skip here but optimized when processing the stream
+                    // Also, if reusable but not touched, cannot skip
+                    Some(Ok(info))
+                } else {
+                    None
                 }
-            }),
-    );
+            }
+            Err(err) => Some(Err(err)),
+        }
+    }));
 
     let target2 = target.clone();
     let backend = backend.clone();
@@ -224,6 +224,7 @@ async fn pull_index_chunks<I: IndexFile>(
     let chunk_count = Arc::new(AtomicUsize::new(0));
 
     let stream = stream.map(|info| {
+        let info = info?;
         let target = Arc::clone(&target);
         let chunk_reader = chunk_reader.clone();
         let bytes = Arc::clone(&bytes);
@@ -240,7 +241,7 @@ async fn pull_index_chunks<I: IndexFile>(
                     if let Some(reusable) = encountered_chunks
                         .lock()
                         .unwrap()
-                        .check_reusable(&info.digest)
+                        .check_reusable(&info.digest, info.size())?
                     {
                         if let Some(decrypted_digest) = reusable.decrypted_digest {
                             // already got the decrypted digest and chunk has been written,
@@ -251,7 +252,7 @@ async fn pull_index_chunks<I: IndexFile>(
                             index.lock().unwrap().add_chunk(
                                 start_offset,
                                 size as u32,
-                                decrypted_digest,
+                                &decrypted_digest,
                             )?;
 
                             return Ok::<_, Error>(());
@@ -270,10 +271,11 @@ async fn pull_index_chunks<I: IndexFile>(
                         .unwrap()
                         .add_chunk(start_offset, size as u32, &digest)?;
 
-                    encountered_chunks
-                        .lock()
-                        .unwrap()
-                        .mark_reusable(&info.digest, Some(digest));
+                    encountered_chunks.lock().unwrap().mark_reusable(
+                        &info.digest,
+                        size,
+                        Some(digest),
+                    )?;
 
                     (chunk, digest, size)
                 }
@@ -281,7 +283,7 @@ async fn pull_index_chunks<I: IndexFile>(
                     if let Some(reusable) = encountered_chunks
                         .lock()
                         .unwrap()
-                        .check_reusable(&info.digest)
+                        .check_reusable(&info.digest, info.size())?
                     {
                         if let Some(decrypted_digest) = reusable.decrypted_digest {
                             // already got the decrypted digest and chunk has been written,
@@ -293,7 +295,7 @@ async fn pull_index_chunks<I: IndexFile>(
                             index
                                 .lock()
                                 .unwrap()
-                                .add_chunk(end_offset, decrypted_digest)?;
+                                .add_chunk(end_offset, &decrypted_digest)?;
 
                             return Ok::<_, Error>(());
                         }
@@ -309,10 +311,11 @@ async fn pull_index_chunks<I: IndexFile>(
 
                     index.lock().unwrap().add_chunk(end_offset, &digest)?;
 
-                    encountered_chunks
-                        .lock()
-                        .unwrap()
-                        .mark_reusable(&info.digest, Some(digest));
+                    encountered_chunks.lock().unwrap().mark_reusable(
+                        &info.digest,
+                        size,
+                        Some(digest),
+                    )?;
 
                     (chunk, digest, size)
                 }
@@ -320,7 +323,7 @@ async fn pull_index_chunks<I: IndexFile>(
                     {
                         // limit guard scope
                         let mut guard = encountered_chunks.lock().unwrap();
-                        if let Some(reusable) = guard.check_reusable(&info.digest) {
+                        if let Some(reusable) = guard.check_reusable(&info.digest, info.size())? {
                             if reusable.touched {
                                 return Ok::<_, Error>(());
                             }
@@ -328,14 +331,14 @@ async fn pull_index_chunks<I: IndexFile>(
                                 target.cond_touch_chunk(&info.digest, false)
                             })?;
                             if chunk_exists {
-                                guard.mark_touched(&info.digest, None);
+                                guard.mark_touched(&info.digest)?;
                                 //info!("chunk {} exists {}", pos, hex::encode(digest));
                                 return Ok::<_, Error>(());
                             }
                         }
                         // mark before actually downloading the chunk, so this happens only once
-                        guard.mark_reusable(&info.digest, None);
-                        guard.mark_touched(&info.digest, None);
+                        guard.mark_reusable(&info.digest, info.size(), None)?;
+                        guard.mark_touched(&info.digest)?;
                     }
 
                     let chunk = chunk_reader.read_raw_chunk(&info.digest).await?;
@@ -1273,7 +1276,12 @@ async fn pull_group(
             })?;
 
             match manifest.verify_state()? {
-                Some(verify_state) if verify_state.state == VerifyState::Failed => (),
+                Some(verify_state) if verify_state.state == VerifyState::Failed => {
+                    bail!(
+                        "cannot safely reuse chunks of snapshot {}, verify state failed",
+                        info.backup_dir.backup_time_string(),
+                    );
+                }
                 _ => {
                     for file in manifest.files() {
                         let index: Box<dyn IndexFile> = match file.filename.archive_type() {
@@ -1301,7 +1309,11 @@ async fn pull_group(
 
                         for pos in 0..index.index_count() {
                             let chunk_info = index.chunk_info(pos).unwrap();
-                            reusable_chunks.mark_reusable(&chunk_info.digest, None);
+                            reusable_chunks.mark_reusable(
+                                &chunk_info.digest,
+                                chunk_info.size(),
+                                None,
+                            )?;
                         }
                     }
                 }
@@ -1841,8 +1853,8 @@ async fn pull_ns(
 }
 
 struct EncounteredChunkInfo {
-    reusable: bool,
     touched: bool,
+    chunk_size: u64,
     decrypted_digest: Option<[u8; 32]>,
 }
 
@@ -1851,12 +1863,6 @@ struct EncounteredChunkInfo {
 /// during this sync.
 struct EncounteredChunks {
     chunk_set: HashMap<[u8; 32], EncounteredChunkInfo>,
-}
-
-/// Propertires of a reusable chunk
-struct ReusableEncounteredChunk<'a> {
-    touched: bool,
-    decrypted_digest: Option<&'a [u8; 32]>,
 }
 
 impl EncounteredChunks {
@@ -1869,66 +1875,72 @@ impl EncounteredChunks {
 
     /// Check if the current state allows to reuse this chunk and if so,
     /// if the chunk has already been touched.
-    fn check_reusable(&self, digest: &[u8; 32]) -> Option<ReusableEncounteredChunk<'_>> {
+    fn check_reusable(
+        &self,
+        digest: &[u8; 32],
+        chunk_size: u64,
+    ) -> Result<Option<&EncounteredChunkInfo>, Error> {
         if let Some(chunk_info) = self.chunk_set.get(digest) {
-            if !chunk_info.reusable {
-                None
-            } else {
-                Some(ReusableEncounteredChunk {
-                    touched: chunk_info.touched,
-                    decrypted_digest: chunk_info.decrypted_digest.as_ref(),
-                })
+            if chunk_info.chunk_size != chunk_size {
+                bail!(
+                    "inconsistent chunk size for reusable chunk detected - size: '{chunk_size}', expected: '{}'",
+                    chunk_info.chunk_size,
+                );
             }
-        } else {
-            None
+            return Ok(Some(chunk_info));
         }
+        Ok(None)
     }
 
     /// Mark chunk as reusable, inserting it as un-touched if not present.
     ///
-    /// If the mapping already contains the digest, set the decrypted digest only
+    /// The chunk size is only set on first insert and compared to on subsequent calls with the
+    /// same digest. If the mapping already contains the digest, set the decrypted digest only
     /// if not already set previously.
-    fn mark_reusable(&mut self, digest: &[u8; 32], decrypted_digest: Option<[u8; 32]>) {
+    fn mark_reusable(
+        &mut self,
+        digest: &[u8; 32],
+        chunk_size: u64,
+        decrypted_digest: Option<[u8; 32]>,
+    ) -> Result<(), Error> {
         match self.chunk_set.entry(*digest) {
             Entry::Occupied(mut occupied) => {
                 let chunk_info = occupied.get_mut();
-                chunk_info.reusable = true;
+                if chunk_info.chunk_size != chunk_size {
+                    bail!(
+                        "failed to mark chunk as reusable - size: '{chunk_size}', expected: '{}'",
+                        chunk_info.chunk_size,
+                    );
+                }
                 if chunk_info.decrypted_digest.is_none() {
                     chunk_info.decrypted_digest = decrypted_digest;
                 }
             }
             Entry::Vacant(vacant) => {
                 vacant.insert(EncounteredChunkInfo {
-                    reusable: true,
                     touched: false,
+                    chunk_size,
                     decrypted_digest,
                 });
             }
         }
+        Ok(())
     }
 
-    /// Mark chunk as touched during this sync, inserting it as not reusable
-    /// but touched if not present.
+    /// Mark reusable chunk as touched during this sync.
     ///
-    /// If the mapping already contains the digest, set the decrypted digest only
-    /// if not already set previously.
-    fn mark_touched(&mut self, digest: &[u8; 32], decrypted_digest: Option<[u8; 32]>) {
+    /// Chunk must be marked as reusable first, otherwise this will error.
+    fn mark_touched(&mut self, digest: &[u8; 32]) -> Result<(), Error> {
         match self.chunk_set.entry(*digest) {
             Entry::Occupied(mut occupied) => {
                 let chunk_info = occupied.get_mut();
                 chunk_info.touched = true;
-                if chunk_info.decrypted_digest.is_none() {
-                    chunk_info.decrypted_digest = decrypted_digest;
-                }
             }
-            Entry::Vacant(vacant) => {
-                vacant.insert(EncounteredChunkInfo {
-                    reusable: false,
-                    touched: true,
-                    decrypted_digest,
-                });
+            Entry::Vacant(_vacant) => {
+                bail!("cannot mark non-reusable chunk as touched");
             }
         }
+        Ok(())
     }
 }
 

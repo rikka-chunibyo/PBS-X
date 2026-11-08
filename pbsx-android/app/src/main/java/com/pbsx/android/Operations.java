@@ -179,6 +179,7 @@ final class Operations {
       Cancellation cancellation)
       throws Exception {
     job.validate(destination == null);
+    if (destination == null) KeyProfiles.validateJob(context, job);
     if (!running.compareAndSet(false, true)) throw new BusyException();
     ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
     ConnectivityManager.NetworkCallback callback = null;

@@ -227,9 +227,12 @@ pub fn delete_host(name: String, digest: Option<String>) -> Result<(), Error> {
         bail!("host '{}' does not exist.", name);
     }
 
-    let (mut acl, _digest) = pbs_config::acl::config()?;
-    acl.delete_node(&format!("/host/{name}"));
-    pbs_config::acl::save_config(&acl)?;
+    {
+        let _acl_lock = pbs_config::acl::lock_config()?;
+        let (mut acl, _digest) = pbs_config::acl::config()?;
+        acl.delete_node(&format!("/host/{name}"));
+        pbs_config::acl::save_config(&acl)?;
+    } // Credential cleanup below acquires the ACL lock independently.
 
     pbs_config::host::save_config(&config)?;
     crate::server::host::remove_host_status(&name)?;

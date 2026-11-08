@@ -45,8 +45,9 @@ final class ConnectionDialogs {
     LinearLayout f = Ui.form(a);
     Ui.hint(
         f,
-        "Create a host and enrollment code in PBS-X → Hosts. Its enabled server job authorizes the"
-            + " datastore and namespace used by your local jobs.");
+        "Create a host and enrollment code in PBS-X → Hosts → Agent. Choose the datastore and"
+            + " device namespace there; enrollment grants backup and restore access"
+            + " automatically.");
     EditText name = Ui.input(f, "Connection name", "My PBS", false);
     EditText code = Ui.input(f, "PBS-X enrollment code", "", true);
     new AlertDialog.Builder(a)

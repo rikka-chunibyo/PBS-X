@@ -116,7 +116,6 @@ func restoreSocketMetadata(ctx context.Context, st *restoreState, fd int, base s
 	if st.fsCap.supportsChown {
 		st.reportErr(ctx, "socket chown", job.dest, unix.Fchownat(fd, base, uid, gid, unix.AT_SYMLINK_NOFOLLOW))
 	}
-	st.reportErr(ctx, "socket chmod", job.dest, unix.Fchmodat(fd, base, uint32(job.info.RawMode&0777), unix.AT_SYMLINK_NOFOLLOW))
 	if st.fsCap.supportsACLs {
 		if d := attrs[XAttrACLs]; detectACLFlavor(d) == aclPosix {
 			var entries []fswire.PosixACL
@@ -138,6 +137,7 @@ func restoreSocketMetadata(ctx context.Context, st *restoreState, fd int, base s
 			}
 		}
 	}
+	st.reportErr(ctx, "socket chmod", job.dest, unix.Fchmodat(fd, base, uint32(job.info.RawMode&07777), unix.AT_SYMLINK_NOFOLLOW))
 	if st.fsCap.supportsXAttrs {
 		for name, val := range attrs {
 			if !IsCanonicalXAttr(name) {
@@ -149,7 +149,7 @@ func restoreSocketMetadata(ctx context.Context, st *restoreState, fd int, base s
 	if value, ok := ParseXattrUnixSecs(attrs[XAttrLastAccessTime]); ok {
 		atime = unix.Timespec{Sec: value}
 	}
-	if value, ok := ParseXattrUnixSecs(attrs[XAttrLastWriteTime]); ok {
+	if value, ok := ParseXattrUnixSecs(attrs[XAttrLastWriteTime]); ok && value != mtime.Sec {
 		mtime = unix.Timespec{Sec: value}
 	}
 	st.reportErr(ctx, "socket timestamps", job.dest, unix.UtimesNanoAt(fd, base, []unix.Timespec{atime, mtime}, unix.AT_SYMLINK_NOFOLLOW))

@@ -8,6 +8,9 @@ include /usr/share/rustc/architecture.mk
 
 export BUILD_MODE=release
 export CARGO_STATIC_CONFIG=--config debian/cargo_home/config.static.toml
+# Keep compression memory bounded on small builders even if the VM exposes
+# many host CPUs. Operators can explicitly override this environment setting.
+export DPKG_DEB_THREADS_MAX ?= 1
 
 # sync with Makefile!
 STATIC_TARGET_DIR := target/static-build
@@ -45,7 +48,7 @@ override_dh_auto_configure:
 	# the wrapper config into a place where `build` picks it up as well..
 	# https://doc.rust-lang.org/cargo/commands/cargo-install.html#configuration-discovery
 	mkdir -p .cargo
-	ln -s $(CARGO_HOME)/config.toml $(CURDIR)/.cargo/config.toml
+	ln -sfn $(CARGO_HOME)/config.toml $(CURDIR)/.cargo/config.toml
 	dh_auto_configure
 
 override_dh_auto_build:
@@ -72,6 +75,12 @@ override_dh_installsystemd:
 override_dh_fixperms:
 	dh_fixperms --exclude sg-tape-cmd
 
+# Optimized Rust binaries have large DWARF graphs. Rewriting them with dwz
+# can exhaust a modest builder's RAM; retain the original debug information
+# and let dh_strip produce the normal separate debug-symbol packages.
+override_dh_dwz:
+	:
+
 override_dh_strip:
 	dh_strip
 	for exe in $$(find \
@@ -84,3 +93,6 @@ override_dh_strip:
 
 override_dh_compress:
 	dh_compress -X.pdf
+
+override_dh_builddeb:
+	dh_builddeb -- --threads-max=$(DPKG_DEB_THREADS_MAX)

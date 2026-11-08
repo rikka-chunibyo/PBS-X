@@ -18,6 +18,15 @@ func lastPathElem(p string) string {
 
 func modeFromUnix(m uint32) uint32 {
 	mode := m & 0o777
+	if m&unix.S_ISUID != 0 {
+		mode |= uint32(os.ModeSetuid)
+	}
+	if m&unix.S_ISGID != 0 {
+		mode |= uint32(os.ModeSetgid)
+	}
+	if m&unix.S_ISVTX != 0 {
+		mode |= uint32(os.ModeSticky)
+	}
 	switch m & unix.S_IFMT {
 	case unix.S_IFDIR:
 		mode |= uint32(os.ModeDir)

@@ -12,6 +12,44 @@ preserves their Backup IDs in queued restores. See
 checks, live PBS tests and test-VM deployment. Android production code and the
 0.4.0 APK below are unchanged by that fix.
 
+## Additional safety coverage on the 0.5.3 branch
+
+Nine additional test functions and a URL-normalization fuzz target cover:
+
+- authenticated redirects are refused before a destination receives credentials;
+- malformed/unsupported encrypted settings envelopes, salt/nonce substitution
+  and unknown envelope fields are rejected;
+- snapshot identity mismatches, altered encryption metadata and substituted key
+  fingerprints are rejected, while historical snapshots select their own key;
+- corrupted, truncated, substituted or incorrectly sized archive indexes fail
+  manifest verification;
+- broken job references, duplicate/reserved scheduler IDs and overlapping
+  schedule allocators leave existing settings untouched;
+- import is refused while another operation is active, without poisoning the
+  next valid import;
+- separate datastore/namespace/Backup ID histories may use different keys;
+- an independent UTF-8 scrypt vector containing an accent and supplementary
+  Unicode character matches in Go and through Android's Go binding.
+
+All **47 Android 13 instrumentation tests** passed with zero skips. All **38 Go
+core tests** passed with the race detector, along with the fuzz seed corpus.
+A separate ten-second fuzz run checked **141,155 generated inputs** without a
+failure. Host credential JavaScript tests and the test-APK build also passed.
+No production source or APK version changed; the existing 0.5.3 artifact remains
+current. Reports are under `build/reports/additional-tests/`. These tests used
+local fixtures and the emulator; no live PBS or Windows suites were repeated.
+
+## 0.5.3: audit follow-up
+
+Fixes HTTPS port consistency, equivalent-origin encryption-policy bypasses,
+invalid imported preference types/legacy folder defaults, and the server ACL
+write race during host deletion. Android enrollment guidance now matches the
+automatic namespace grants. All 43 Android tests, 33 Go core race tests and six
+live PBS suites passed. Version `0.5.3-preview`, code 12; settings formats remain
+compatible with existing 0.5.x installs. APK SHA-256:
+`7bb14d3fb2c10932979aafd7ed10f09eab57f4bdc0100274c59432f2075a4660`.
+See [audit follow-up validation](../docs/audit-followup-validation.md).
+
 ## 0.5.2: automatic enrollment namespaces and independent storage access
 
 The enrollment popup now has editable datastore and namespace fields. Namespace

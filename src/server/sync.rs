@@ -23,9 +23,9 @@ use proxmox_sys::fs::{CreateOptions, replace_file};
 
 use pbs_api_types::{
     Authid, BackupArchiveName, BackupDir, BackupGroup, BackupNamespace, CLIENT_LOG_BLOB_NAME,
-    CryptMode, GroupListItem, MANIFEST_BLOB_NAME, MAX_NAMESPACE_DEPTH, PRIV_DATASTORE_BACKUP,
-    PRIV_DATASTORE_READ, PRIV_SYS_MODIFY, SnapshotListItem, SyncDirection, SyncJobConfig,
-    VerifyState,
+    CryptMode, Fingerprint, GroupListItem, MANIFEST_BLOB_NAME, MAX_NAMESPACE_DEPTH,
+    PRIV_DATASTORE_BACKUP, PRIV_DATASTORE_READ, PRIV_SYS_MODIFY, SnapshotListItem, SyncDirection,
+    SyncJobConfig, VerifyState,
 };
 use pbs_client::{BackupReader, BackupRepository, HttpClient, RemoteChunkReader};
 use pbs_config::CachedUserInfo;
@@ -919,28 +919,28 @@ pub(super) async fn decrypt_encrypted_data_blob<P: AsRef<Path> + Send + 'static>
     Ok((csum, size))
 }
 
-/// Helper to check if user has access to given encryption key and load it from config.
-pub(crate) fn check_privs_and_load_key_config(
-    key_id: &str,
-    user: &Authid,
-    fail_on_archived: bool,
-) -> Result<Arc<CryptConfig>, Error> {
+/// Helper to check if user has access to given encryption key.
+pub(crate) fn check_key_access(key_id: &str, user: &Authid) -> Result<(), Error> {
     let user_info = CachedUserInfo::new()?;
     user_info.check_privs(
         user,
         &["system", "encryption-keys", key_id],
         PRIV_SYS_MODIFY,
         true,
-    )?;
+    )
+}
 
+/// Helper to load encryption key from config.
+pub(crate) fn load_key_config(
+    key_id: &str,
+    fail_on_archived: bool,
+) -> Result<(Arc<CryptConfig>, Fingerprint), Error> {
     let key_config = pbs_config::encryption_keys::load_key_config(key_id, fail_on_archived)?;
     // pass empty passphrase to get raw key material of unprotected key
     let (enc_key, _created, fingerprint) = key_config.decrypt(&|| Ok(Vec::new()))?;
 
-    info!("Loaded encryption key '{key_id}' with fingerprint '{fingerprint}'");
-
     let crypt_config = Arc::new(CryptConfig::new(enc_key)?);
-    Ok(crypt_config)
+    Ok((crypt_config, fingerprint))
 }
 
 /// Track group progress during parallel push/pull in sync jobs

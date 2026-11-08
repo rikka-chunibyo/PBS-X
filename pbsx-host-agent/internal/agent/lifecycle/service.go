@@ -19,17 +19,25 @@ EnvironmentFile=-/etc/pbsx-agent/agent.env
 
 RuntimeDirectory=pbsx-agent
 RuntimeDirectoryMode=0755
+StateDirectory=pbsx-agent
+StateDirectoryMode=0750
+LogsDirectory=pbsx-agent
+LogsDirectoryMode=0750
+ConfigurationDirectory=pbsx-agent
+ConfigurationDirectoryMode=0700
 
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
-AmbientCapabilities=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+# Metadata restore needs ownership, ACL, special-mode and capability operations.
+# Snapshot providers need device access and mount/ioctl privileges.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_FOWNER CAP_FSETID CAP_SETFCAP CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_MKNOD
 NoNewPrivileges=yes
 LimitNOFILE=1048576
 
-ProtectSystem=full
+# The trusted root agent must see and restore the host filesystem, including
+# /etc and /tmp. Private or read-only filesystem views hide backup sources or
+# make otherwise valid restore destinations inaccessible.
+ProtectSystem=no
 ProtectHome=no
-PrivateTmp=yes
-
-ReadWritePaths=/opt/pbsx-agent /var/lib/pbsx-agent /var/log/pbsx-agent /etc/pbsx-agent
+PrivateTmp=no
 
 [Install]
 WantedBy=multi-user.target

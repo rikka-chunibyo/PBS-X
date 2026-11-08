@@ -505,7 +505,9 @@ pub fn label_media(
             drive.rewind()?;
 
             match drive.read_next_file() {
-                Ok(_reader) => bail!("media is not empty (format it first)"),
+                Ok(_) | Err(BlockReadError::InvalidBlockSize(_, _)) => {
+                    bail!("media is not empty (format it first)")
+                }
                 Err(BlockReadError::EndOfFile) => { /* EOF mark at BOT, assume tape is empty */ }
                 Err(BlockReadError::EndOfStream) => { /* tape is empty */ }
                 Err(err) => {
@@ -1414,7 +1416,7 @@ pub fn list_drives(
             continue;
         }
 
-        let privs = user_info.lookup_privs(&auth_id, &["tape", "drive", &drive.name]);
+        let privs = user_info.lookup_privs(&auth_id, &["tape", "device", &drive.name]);
         if (privs & PRIV_TAPE_AUDIT) == 0 {
             continue;
         }

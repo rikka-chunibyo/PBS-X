@@ -6,6 +6,16 @@ Minimum Android 8; the initial device target is an unrooted Samsung S20 FE,
 Android 13 / One UI 5.1, with Shizuku installed. This is an early file-backup
 preview, not a full device-image or private-app-data backup tool.
 
+## Audit follow-up: 0.5.3
+
+Backup, restore and metadata requests now use the same HTTPS origin and port.
+Use an explicit `:8007` for a direct PBS connection; an HTTPS URL without a port
+uses 443. Equivalent host casing, trailing slashes and default ports share one
+history encryption-policy check, including connection edits and settings imports.
+Invalid known preferences and malformed legacy folder defaults are rejected
+before settings are replaced. The enrollment dialog now describes namespace
+grants directly. Existing 0.5.x vaults and settings exports remain compatible.
+
 ## Keys, encryption and complete settings exports
 
 Preview 0.5.0 adds **Settings → Keys & credentials**, named connections and

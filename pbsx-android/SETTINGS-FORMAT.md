@@ -107,7 +107,15 @@ replacement review with job/connection/key counts. It replaces local settings
 and keys; export the current configuration first if it must be retained.
 Malformed, unsupported, wrong-password and tampered imports do not replace state.
 Validation includes key fingerprints, connection settings, job references,
-shared-history encryption policy, limits and scheduler identities.
+shared-history encryption policy, limits and scheduler identities. Known
+preferences must have the types their Android readers expect; legacy folder
+and schedule defaults are validated before they can trigger job migration.
+Unknown preferences still round-trip with their explicit saved types.
+
+History policy checks use the same HTTPS-origin normalization as the Go client:
+host casing, a trailing slash and an explicit/default port 443 do not define
+separate histories. Job editing, imports, connection/default changes and backup
+startup enforce the same encryption setting for a shared history.
 
 The new vault and pending preference replacement are committed together as an
 encrypted journal. An interrupted preference write is completed on the next

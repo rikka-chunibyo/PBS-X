@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -102,15 +103,44 @@ func (c *Client) SetSocketBinder(binder SocketBinder) error {
 	return nil
 }
 
+// CanonicalServerURL is the HTTPS origin identity shared with Android history
+// validation. Explicit/default HTTPS ports and host casing must compare equally.
+func CanonicalServerURL(server string) (string, error) {
+	u, err := url.Parse(server)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return "", errors.New("server must be an HTTPS origin, e.g. https://pbs:8007")
+	}
+	host := strings.ToLower(u.Hostname())
+	port := 443
+	if u.Port() != "" {
+		port, err = strconv.Atoi(u.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return "", errors.New("invalid HTTPS port")
+		}
+	}
+	if port == 443 {
+		u.Host = host
+		if strings.Contains(host, ":") {
+			u.Host = "[" + host + "]"
+		}
+	} else {
+		u.Host = net.JoinHostPort(host, strconv.Itoa(port))
+	}
+	u.Path, u.RawPath = "", ""
+	return u.String(), nil
+}
+
 func NewClient(configJSON string) (*Client, error) {
 	var c configuration
 	if err := json.Unmarshal([]byte(configJSON), &c); err != nil {
 		return nil, errors.New("invalid connection settings")
 	}
-	u, err := url.Parse(c.Server)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return nil, errors.New("server must be an HTTPS origin, e.g. https://pbs:8007")
+	var err error
+	c.Server, err = CanonicalServerURL(c.Server)
+	if err != nil {
+		return nil, err
 	}
+
 	if !regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]{1,63}$`).MatchString(c.HostID) {
 		return nil, errors.New("invalid host ID")
 	}
@@ -132,7 +162,6 @@ func NewClient(configJSON string) (*Client, error) {
 	if err != nil || len(pin) != 32 {
 		return nil, errors.New("a SHA-256 server certificate fingerprint is required")
 	}
-	c.Server = strings.TrimRight(c.Server, "/")
 	// Exact leaf pinning deliberately replaces CA/hostname trust, matching the
 	// out-of-band PBS-X enrollment fingerprint. Never accept an unpinned peer.
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true, VerifyConnection: func(cs tls.ConnectionState) error {
@@ -263,7 +292,7 @@ func Enroll(code, hostname string) (string, error) {
 	}
 	cfg.Certificate = cert
 	cfg.PrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
-	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.5.2-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
+	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.5.3-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
 	response, err := c.request(context.Background(), "POST", "/pbsx/agent/bootstrap", body, false)
 	if err != nil {
 		return "", err

@@ -18,7 +18,6 @@ import (
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/registry"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
 	"github.com/pbs-x/pbsx-host-agent/internal/host"
-	"github.com/pbs-x/pbsx-host-agent/internal/log"
 	"github.com/pbs-x/pbsx-host-agent/internal/mtls"
 )
 
@@ -166,9 +165,10 @@ func Bootstrap() error {
 		}
 	}
 
-	// The server token is single-use. Remove the local copy as well after a complete enrollment.
-	if err := registry.DeleteEntry(registry.CONFIG, "BootstrapToken"); err != nil {
-		log.Error(err, "bootstrap: failed to remove consumed enrollment token")
+	// Remove the secret while retaining an empty initialization marker so a
+	// stale INIT token in the service environment cannot be replayed on restart.
+	if err := registry.UpsertEntry(&registry.RegistryEntry{Path: registry.CONFIG, Key: "BootstrapToken", Value: ""}); err != nil {
+		return fmt.Errorf("Bootstrap: failed to clear consumed enrollment token: %w", err)
 	}
 	InvalidateTLSConfigCache()
 	return nil

@@ -51,12 +51,6 @@ func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.File
 		applySparseLayout(ctx, st, file, xattrs, e.RawSize)
 	}
 
-	if st.fsCap.supportsChown {
-		st.reportErr(ctx, "chown", path, unix.Fchown(fd, uid, gid))
-	}
-
-	st.reportErr(ctx, "chmod", path, unix.Fchmod(fd, uint32(e.RawMode&0777)))
-
 	if lerr == nil && len(xattrs) > 0 {
 		if d, ok := xattrs[XAttrOwner]; ok {
 			if id, perr := strconv.Atoi(string(d)); perr == nil {
@@ -78,12 +72,21 @@ func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.File
 			delete(xattrs, XAttrLastAccessTime)
 		}
 		if d, ok := xattrs[XAttrLastWriteTime]; ok {
-			if ts, ok := ParseXattrUnixSecs(d); ok {
+			if ts, ok := ParseXattrUnixSecs(d); ok && ts != mtime.Unix() {
 				mtime = time.Unix(ts, 0)
 			}
 			delete(xattrs, XAttrLastWriteTime)
 		}
+	}
 
+	// Chown can clear special mode bits and file capabilities. Resolve the
+	// platform ownership overrides before applying ownership, ACLs, the final
+	// mode and finally capability xattrs.
+	if st.fsCap.supportsChown {
+		st.reportErr(ctx, "chown", path, unix.Fchown(fd, uid, gid))
+	}
+
+	if lerr == nil && len(xattrs) > 0 {
 		if st.fsCap.supportsACLs {
 			if d, ok := xattrs[XAttrACLs]; ok {
 				if detectACLFlavor(d) == aclPosix {
@@ -99,14 +102,11 @@ func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.File
 		} else {
 			delete(xattrs, XAttrACLs)
 		}
+	}
 
-		// Re-apply ownership if the xattrs overrode uid/gid; chmod may have
-		// cleared suid/sgid again.
-		if st.fsCap.supportsChown && (uid != int(e.RawUID) || gid != int(e.RawGID)) {
-			st.reportErr(ctx, "chown (xattr override)", path, unix.Fchown(fd, uid, gid))
-			st.reportErr(ctx, "chmod (xattr override)", path, unix.Fchmod(fd, uint32(e.RawMode&0777)))
-		}
+	st.reportErr(ctx, "chmod", path, unix.Fchmod(fd, uint32(e.RawMode&07777)))
 
+	if lerr == nil {
 		if st.fsCap.supportsXAttrs {
 			for name, val := range xattrs {
 				if IsCanonicalXAttr(name) {
@@ -117,11 +117,7 @@ func applyMeta(ctx context.Context, st *restoreState, file *os.File, e pxar.File
 		}
 	}
 
-	tv := []unix.Timeval{
-		unix.NsecToTimeval(atime.UnixNano()),
-		unix.NsecToTimeval(mtime.UnixNano()),
-	}
-	st.reportErr(ctx, "utimes", path, unix.Futimes(fd, tv))
+	st.reportErr(ctx, "utimes", path, restoreFileTimes(fd, atime, mtime))
 
 	return nil
 }

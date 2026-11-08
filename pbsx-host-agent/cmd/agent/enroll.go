@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,11 +13,43 @@ import (
 )
 
 func persistEnrollmentValue(key, value string) error {
+	if key == "BootstrapToken" {
+		return initializeBootstrapToken(value, registry.GetEntry, registry.UpsertEntry)
+	}
 	entry := &registry.RegistryEntry{Path: registry.CONFIG, Key: key, Value: value}
 	if value != "" {
 		return registry.UpsertEntry(entry)
 	}
 	return registry.CreateEntryIfNotExists(entry)
+}
+
+// INIT environment values seed an unenrolled host. A consumed code in an old
+// service environment must not override an existing identity or a new code
+// explicitly saved by the enroll command.
+func initializeBootstrapToken(value string,
+	lookup func(string, string, bool) (*registry.RegistryEntry, error),
+	write func(*registry.RegistryEntry) error,
+) error {
+	stored, err := lookup(registry.CONFIG, "BootstrapToken", false)
+	if err != nil && !errors.Is(err, registry.ErrNotFound) {
+		return err
+	}
+	if stored != nil && strings.TrimSpace(stored.Value) != "" {
+		return nil
+	}
+	cert, err := lookup(registry.AUTH, "Cert", true)
+	if err != nil && !errors.Is(err, registry.ErrNotFound) {
+		return err
+	}
+	if cert != nil && cert.Value != "" {
+		if stored != nil {
+			return nil
+		}
+		value = ""
+	} else if stored != nil && value == "" {
+		return nil
+	}
+	return write(&registry.RegistryEntry{Path: registry.CONFIG, Key: "BootstrapToken", Value: value})
 }
 
 func enrollmentCodeFromArgs(args []string) (string, bool, error) {

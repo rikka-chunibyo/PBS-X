@@ -12,6 +12,13 @@ use proxmox_uuid::Uuid;
 use crate::file_formats;
 use crate::index::{ChunkReadInfo, IndexFile};
 
+/// Chunk size for fixed index files.
+///
+/// Currently the Proxmox Backup Server API is limited to only allow writing
+/// fixed index files with 4M size. This may change in the future but is
+/// enforced for now.
+pub const FIXED_CHUNK_SIZE: u32 = 4096 * 1024; // TODO: other allowed sizes?
+
 /// Header format definition for fixed index files (`.fidx`)
 #[repr(C)]
 pub struct FixedIndexHeader {
@@ -69,11 +76,12 @@ impl FixedIndexReader {
             Err(err) => bail!("fstat failed - {}", err),
         };
 
-        let size = stat.st_size as usize;
+        let stat_size = usize::try_from(stat.st_size)
+            .map_err(|_| format_err!("unexpected file size: {}", stat.st_size))?;
 
-        if size < header_size {
-            bail!("index too small ({})", stat.st_size);
-        }
+        let Some(index_size) = stat_size.checked_sub(header_size) else {
+            bail!("index too small ({stat_size})");
+        };
 
         let header: Box<FixedIndexHeader> = unsafe { file.read_host_value_boxed()? };
 
@@ -85,20 +93,20 @@ impl FixedIndexReader {
         let ctime = i64::from_le(header.ctime);
         let chunk_size = u64::from_le(header.chunk_size);
 
+        if chunk_size != FIXED_CHUNK_SIZE as u64 {
+            bail!("got unsupported fixed chunk size: {chunk_size}");
+        }
+
         if !chunk_size.is_power_of_two() {
             bail!("got non-power-of-two chunk size: {chunk_size}");
         }
 
-        let index_length = size.div_ceil(chunk_size) as usize;
-        let index_size = index_length * 32;
+        let Ok(index_length) = usize::try_from(size.div_ceil(chunk_size)) else {
+            bail!("index length does not fit in usize: ceil({size} / {chunk_size})");
+        };
 
-        let expected_index_size = (stat.st_size as usize) - header_size;
-        if index_size != expected_index_size {
-            bail!(
-                "got unexpected file size ({} != {})",
-                index_size,
-                expected_index_size
-            );
+        if index_length.checked_mul(32) != Some(index_size) {
+            bail!("unexpected index size: {index_size} != 32 * ceil({size} / {chunk_size})");
         }
 
         let chunk_size = usize::try_from(chunk_size)?;
@@ -293,6 +301,10 @@ impl FixedIndexWriter {
         let chunk_size = u64::from(chunk_size);
         if !chunk_size.is_power_of_two() {
             bail!("got non-power-of-two chunk size: {chunk_size}");
+        }
+
+        if chunk_size != FIXED_CHUNK_SIZE as u64 {
+            bail!("got unsupported fixed chunk size: {chunk_size}");
         }
 
         let ctime = proxmox_time::epoch_i64();
@@ -588,7 +600,40 @@ mod tests {
 
     use super::*;
 
-    const CS: u32 = 4096;
+    const CS: u32 = FIXED_CHUNK_SIZE;
+
+    #[track_caller]
+    fn check_error_contains<T>(result: Result<T, Error>, substring: &str) {
+        let error = result.map(|_| ()).unwrap_err().to_string();
+        assert!(
+            error.contains(substring),
+            "'{error}' does not contain '{substring}'"
+        );
+    }
+
+    #[test]
+    fn test_no_invalid_chunk_size() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("overflow.fidx");
+
+        for chunk_size in &[
+            1u64,
+            1024u64,
+            1 * 1024 * 1024u64,
+            8 * 1024 * 1024u64,
+            u64::MAX,
+        ] {
+            let mut buf = vec![0u8; 4096 + 32]; // (2^59+1) / (4 * 1024 * 1024) * 32 = 32 (mod 2^64)
+            buf[0..8].copy_from_slice(&crate::file_formats::FIXED_SIZED_CHUNK_INDEX_1_0);
+            buf[64..72].copy_from_slice(&576460752303423489u64.to_le_bytes()); // size = 2^59+1
+            buf[72..80].copy_from_slice(&chunk_size.to_le_bytes()); // chunk_size
+            fs::write(&path, &buf).unwrap();
+            check_error_contains(
+                FixedIndexReader::open(&path),
+                &format!("got unsupported fixed chunk size: {chunk_size}"),
+            );
+        }
+    }
 
     #[test]
     fn test_empty() {
