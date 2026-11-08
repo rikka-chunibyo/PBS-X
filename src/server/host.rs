@@ -102,6 +102,26 @@ mod enrollment_key_tests {
     use super::*;
 
     #[test]
+    fn enrollment_namespace_access_survives_server_job_removal() {
+        let id: Authid = "root@pam!phone".parse().unwrap();
+        let mut acl = pbs_config::acl::AclTree::default();
+        let path = "/datastore/backup/family/phone";
+        grant_enrollment_namespace(&mut acl, &id, path);
+        update_managed_upload_acl(&mut acl, "phone", &id, true, &[path.into()], &[]);
+        let roles = &acl.find_node(path).unwrap().users[&id];
+        assert_eq!(roles.get("DatastoreBackup"), Some(&true));
+        assert_eq!(roles.get("DatastoreReader"), Some(&true));
+        assert_eq!(roles.len(), 2);
+        assert!(
+            acl.find_node("/datastore/backup")
+                .unwrap()
+                .users
+                .get(&id)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn automatic_acl_sync_preserves_manual_namespaces_and_roles() {
         let id: Authid = "root@pam!phone".parse().unwrap();
         let mut acl = pbs_config::acl::AclTree::default();
@@ -345,10 +365,16 @@ pub fn create_enrollment_token(
         format_err!("unable to persist enrollment token for host '{host}' - {err}")
     })?;
 
+    let (config, _) = pbs_config::host::config()?;
+    let config: HostConfig = config.lookup("host", host)?;
     Ok(HostEnrollmentToken {
         token,
         expires,
         server_fingerprint: crate::cert_info()?.fingerprint()?,
+        store: config.enrollment_store.unwrap_or_else(|| "backup".into()),
+        ns: config
+            .enrollment_ns
+            .unwrap_or(pbs_config::host::default_enrollment_namespace(host)?),
     })
 }
 
@@ -475,6 +501,48 @@ pub fn check_host_backup_owner(
     pbs_datastore::check_backup_owner(owner, auth_id)
 }
 
+/// Provision missing namespace components with ordinary PBS modification checks.
+/// Existing namespaces and their contents are left in place.
+pub fn ensure_backup_namespace(
+    store: &str,
+    ns: &pbs_api_types::BackupNamespace,
+    rpcenv: &mut dyn proxmox_router::RpcEnvironment,
+) -> Result<(), Error> {
+    let auth_id: Authid = rpcenv.get_auth_id().unwrap().parse()?;
+    let datastore = pbs_datastore::DataStore::lookup_datastore(crate::tools::lookup_with(
+        store,
+        pbs_api_types::Operation::Write,
+    ))?;
+    let mut parent = pbs_api_types::BackupNamespace::root();
+    let mut missing = Vec::new();
+    for part in ns.components() {
+        let child = pbs_api_types::BackupNamespace::from_parent_ns(&parent, part.to_string())?;
+        if !datastore.namespace_exists(&child) {
+            crate::backup::check_ns_modification_privs(store, &child, &auth_id)?;
+            missing.push((parent, part.to_string()));
+        }
+        parent = child;
+    }
+    let backup_user = pbs_config::backup_user()?;
+    let options = proxmox_sys::fs::CreateOptions::new()
+        .owner(backup_user.uid)
+        .group(backup_user.gid)
+        .perm(nix::sys::stat::Mode::from_bits_truncate(0o0750));
+    for (parent, part) in missing {
+        // This protected API runs as root, whereas native backup uploads run
+        // as backup. Create only missing directories with backup ownership,
+        // including each namespace's intermediate `ns/` container.
+        let child = pbs_api_types::BackupNamespace::from_parent_ns(&parent, part.clone())?;
+        proxmox_sys::fs::create_path(
+            datastore.namespace_path(&child),
+            Some(options),
+            Some(options),
+        )?;
+        datastore.create_namespace(&parent, part)?;
+    }
+    Ok(())
+}
+
 fn host_upload_paths(host: &str) -> Result<Vec<String>, Error> {
     let (config, _) = pbs_config::host_backup::config()?;
     let jobs: Vec<HostBackupJobConfig> = config.convert_to_typed_array("host-backup")?;
@@ -536,6 +604,11 @@ fn update_managed_upload_acl(
     }
 }
 
+fn grant_enrollment_namespace(acl: &mut pbs_config::acl::AclTree, auth_id: &Authid, path: &str) {
+    acl.insert_user_role(path, auth_id, "DatastoreBackup", true);
+    acl.insert_user_role(path, auth_id, "DatastoreReader", true);
+}
+
 fn sync_host_upload_acl_for(
     host: &str,
     auth_id: &Authid,
@@ -546,6 +619,12 @@ fn sync_host_upload_acl_for(
     let _lock = pbs_config::acl::lock_config()?;
     let (mut acl, _) = pbs_config::acl::config()?;
     update_managed_upload_acl(&mut acl, host, auth_id, controller, previous, &desired);
+    let (config, _) = pbs_config::host::config()?;
+    let host_config: HostConfig = config.lookup("host", host)?;
+    if let (Some(store), Some(ns)) = (&host_config.enrollment_store, &host_config.enrollment_ns) {
+        let path = format!("/datastore/{store}/{}", ns.name());
+        grant_enrollment_namespace(&mut acl, auth_id, &path);
+    }
     pbs_config::acl::save_config(&acl)?;
     Ok(desired)
 }

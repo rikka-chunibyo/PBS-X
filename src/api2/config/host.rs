@@ -5,7 +5,10 @@ use serde_json::Value;
 use proxmox_router::{ApiMethod, Permission, Router, RpcEnvironment};
 use proxmox_schema::api;
 
-use pbs_api_types::{Authid, PROXMOX_CONFIG_DIGEST_SCHEMA};
+use pbs_api_types::{
+    Authid, BACKUP_NAMESPACE_SCHEMA, BackupNamespace, DATASTORE_SCHEMA, PRIV_PERMISSIONS_MODIFY,
+    PROXMOX_CONFIG_DIGEST_SCHEMA,
+};
 use pbs_config::CachedUserInfo;
 use pbsx_api_types::{
     HOST_ID_SCHEMA, HostConfig, HostConfigUpdater, HostEnrollmentToken, PRIV_HOST_AUDIT,
@@ -65,6 +68,9 @@ pub fn list_hosts(
 )]
 /// Create a PBS-X host definition.
 pub fn create_host(config: HostConfig) -> Result<(), Error> {
+    if config.enrollment_store.is_some() || config.enrollment_ns.is_some() {
+        bail!("configure storage access through the enrollment-token endpoint");
+    }
     let _lock = pbs_config::host::lock_config()?;
     let (mut section_config, _digest) = pbs_config::host::config()?;
 
@@ -235,6 +241,8 @@ pub fn delete_host(name: String, digest: Option<String>) -> Result<(), Error> {
     input: {
         properties: {
             name: { schema: HOST_ID_SCHEMA },
+            store: { schema: DATASTORE_SCHEMA, optional: true },
+            ns: { schema: BACKUP_NAMESPACE_SCHEMA, optional: true },
             "revoke-existing-keys": {
                 type: bool,
                 optional: true,
@@ -251,17 +259,66 @@ pub fn delete_host(name: String, digest: Option<String>) -> Result<(), Error> {
 /// Generate a short-lived one-time enrollment token for a host.
 pub fn generate_enrollment_token(
     name: String,
+    store: Option<String>,
+    ns: Option<BackupNamespace>,
     revoke_existing_keys: Option<bool>,
+    rpcenv: &mut dyn RpcEnvironment,
 ) -> Result<HostEnrollmentToken, Error> {
-    let (config, _digest) = pbs_config::host::config()?;
-    let host: HostConfig = config.lookup("host", &name)?;
+    // Generated tokens belong to root@pam. Granting them access requires the
+    // same administrative privilege as changing another user's ACL in PBS.
+    let auth_id: Authid = rpcenv.get_auth_id().unwrap().parse()?;
+    CachedUserInfo::new()?.check_privs(
+        &auth_id,
+        &["access", "acl"],
+        PRIV_PERMISSIONS_MODIFY,
+        false,
+    )?;
+    let _lock = pbs_config::host::lock_config()?;
+    let (mut config, _digest) = pbs_config::host::config()?;
+    let mut host: HostConfig = config.lookup("host", &name)?;
     if !host.enable {
         bail!("host '{}' is disabled", name);
     }
+    let store = store
+        .or(host.enrollment_store)
+        .unwrap_or_else(|| "backup".into());
+    let ns = ns
+        .or(host.enrollment_ns)
+        .unwrap_or(pbs_config::host::default_enrollment_namespace(&name)?);
+    if ns.is_root() {
+        bail!("choose a device namespace; enrollment cannot grant datastore root access");
+    }
+    crate::server::host::ensure_backup_namespace(&store, &ns, rpcenv)?;
+    host.enrollment_store = Some(store);
+    host.enrollment_ns = Some(ns);
+    config.set_data(&name, "host", &host)?;
+    pbs_config::host::save_config(&config)?;
+    // Also repair access for retained device keys, without rotating secrets.
+    crate::server::host::sync_host_upload_acl(&name)?;
     crate::server::host::create_enrollment_token(&name, revoke_existing_keys.unwrap_or(false))
 }
 
-const ENROLLMENT_TOKEN_ROUTER: Router = Router::new().post(&API_METHOD_GENERATE_ENROLLMENT_TOKEN);
+#[api(
+    input: { properties: { name: { schema: HOST_ID_SCHEMA } } },
+    returns: { type: HostConfig },
+    access: {
+        permission: &Permission::Privilege(&["host", "{name}"], PRIV_HOST_MODIFY, false),
+    },
+)]
+/// Get enrollment destination defaults without changing namespaces or credentials.
+pub fn enrollment_defaults(name: String) -> Result<HostConfig, Error> {
+    let (config, _) = pbs_config::host::config()?;
+    let mut host: HostConfig = config.lookup("host", &name)?;
+    host.enrollment_store.get_or_insert_with(|| "backup".into());
+    if host.enrollment_ns.is_none() {
+        host.enrollment_ns = Some(pbs_config::host::default_enrollment_namespace(&name)?);
+    }
+    Ok(host)
+}
+
+const ENROLLMENT_TOKEN_ROUTER: Router = Router::new()
+    .get(&API_METHOD_ENROLLMENT_DEFAULTS)
+    .post(&API_METHOD_GENERATE_ENROLLMENT_TOKEN);
 
 const ITEM_SUBDIRS: proxmox_router::SubdirMap = &[("enrollment-token", &ENROLLMENT_TOKEN_ROUTER)];
 

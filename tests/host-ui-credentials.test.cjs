@@ -33,7 +33,7 @@ const context = {
                 for (const child of [...item.items || [], ...item.buttons || []]) { visit(child); }
             };
             visit(config);
-            window = { fields, config, down: selector => fields[selector.slice(1)], show() { return this; } };
+            window = { fields, config, down: selector => selector === 'form' ? {isValid: () => true} : fields[selector.slice(1)], show() { return this; } };
             return window;
         },
     },
@@ -42,7 +42,9 @@ const context = {
             request = options;
             const complete = () => {
                 if (failNext) { failNext = false; options.failure({htmlStatus: 'fixture failure'}); }
-                else { options.success({ result: { data: { token: `one-time-token-${++serial}`, 'server-fingerprint': 'aa:bb' } } }); }
+                else { options.success({ result: { data: options.method === 'GET'
+                    ? {'enrollment-store': 'backup', 'enrollment-ns': 'destination-device'}
+                    : { token: `one-time-token-${++serial}`, 'server-fingerprint': 'aa:bb', store: options.params.store, ns: options.params.ns } } }); }
                 options.callback?.();
             };
             if (deferNext) { deferNext = false; pending = complete; } else { complete(); }
@@ -59,7 +61,7 @@ for (const file of ['Agent.js', 'Backups.js']) {
 }
 definitions['PBS.HostAgentView'].controller.generateEnrollmentToken.call({ getView: () => view });
 assert.equal(request.method, 'POST');
-assert.equal(JSON.stringify(request.params), '{"revoke-existing-keys":false}');
+assert.equal(JSON.stringify(request.params), '{"revoke-existing-keys":false,"store":"backup","ns":"destination-device"}');
 assert.equal(window.fields.revokeExistingKeys.config.checked, false);
 const decode = () => JSON.parse(Buffer.from(window.fields.enrollmentCode.value.slice('pbsx1.'.length), 'base64url'));
 assert.equal(decode().storage_auth_id, undefined);
@@ -100,7 +102,16 @@ assert.equal(window.fields.enrollmentCode.value, '');
 assert.equal(window.fields.copyEnrollment.disabled, true, 'failed regeneration must not leave a stale code copyable');
 window.fields.regenerateEnrollment.config.handler({up: () => window});
 assert.ok(decode().bootstrap_token);
-assert.equal(Object.keys(request.params).length, 1, 'custom storage secrets must never be posted to the endpoint');
+assert.equal(Object.keys(request.params).length, 3, 'custom storage secrets must never be posted to the endpoint');
+assert.equal(decode().default_store, 'backup');
+assert.equal(decode().default_namespace, 'destination-device');
+window.fields.namespaceField.value = 'family/existing';
+window.fields.namespaceField.config.listeners.change(window.fields.namespaceField);
+assert.equal(window.fields.enrollmentCode.value, '', 'destination edits invalidate the old code');
+assert.equal(window.fields.copyEnrollment.disabled, true);
+window.fields.regenerateEnrollment.config.handler({up: () => window});
+assert.equal(request.params.ns, 'family/existing');
+assert.equal(decode().default_namespace, 'family/existing');
 const restore = definitions['PBS.window.HostRestore'];
 let restoreConfig;
 const restoreWindow = { host: 'source-host', store: 'backup', ns: 'devices/source-host', backupID: 'phone-photos', backupTime: 123, callParent() { restoreConfig = this.items; } };

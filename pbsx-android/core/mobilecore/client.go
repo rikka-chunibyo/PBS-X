@@ -36,6 +36,8 @@ import (
 )
 
 type configuration struct {
+	DefaultStore      string   `json:"default_store,omitempty"`
+	DefaultNamespace  *string  `json:"default_namespace,omitempty"`
 	Server            string   `json:"server"`
 	HostID            string   `json:"host_id"`
 	Fingerprint       string   `json:"fingerprint"`
@@ -71,7 +73,7 @@ type Client struct {
 type responseError struct{ status int }
 
 func (e *responseError) Error() string {
-	return fmt.Sprintf("PBS request failed (%d); check credentials, datastore, namespace and the host backup job", e.status)
+	return fmt.Sprintf("PBS request failed (%d); check credentials and datastore/namespace permissions", e.status)
 }
 
 // SocketBinder binds an unconnected TCP socket to the selected Android network.
@@ -119,6 +121,12 @@ func NewClient(configJSON string) (*Client, error) {
 		if strings.ContainsAny(s, "\r\n") {
 			return nil, errors.New("invalid API credential")
 		}
+	}
+	if c.DefaultStore != "" && !regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`).MatchString(c.DefaultStore) {
+		return nil, errors.New("invalid default datastore")
+	}
+	if c.DefaultNamespace != nil && *c.DefaultNamespace != "" && safePath(*c.DefaultNamespace) != nil {
+		return nil, errors.New("invalid default namespace")
 	}
 	pin, err := hex.DecodeString(strings.ReplaceAll(c.Fingerprint, ":", ""))
 	if err != nil || len(pin) != 32 {
@@ -255,21 +263,33 @@ func Enroll(code, hostname string) (string, error) {
 	}
 	cfg.Certificate = cert
 	cfg.PrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
-	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.5.1-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
+	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.5.2-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
 	response, err := c.request(context.Background(), "POST", "/pbsx/agent/bootstrap", body, false)
 	if err != nil {
 		return "", err
 	}
 	var result struct {
 		Data struct {
-			ID     string `json:"backup-auth-id"`
-			Secret string `json:"backup-secret"`
+			ID        string  `json:"backup-auth-id"`
+			Store     string  `json:"store"`
+			Namespace *string `json:"ns"`
+			Secret    string  `json:"backup-secret"`
 		} `json:"data"`
 	}
 	if json.Unmarshal(response, &result) != nil || result.Data.ID == "" || result.Data.Secret == "" {
 		return "", errors.New("enrollment did not return an API key")
 	}
 	cfg.AuthID, cfg.Secret = result.Data.ID, result.Data.Secret
+	// Destination comes from the authenticated server response, never from
+	// editable enrollment-code metadata.
+	cfg.DefaultStore, cfg.DefaultNamespace = result.Data.Store, result.Data.Namespace
+	check, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	if _, err := NewClient(string(check)); err != nil {
+		return "", err
+	}
 	out, err := json.Marshal(cfg)
 	return string(out), err
 }
@@ -402,5 +422,5 @@ func backupFailure(err error, host, store, namespace string) error {
 	if namespace == "" {
 		namespace = "(root)"
 	}
-	return fmt.Errorf("Backup destination needs setup. Check the storage key's Permissions for datastore %s, namespace %s. For automatic keys, open Hosts → %s → Jobs and authorize that destination. Then retry Back up; your enrollment is already valid", store, namespace, host)
+	return fmt.Errorf("Backup destination needs setup. Check the storage key's Permissions for datastore %s, namespace %s. For automatic keys, open Hosts → %s → Agent and generate enrollment for that namespace, or grant the key access in PBS Permissions. Then retry Back up; your enrollment is already valid", store, namespace, host)
 }

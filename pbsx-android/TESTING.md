@@ -12,6 +12,45 @@ preserves their Backup IDs in queued restores. See
 checks, live PBS tests and test-VM deployment. Android production code and the
 0.4.0 APK below are unchanged by that fix.
 
+## 0.5.2: automatic enrollment namespaces and independent storage access
+
+The enrollment popup now has editable datastore and namespace fields. Namespace
+is normalized from the host ID by the server, preserving long IDs across valid
+components. Changing a destination invalidates the old code until regeneration.
+Existing namespaces are reused, including their snapshots. An administrator can
+provision a new namespace or grant access to an existing one without creating a
+server backup job. Retained generated keys receive the selected namespace grant;
+secrets are not rotated by code generation. Root-namespace enrollment is rejected.
+
+New Android jobs use the datastore/namespace in the pinned server's bootstrap
+response. Tampered enrollment-code defaults cannot override that destination.
+Existing saved jobs keep their targets. Connections to older servers retain the
+previous defaults. Vault/settings formats remain compatible with 0.5.0/0.5.1.
+
+Validation completed:
+
+- Normalization unit test and all six Rust enrollment/ACL tests passed; server
+  API, proxy and debug CLI builds passed, along with GUI lint/build and dialog tests.
+- All 31 Go core tests passed with the race detector; APK/AAR builds, Java unit
+  checks, Android lint, APK signature and 16 KiB alignment checks passed.
+- All 37 Android 13 instrumentation tests passed, with zero skips, including
+  new-job destination defaults and preservation of existing job targets.
+- Five isolated live PBS suites passed: no-job enrollment namespace provisioning,
+  non-empty namespace reuse, Restore catalogue discovery and cross-host restore;
+  incremental backup and all
+  restore modes; independent/shared backup IDs and manually granted namespaces;
+  retained/revoked key lifecycle; and bidirectional standard Rust client
+  encryption interoperability. Restricted HostAdmin escalation was denied;
+  generated device keys could not create namespaces or read outside their grant.
+  All disposable hosts, jobs, namespaces and keys were cleaned up.
+- Server binaries/UI deployed to test VM104 only. Rollback copy:
+  `/var/backups/pbsx-enrollment-namespace-20261108-003547.e6k3AW`.
+  No physical-phone modifications were performed.
+
+Version `0.5.2-preview`, code 11. APK SHA-256:
+`45412ed04c4c1a8351ce90152f1b8b6dbb327481a593a3a1cf26743dba40ce7d`.
+Logs: `build/reports/enrollment-*.log`.
+
 ## 0.5.1: repeatable custom keys, Settings transfer placement and Shizuku defaults
 
 Settings import/export now appears as the final card on Settings and is absent

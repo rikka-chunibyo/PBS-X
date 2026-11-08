@@ -70,6 +70,33 @@ public class JobStoreTest {
   }
 
   @Test
+  public void newJobsUseEnrolledDestinationWithoutChangingSavedJobs() throws Exception {
+    Context c = isolated();
+    Vault.save(
+        c,
+        new JSONObject()
+            .put("host_id", "s20-fe")
+            .put("default_store", "family")
+            .put("default_namespace", "phones/samsung")
+            .toString());
+    BackupJob original = BackupJob.create(c);
+    assertEquals("family", original.store);
+    assertEquals("phones/samsung", original.namespace);
+    JobStore.save(c, original);
+    Vault.save(
+        c,
+        new JSONObject()
+            .put("host_id", "s20-fe")
+            .put("default_store", "other")
+            .put("default_namespace", "shared")
+            .toString());
+    BackupJob next = BackupJob.create(c);
+    assertEquals("other", next.store);
+    assertEquals("shared", next.namespace);
+    assertEquals("phones/samsung", JobStore.get(c, original.id).namespace);
+  }
+
+  @Test
   public void savesPerJobAppFiltersAndExplicitExportChoices() throws Exception {
     Context c = isolated();
     BackupJob job = new BackupJob();

@@ -294,7 +294,7 @@ func TestLiveBackupIdentities(t *testing.T) {
 
 	// A retained enrollment can append to arbitrary backup IDs owned by an
 	// earlier key for this device, without rewriting recorded group ownership.
-	grant := api("create", "/config/host/"+cfg.HostID+"/enrollment-token")
+	grant := api("create", "/config/host/"+cfg.HostID+"/enrollment-token", "--store", "backup", "--ns", ns+"/enrollment")
 	var token string
 	if json.Unmarshal(grant["token"], &token) != nil || token == "" {
 		t.Fatal("missing enrollment token")

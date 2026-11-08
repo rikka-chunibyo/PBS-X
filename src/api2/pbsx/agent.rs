@@ -120,6 +120,8 @@ pub fn bootstrap_agent(request: HostBootstrapRequest) -> Result<HostBootstrapRes
     Ok(HostBootstrapResponse {
         backup_auth_id,
         backup_secret,
+        store: host.enrollment_store,
+        ns: host.enrollment_ns,
     })
 }
 

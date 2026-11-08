@@ -152,9 +152,15 @@ final class BackupJob {
     BackupJob job = new BackupJob();
     job.connectionID = KeyProfiles.selected(c);
     job.store = Settings.store(c);
-    String config = Vault.load(c);
+    String config = KeyProfiles.config(c, job.connectionID, "", false);
     if (!config.isEmpty()) {
-      String device = new JSONObject(config).getString("host_id");
+      JSONObject values = new JSONObject(config);
+      job.store = values.optString("default_store", job.store);
+      if (values.has("default_namespace")) {
+        job.namespace = values.getString("default_namespace");
+        return job;
+      }
+      String device = values.getString("host_id");
       // PBS namespace components are limited to 32 characters; preserve the
       // full device ID without a collision-prone truncated name.
       job.namespace =

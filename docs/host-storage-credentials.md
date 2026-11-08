@@ -132,12 +132,39 @@ its host ID or checks enabled server jobs after a manual ACL permits access.
 PBS group ownership still applies; a read grant is not permission to append to
 another owner's existing group.
 
+Enrollment now provisions storage access independently of server jobs. The
+Agent dialog defaults its editable datastore to `backup` and namespace to the
+lowercase host ID (long IDs retain all characters across valid namespace
+components). The last approved destination becomes that host's next default.
+`POST /config/host/{host}/enrollment-token` accepts optional `store` and `ns`;
+`GET` returns effective defaults without creating anything. Blank/root namespace
+is rejected for automatic enrollment. Missing components use ordinary
+`Datastore.Modify` checks and backup-service ownership; existing namespaces and
+snapshots are reused without replacement.
+
+Granting these root-owned tokens access requires `Permissions.Modify` on
+`/access/acl`, as for ordinary PBS ACL administration. Host.Modify alone cannot
+select arbitrary storage permissions or inject enrollment fields via host
+creation/update. Device keys receive propagated `DatastoreBackup` and
+`DatastoreReader` on the approved namespace, with no namespace-management
+privilege. This permits all accessible snapshots in an explicitly shared
+namespace to be restored while PBS group ownership still controls appends.
+Previously generated, retained device keys are granted access too, without
+rotating secrets. Selecting another namespace keeps prior grants; token
+revocation or host deletion removes the generated tokens and their ACLs.
+
+The authenticated bootstrap response carries `store` and `ns`. Android 0.5.2
+uses those values for new local jobs; editable code metadata is not authority
+for storage grants. Existing local jobs keep their saved targets. Old-server
+and manually configured connections retain their previous client defaults.
+
 New server job forms suggest `devices/<host-id>`. Long IDs are split into
 32-character namespace components. Missing namespaces can be provisioned when
 saving a job, with normal `Datastore.Modify` checks and backup-service filesystem
-ownership. The device key receives `DatastoreBackup` only on the approved
-namespace, without propagation or namespace-creation privileges. Clearing the
-namespace explicitly selects root; existing job configurations are unchanged.
+ownership. A grant managed solely by a server job is `DatastoreBackup` on its
+approved namespace without propagation. Enrollment namespace grants remain independent
+of these job grants. Device keys receive no namespace-creation privileges.
+Clearing the namespace explicitly selects root; existing job configurations are unchanged.
 
 Automatic ACL synchronization records its managed paths rather than deleting
 every ACL for the key. Job edits remove obsolete automatic grants and preserve

@@ -5,7 +5,7 @@ use proxmox_router::{Permission, Router, RpcEnvironment};
 use proxmox_schema::{api, param_bail};
 
 use pbs_api_types::{
-    Authid, BackupNamespace, JOB_ID_SCHEMA, Operation, PRIV_DATASTORE_AUDIT, PRIV_DATASTORE_BACKUP,
+    Authid, JOB_ID_SCHEMA, PRIV_DATASTORE_AUDIT, PRIV_DATASTORE_BACKUP,
     PROXMOX_CONFIG_DIGEST_SCHEMA,
 };
 use pbs_config::CachedUserInfo;
@@ -31,39 +31,7 @@ fn ensure_job_namespace(
     if ns.is_root() {
         return Ok(());
     }
-    let auth_id: Authid = rpcenv.get_auth_id().unwrap().parse()?;
-    let datastore = pbs_datastore::DataStore::lookup_datastore(crate::tools::lookup_with(
-        &job.store,
-        Operation::Write,
-    ))?;
-    let mut parent = BackupNamespace::root();
-    let mut missing = Vec::new();
-    for part in ns.components() {
-        let child = BackupNamespace::from_parent_ns(&parent, part.to_string())?;
-        if !datastore.namespace_exists(&child) {
-            crate::backup::check_ns_modification_privs(&job.store, &child, &auth_id)?;
-            missing.push((parent, part.to_string()));
-        }
-        parent = child;
-    }
-    let backup_user = pbs_config::backup_user()?;
-    let options = proxmox_sys::fs::CreateOptions::new()
-        .owner(backup_user.uid)
-        .group(backup_user.gid)
-        .perm(nix::sys::stat::Mode::from_bits_truncate(0o0750));
-    for (parent, part) in missing {
-        // This protected API runs as root, whereas native backup uploads run
-        // as backup. Create only missing directories with backup ownership,
-        // including each namespace's intermediate `ns/` container.
-        let child = BackupNamespace::from_parent_ns(&parent, part.clone())?;
-        proxmox_sys::fs::create_path(
-            datastore.namespace_path(&child),
-            Some(options),
-            Some(options),
-        )?;
-        datastore.create_namespace(&parent, part)?;
-    }
-    Ok(())
+    crate::server::host::ensure_backup_namespace(&job.store, ns, rpcenv)
 }
 
 fn check_read_access(

@@ -36,15 +36,15 @@ App settings are not a backup source in this release.
 1. Install `artifacts/pbsx-android-preview.apk`. Permit installation from the
    browser/file manager you use to open it. This is a development-signed build;
    keep the signing key when building upgrades.
-2. In the PBS-X web UI, create a host and an **enabled host backup job** allowing
-   the desired datastore and namespace. New server jobs suggest
-   `devices/<device-id>` and can create missing namespaces with your administrator
-   permissions. Generate the host's enrollment code and paste it into
-   **Enroll with PBS-X code**. The private device identity stays on the phone.
-   The Android preview selects files locally; its selected folders determine
-   the archive contents, rather than the server job's source-path list.
+2. In the PBS-X web UI, create a host and open **Agent → Generate enrollment token**.
+   Choose the datastore and device namespace. The namespace defaults to the
+   normalized host name and can be changed. A missing namespace is created;
+   an existing namespace is reused. Generated keys receive backup and restore
+   access to that namespace and its children. No server backup job is needed
+   for Android. Paste the code into **Enroll with PBS-X code**. The private
+   device identity stays on the phone. Android selects its backup sources locally.
 3. Open **Jobs → New job**, name the job and select the matching datastore and
-   namespace. New local jobs default to the device namespace and a generated,
+   namespace. New local jobs default to the enrolled datastore and namespace and a generated,
    editable **Backup ID**. Job name is cosmetic. **Use existing backup** selects
    a visible host history without changing your device identity. Add DCIM for camera photos/videos or other folders using **Add a
    folder**. Give each folder a distinct archive label, such as `Photos` or

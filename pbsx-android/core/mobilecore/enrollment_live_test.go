@@ -69,7 +69,7 @@ func TestLiveEnrollmentKeys(t *testing.T) {
 		return c
 	}
 	grant := func(host string, revoke *bool) string {
-		args := []string{}
+		args := []string{"--store", "backup", "--ns", namespace + "/enrollment"}
 		if revoke != nil {
 			args = append(args, "--revoke-existing-keys", map[bool]string{false: "false", true: "true"}[*revoke])
 		}

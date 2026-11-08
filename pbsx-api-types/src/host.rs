@@ -48,6 +48,8 @@ pub enum HostOperatingSystem {
             optional: true,
             schema: SINGLE_LINE_COMMENT_SCHEMA,
         },
+        "enrollment-store": { optional: true, schema: DATASTORE_SCHEMA },
+        "enrollment-ns": { optional: true, schema: BACKUP_NAMESPACE_SCHEMA },
     },
 )]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Updater)]
@@ -63,6 +65,14 @@ pub struct HostConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional administrator-facing note.
     pub comment: Option<String>,
+    #[updater(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Administrator-approved default datastore for device enrollment.
+    pub enrollment_store: Option<String>,
+    #[updater(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Administrator-approved device namespace, independent of server jobs.
+    pub enrollment_ns: Option<BackupNamespace>,
 }
 
 #[api(
@@ -270,6 +280,8 @@ pub struct HostListItem {
             type: String,
             description: "SHA-256 fingerprint of the PBS-X HTTPS certificate.",
         },
+        store: { schema: DATASTORE_SCHEMA },
+        ns: { schema: BACKUP_NAMESPACE_SCHEMA },
     },
 )]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -279,6 +291,10 @@ pub struct HostEnrollmentToken {
     pub token: String,
     pub expires: i64,
     pub server_fingerprint: String,
+    /// Default datastore approved by the administrator.
+    pub store: String,
+    /// Default namespace approved by the administrator.
+    pub ns: BackupNamespace,
 }
 
 #[api(
@@ -315,6 +331,8 @@ pub struct HostBootstrapRequest {
             type: String,
             description: "PBS API token secret. Returned only during enrollment/rotation.",
         },
+        store: { schema: DATASTORE_SCHEMA, optional: true },
+        ns: { schema: BACKUP_NAMESPACE_SCHEMA, optional: true },
     },
 )]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -323,6 +341,12 @@ pub struct HostBootstrapRequest {
 pub struct HostBootstrapResponse {
     pub backup_auth_id: String,
     pub backup_secret: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Default datastore approved by the administrator.
+    pub store: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Default namespace approved by the administrator.
+    pub ns: Option<BackupNamespace>,
 }
 
 pub const HOST_BACKUP_SCHEDULE_SCHEMA: Schema =
