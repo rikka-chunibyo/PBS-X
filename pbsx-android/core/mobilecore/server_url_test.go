@@ -2,6 +2,7 @@ package mobilecore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"strings"
@@ -59,4 +60,31 @@ func TestBackupReaderAndMetadataUseSameHTTPSPort(t *testing.T) {
 			}
 		})
 	}
+}
+
+func FuzzCanonicalServerOrigin(f *testing.F) {
+	for _, server := range []string{"https://PBS.example:443/", "https://[::1]:8007", "https://host?", "https://user@host", "https://host:9999999999999999999", "https://host/%2f"} {
+		f.Add(server)
+	}
+	f.Fuzz(func(t *testing.T, server string) {
+		if len(server) > 8192 {
+			t.Skip()
+		}
+		canonical, err := CanonicalServerURL(server)
+		if err != nil {
+			return
+		}
+		again, err := CanonicalServerURL(canonical)
+		if err != nil || again != canonical {
+			t.Fatalf("normalization is not stable: %q -> %q -> %q (%v)", server, canonical, again, err)
+		}
+		raw, err := json.Marshal(configuration{Server: canonical, HostID: "fuzz-phone", Fingerprint: strings.Repeat("00", 32)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := NewClient(string(raw))
+		if err != nil || client.cfg.Server != canonical {
+			t.Fatalf("canonical origin is unusable: %q: %v", canonical, err)
+		}
+	})
 }
