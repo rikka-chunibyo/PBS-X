@@ -27,6 +27,7 @@ public final class RestoreActivity extends Activity {
   private final TreeSet<String> selected = new TreeSet<>();
   private LinearLayout page, footer;
   private String store = "backup", namespace = "", source = "", relative = ".", mode = "fail";
+  private String connectionID = "";
   private String sourceType = "host";
   private long snapshot, offset, total;
   private int stage, generation, snapshotOffset;
@@ -39,7 +40,12 @@ public final class RestoreActivity extends Activity {
   public void onCreate(Bundle saved) {
     super.onCreate(saved);
     try {
-      String config = Vault.load(this);
+      connectionID =
+          saved == null
+              ? getIntent().getStringExtra("connection_id")
+              : saved.getString("connection_id", "");
+      if (connectionID == null) connectionID = "";
+      String config = KeyProfiles.config(this, connectionID, "", false);
       if (config.isEmpty()) throw new Exception("Connect to PBS-X in Settings first");
       JSONObject cfg = new JSONObject(config);
       source = cfg.getString("host_id");
@@ -131,7 +137,8 @@ public final class RestoreActivity extends Activity {
         () -> {
           try {
             token.check();
-            Client c = Operations.client(this, Vault.load(this), token);
+            Client c =
+                Operations.client(this, KeyProfiles.config(this, connectionID, "", false), token);
             client = c;
             token.check();
             String response = action.run(c);
@@ -563,6 +570,7 @@ public final class RestoreActivity extends Activity {
                 if (Operations.running())
                   throw new Exception("Another transfer is already running");
                 BackupJob target = new BackupJob();
+                target.connectionID = connectionID;
                 target.name = "Restore from " + sourceType + "/" + source;
                 target.backupID = source;
                 target.store = store;
@@ -636,6 +644,7 @@ public final class RestoreActivity extends Activity {
 
   @Override
   protected void onSaveInstanceState(Bundle out) {
+    out.putString("connection_id", connectionID);
     super.onSaveInstanceState(out);
     out.putString("store", store);
     out.putString("namespace", namespace);

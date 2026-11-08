@@ -1,6 +1,6 @@
 # Android preview validation — 2026-11-07
 
-Latest integrated branch: `pbs-x`. The original Android series began
+Current feature branch: `pbsx-android-key-vault`, based on integrated `pbs-x`. The original Android series began
 on `pbsx-android-app`, based on PBS-X `026c165a2`.
 Phone target: Samsung S20 FE, Android 13 / One UI 5.1, unrooted with Shizuku.
 The Samsung phone was surveyed read-only; this version was built and tested in
@@ -11,6 +11,120 @@ preserves their Backup IDs in queued restores. See
 [host-history validation](../docs/host-history-validation.md) for its Rust/UI
 checks, live PBS tests and test-VM deployment. Android production code and the
 0.4.0 APK below are unchanged by that fix.
+
+## 0.5.2: automatic enrollment namespaces and independent storage access
+
+The enrollment popup now has editable datastore and namespace fields. Namespace
+is normalized from the host ID by the server, preserving long IDs across valid
+components. Changing a destination invalidates the old code until regeneration.
+Existing namespaces are reused, including their snapshots. An administrator can
+provision a new namespace or grant access to an existing one without creating a
+server backup job. Retained generated keys receive the selected namespace grant;
+secrets are not rotated by code generation. Root-namespace enrollment is rejected.
+
+New Android jobs use the datastore/namespace in the pinned server's bootstrap
+response. Tampered enrollment-code defaults cannot override that destination.
+Existing saved jobs keep their targets. Connections to older servers retain the
+previous defaults. Vault/settings formats remain compatible with 0.5.0/0.5.1.
+
+Validation completed:
+
+- Normalization unit test and all six Rust enrollment/ACL tests passed; server
+  API, proxy and debug CLI builds passed, along with GUI lint/build and dialog tests.
+- All 31 Go core tests passed with the race detector; APK/AAR builds, Java unit
+  checks, Android lint, APK signature and 16 KiB alignment checks passed.
+- All 37 Android 13 instrumentation tests passed, with zero skips, including
+  new-job destination defaults and preservation of existing job targets.
+- Five isolated live PBS suites passed: no-job enrollment namespace provisioning,
+  non-empty namespace reuse, Restore catalogue discovery and cross-host restore;
+  incremental backup and all
+  restore modes; independent/shared backup IDs and manually granted namespaces;
+  retained/revoked key lifecycle; and bidirectional standard Rust client
+  encryption interoperability. Restricted HostAdmin escalation was denied;
+  generated device keys could not create namespaces or read outside their grant.
+  All disposable hosts, jobs, namespaces and keys were cleaned up.
+- Server binaries/UI deployed to test VM104 only. Rollback copy:
+  `/var/backups/pbsx-enrollment-namespace-20261108-003547.e6k3AW`.
+  No physical-phone modifications were performed.
+
+Version `0.5.2-preview`, code 11. APK SHA-256:
+`45412ed04c4c1a8351ce90152f1b8b6dbb327481a593a3a1cf26743dba40ce7d`.
+Logs: `build/reports/enrollment-*.log`.
+
+## 0.5.1: repeatable custom keys, Settings transfer placement and Shizuku defaults
+
+Settings import/export now appears as the final card on Settings and is absent
+from Keys & credentials. Custom passphrases deterministically recreate the same
+backup key after reset, independent of device, account or server. The phrase is
+not stored; the fixed v1 scheme has an independent known-answer test. Export
+password encryption continues to use fresh random salts and nonces per file.
+
+New jobs have no Shizuku sources selected, including All apps. Shizuku-dependent
+source/export controls and app selection are disabled and dimmed while the
+master switch is off; toggling it preserves choices already made.
+
+Validation: all **36 Android 13 instrumentation tests passed with zero skips**,
+including real Shizuku. New coverage exercises custom key creation, matching
+fingerprints across a fresh app context, no saved passphrases, Settings footer
+placement, password-dialog behavior, unchecked defaults and dependent controls
+re-enabling without losing selections. All **31 Go core tests passed with the
+race detector**, including the permanent 30-character recovery vector and
+successful decryption with a recreated key. APK/AAR builds, Java unit tests,
+Android lint and final packaging/signing/alignment checks passed. No live VMs
+or the physical phone were touched for this follow-up; the backup wire format
+is unchanged from the bidirectionally verified 0.5.0 implementation.
+
+APK SHA-256: `84fec4bcd770bd0da1a0eddc4cabfa66f87d1f6e4827e76f630348d026ca9131`.
+
+Version: `0.5.1-preview`, code 10. Vault and settings formats remain compatible
+with 0.5.0; existing keys and jobs are retained. Logs are under
+`build/reports/custom-key-*.log`. See [settings/key format](SETTINGS-FORMAT.md).
+
+## 0.5.0: key vault, optional backup encryption and complete settings transfer
+
+The keys page, job connection/encryption selectors, Restore connection selection
+and complete plain/password-encrypted settings exports are implemented. Exports
+include jobs, schedules, source selections, every saved preference, credentials,
+backup keys and activity history. The password is not saved. Imports validate
+before replacement, recover interrupted preference writes through an encrypted
+journal, and pause imported schedules until permission review. No migration of
+0.4.x vaults is included; clear this test app's storage before reconnecting.
+See [settings/key format](SETTINGS-FORMAT.md).
+
+Validation on 2026-11-07:
+
+- All **34 Android 13 instrumentation tests passed with zero skips**. Real
+  Shizuku ran as shell UID 2000. New tests cover job credential/key selectors,
+  the keys page/password dialog, complete settings round trips, all preference
+  types, history and source/schedule preservation, import validation without
+  state changes, referenced-key deletion protection and import-journal recovery.
+- All **30 Android Go core tests passed with the race detector**. Crypto tests
+  include random salt/nonce use, wrong password, modified ciphertext, malformed
+  envelopes, bounded KDF selection, missing/invalid backup keys, signed-manifest
+  tampering and encrypted chunk authentication/digest checks.
+- The live encryption suite passed on PBS-X VM104. It verifies encrypted stored
+  chunks, unchanged-chunk reuse, imported-key restore to a different destination
+  identity, refusal of wrong/missing keys and historical reads after rotation.
+  **Bidirectional encrypted interoperability with the standard Rust
+  `proxmox-backup-client` passed**, including signature verification.
+- All three existing live suites passed: round trips, backup identities and
+  enrollment keys. Each used its own automatically cleaned disposable fixture.
+- The shared PBS writer suite passed with the race detector, including the
+  standard-manifest signature regression and refusing encryption without a key
+  before network access. Linux desktop native-backup tests passed; the normal
+  native-restore package has no untagged tests. No Windows VM was needed for this
+  Android change.
+- ARM64/x86-64 AAR and APK assembly, Java unit tests, lint, unchanged signing
+  identity and 16 KiB APK ZIP alignment checks passed. No physical Samsung
+  backup/restore or 16 KiB-page device test was performed.
+
+Version: `0.5.0-preview`, code 9. Logs: `build/reports/key-vault-*.log`.
+APK SHA-256: `c06deb6d993541e8501b17139a8674d5169e073d17883e7b3f6f46c7601b8794`.
+The phone, dev VM and unrelated host services were untouched. Only PBS-X VM104
+and the local Android emulator were used; server code/services were not replaced.
+All seven disposable fixture identities were verified absent afterward. VM104
+was returned to its original stopped state and 8 GiB RAM / 4 GiB balloon setting;
+the emulator and loopback fixture were stopped.
 
 ## 0.4.1: reader cancellation and backup identity validation
 

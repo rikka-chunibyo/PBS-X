@@ -312,6 +312,84 @@ public class NavigationTest {
   }
 
   @Test
+  public void newJobsStartWithNoShizukuSelectionsAndDisableDependentControls() throws Exception {
+    BackupJob defaults = new BackupJob();
+    assertFalse(defaults.shizuku);
+    assertFalse(defaults.apks);
+    assertFalse(defaults.data);
+    assertFalse(defaults.obb);
+    assertFalse(defaults.allApps);
+    assertEquals(0, defaults.packages.length());
+    assertEquals(0, defaults.exports.length());
+    Activity editor =
+        instrumentation.startActivitySync(
+            new Intent(instrumentation.getTargetContext(), JobEditorActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+    try {
+      final Activity screen = editor;
+      instrumentation.runOnMainSync(
+          () -> {
+            View root = screen.findViewById(android.R.id.content);
+            java.util.List<String> labels = new java.util.ArrayList<>();
+            labels.add("Installed application APKs");
+            labels.add("Android/data");
+            labels.add("Android/obb");
+            labels.add("All apps and external app folders");
+            java.util.Collections.addAll(labels, DeviceExport.LABELS);
+            for (String label : labels) {
+              android.widget.CheckBox box = (android.widget.CheckBox) find(root, label, false);
+              assertNotNull(label, box);
+              assertFalse(label, box.isChecked());
+              assertFalse(label, box.isEnabled());
+              assertEquals(label, 0.4f, box.getAlpha(), 0.01f);
+            }
+            assertFalse(find(root, "Choose apps", false).isEnabled());
+          });
+      click(editor, "Enable Shizuku for this job");
+      instrumentation.runOnMainSync(
+          () -> {
+            View root = screen.findViewById(android.R.id.content);
+            for (String label :
+                new String[] {
+                  "Installed application APKs",
+                  "Android/data",
+                  "Android/obb",
+                  "All apps and external app folders",
+                  "Choose apps"
+                }) {
+              View control = find(root, label, false);
+              assertTrue(label, control.isEnabled());
+              assertEquals(1f, control.getAlpha(), 0.01f);
+            }
+            for (String label : DeviceExport.LABELS)
+              assertTrue(label, find(root, label, false).isEnabled());
+          });
+      click(editor, "SMS messages");
+      click(editor, "Enable Shizuku for this job");
+      instrumentation.runOnMainSync(
+          () -> {
+            android.widget.CheckBox box =
+                (android.widget.CheckBox)
+                    find(screen.findViewById(android.R.id.content), "SMS messages", false);
+            assertFalse(box.isEnabled());
+            assertTrue("Disabling Shizuku should preserve choices", box.isChecked());
+          });
+      click(editor, "Enable Shizuku for this job");
+      instrumentation.runOnMainSync(
+          () -> {
+            android.widget.CheckBox box =
+                (android.widget.CheckBox)
+                    find(screen.findViewById(android.R.id.content), "SMS messages", false);
+            assertTrue(box.isEnabled());
+            assertTrue(box.isChecked());
+          });
+    } finally {
+      Activity screen = editor;
+      instrumentation.runOnMainSync(screen::finish);
+    }
+  }
+
+  @Test
   public void editorSavesAppSelectionAndIndependentDeviceExports() throws Exception {
     Assume.assumeTrue(rikka.shizuku.Shizuku.pingBinder());
     Assume.assumeTrue(

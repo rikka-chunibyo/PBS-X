@@ -17,6 +17,7 @@ public final class ScheduleService extends JobService {
   private final Map<Integer, Operations.Cancellation> active = new HashMap<>();
 
   static void configureAll(Context c) throws Exception {
+    Vault.data(c);
     JobScheduler scheduler = c.getSystemService(JobScheduler.class);
     scheduler.cancel(72);
     Map<Integer, JobInfo> pending = new HashMap<>();
@@ -25,6 +26,7 @@ public final class ScheduleService extends JobService {
         pending.put(j.getId(), j);
     Set<Integer> wanted = new HashSet<>();
     for (BackupJob j : JobStore.all(c)) {
+      if (Settings.prefs(c).getBoolean("imported_schedule_hold", false)) continue;
       if (j.hours == 0) continue;
       wanted.add(j.schedulerId);
       String hash =
@@ -69,7 +71,8 @@ public final class ScheduleService extends JobService {
               boolean retry = false;
               try {
                 BackupJob job = JobStore.get(this, params.getExtras().getString("job_id", ""));
-                if (job.hours > 0)
+                if (job.hours > 0
+                    && !Settings.prefs(this).getBoolean("imported_schedule_hold", false))
                   Settings.status(
                       this,
                       Operations.runJob(

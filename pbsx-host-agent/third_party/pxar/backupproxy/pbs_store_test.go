@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/pbs-plus/pxar/buzhash"
@@ -406,5 +408,61 @@ func TestPBSManifestFileEntries(t *testing.T) {
 	expectedBlobDigest := sha256.Sum256(encodedBlob)
 	if blobEntry.CSum != hex.EncodeToString(expectedBlobDigest[:]) {
 		t.Errorf("blob checksum mismatch")
+	}
+}
+
+// PBS rewrites manifests through its typed schema. Unknown top-level fields
+// disappear, so signatures must use exactly that schema before upload.
+func TestPBSEncryptedSignatureSurvivesServerManifestRewrite(t *testing.T) {
+	sess, mock := newTestPBSSession(t)
+	key, err := datastore.CreateRandomKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc, err := datastore.NewCryptConfig(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.config.CryptMode = datastore.CryptModeEncrypt
+	sess.config.CryptConfig = cc
+	sess.config.BackupTime = 123
+	if _, err = sess.UploadArchive(context.Background(), "root.pxar.didx", bytes.NewReader([]byte("encrypted fixture"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sess.Finish(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := datastore.DecodeBlob(nil, mock.blobs["index.json.blob"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		BackupType  string                     `json:"backup-type"`
+		BackupID    string                     `json:"backup-id"`
+		BackupTime  int64                      `json:"backup-time"`
+		Files       []datastore.BackupFileInfo `json:"files"`
+		Signature   string                     `json:"signature"`
+		Unprotected json.RawMessage            `json:"unprotected"`
+	}
+	if err = json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, _ := json.Marshal(schema)
+	manifest, err := datastore.UnmarshalManifest(rewritten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = datastore.VerifyManifestSignature(manifest, cc); err != nil {
+		t.Fatal("PBS schema rewrite invalidated signature", err)
+	}
+	if len(manifest.Files) != 1 || manifest.Files[0].CryptMode != "encrypt" {
+		t.Fatal("missing per-file encryption mode")
+	}
+}
+
+func TestPBSEncryptionRequiresKeyBeforeConnecting(t *testing.T) {
+	store := NewPBSStore(PBSConfig{}, buzhash.DefaultConfig(), true)
+	if _, err := store.StartSession(context.Background(), BackupConfig{CryptMode: datastore.CryptModeEncrypt}); err == nil || !strings.Contains(err.Error(), "requires an encryption key") {
+		t.Fatalf("encrypted session did not fail before network access: %v", err)
 	}
 }

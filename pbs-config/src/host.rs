@@ -48,6 +48,49 @@ pub fn save_config(config: &SectionConfigData) -> Result<(), Error> {
     replace_privileged_config(HOST_CFG_FILENAME, raw.as_bytes())
 }
 
+/// Normalize an ASCII host ID without dropping characters from long IDs.
+/// Subsequent components have an underscore prefix so punctuation at a split
+/// cannot produce an invalid namespace component.
+pub fn default_enrollment_namespace(host: &str) -> Result<pbs_api_types::BackupNamespace, Error> {
+    if !host.is_ascii() {
+        anyhow::bail!("host IDs must be ASCII");
+    }
+    let name = host.to_ascii_lowercase();
+    let (first, rest) = name.split_at(name.len().min(32));
+    let mut parts = vec![first.to_string()];
+    for chunk in rest.as_bytes().chunks(31) {
+        parts.push(format!("_{}", std::str::from_utf8(chunk)?));
+    }
+    pbs_api_types::BackupNamespace::new(&parts.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enrollment_namespace_preserves_long_host_identity() {
+        for host in [
+            "S20-FE",
+            "Office_PC.example",
+            &format!("{}-{}", "a".repeat(32), "B".repeat(31)),
+        ] {
+            let ns = default_enrollment_namespace(host).unwrap();
+            assert!(ns.components().all(|part| part.len() <= 32));
+            let mut parts = ns.components();
+            let mut restored = parts.next().unwrap().to_string();
+            for part in parts {
+                restored.push_str(part.strip_prefix('_').unwrap());
+            }
+            assert_eq!(restored, host.to_ascii_lowercase());
+        }
+        assert_eq!(
+            default_enrollment_namespace("S20-FE").unwrap().to_string(),
+            "s20-fe"
+        );
+    }
+}
+
 /// Shell completion helper for host IDs.
 pub fn complete_host_name(_arg: &str, _param: &HashMap<String, String>) -> Vec<String> {
     match config() {

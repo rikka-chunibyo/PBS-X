@@ -27,7 +27,7 @@ api create /config/host --name "$test_id" --comment 'Disposable Android core int
 host_created=true
 api create /config/host-backup --host "$test_id" --id "$test_id" --sources /selected-folders --store backup --ns "$test_id" --snapshot-mode direct --enable false >/dev/null
 job_created=true
-api create "/config/host/$test_id/enrollment-token" > "$scratch/bootstrap.json"
+api create "/config/host/$test_id/enrollment-token" --store backup --ns "$test_id/enrollment" > "$scratch/bootstrap.json"
 python3 - "$scratch" "$test_id" <<'PY'
 import base64, hashlib, json, pathlib, ssl, sys
 folder=pathlib.Path(sys.argv[1]); host=sys.argv[2]

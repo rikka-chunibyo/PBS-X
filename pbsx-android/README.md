@@ -6,20 +6,45 @@ Minimum Android 8; the initial device target is an unrooted Samsung S20 FE,
 Android 13 / One UI 5.1, with Shizuku installed. This is an early file-backup
 preview, not a full device-image or private-app-data backup tool.
 
+## Keys, encryption and complete settings exports
+
+Preview 0.5.0 adds **Settings → Keys & credentials**, named connections and
+backup keys, and independent **Connection** / **Encryption** selectors in each
+job. Automatic enrollment adds a connection; existing API keys are supported.
+Restore can select a connection and finds imported encryption keys by fingerprint.
+
+**Create encryption key → Use custom passphrase** accepts a memorable key.
+Enter exactly the same passphrase after a reset to recreate the same backup
+key, without an export file. The passphrase is not saved. Random generation
+and raw-key import remain available.
+
+At the bottom of **Settings**, **Export all settings** includes every job, source selection, schedule, saved
+preference, connection, credential, encryption key and activity entry. Choose
+plain JSON or password-encrypted JSON. The export password is used for that
+file only and is not saved. Import validates and replaces the saved state;
+imported schedules stay paused until permissions are reviewed. Folder access
+and Shizuku authorization must be granted on the destination device.
+
+This test build uses a new vault format. Clear the previous 0.4.x app storage
+and reconnect; no old-vault migration is included. Keep exported encryption
+keys somewhere other than the device being backed up. See
+[settings format and key management](SETTINGS-FORMAT.md) for details.
+App settings are not a backup source in this release.
+
 ## Try it
 
 1. Install `artifacts/pbsx-android-preview.apk`. Permit installation from the
    browser/file manager you use to open it. This is a development-signed build;
    keep the signing key when building upgrades.
-2. In the PBS-X web UI, create a host and an **enabled host backup job** allowing
-   the desired datastore and namespace. New server jobs suggest
-   `devices/<device-id>` and can create missing namespaces with your administrator
-   permissions. Generate the host's enrollment code and paste it into
-   **Enroll with PBS-X code**. The private device identity stays on the phone.
-   The Android preview selects files locally; its selected folders determine
-   the archive contents, rather than the server job's source-path list.
+2. In the PBS-X web UI, create a host and open **Agent → Generate enrollment token**.
+   Choose the datastore and device namespace. The namespace defaults to the
+   normalized host name and can be changed. A missing namespace is created;
+   an existing namespace is reused. Generated keys receive backup and restore
+   access to that namespace and its children. No server backup job is needed
+   for Android. Paste the code into **Enroll with PBS-X code**. The private
+   device identity stays on the phone. Android selects its backup sources locally.
 3. Open **Jobs → New job**, name the job and select the matching datastore and
-   namespace. New local jobs default to the device namespace and a generated,
+   namespace. New local jobs default to the enrolled datastore and namespace and a generated,
    editable **Backup ID**. Job name is cosmetic. **Use existing backup** selects
    a visible host history without changing your device identity. Add DCIM for camera photos/videos or other folders using **Add a
    folder**. Give each folder a distinct archive label, such as `Photos` or
@@ -44,9 +69,7 @@ The percentage is for the **current file**, not the whole job. Scanning,
 preparing sources, comparing files and saving the snapshot use an indeterminate
 bar. Reading unchanged files still advances progress even when PBS reuses every
 chunk and uploads zero new content. Job and Activity rows update while running.
-Existing folder and schedule settings migrate into a `Phone backup` job on
-upgrade; the existing connection and keys are retained. Editing or deleting a
-local job never deletes its PBS snapshots.
+Editing or deleting a local job never deletes its PBS snapshots.
 
 Restore modes reuse existing folders and keep unrelated destination files:
 
@@ -68,7 +91,7 @@ An existing PBS API token can be used instead of enrollment. Enter its full
 certificate** fingerprint. Credentials are encrypted with Android Keystore;
 cloud backup and device transfer of this application's state are excluded.
 
-**Change storage API key** retains the automatically enrolled device identity
+A saved connection’s **Change storage access key** retains the automatically enrolled device identity
 while selecting another token for datastore access. A broader authorized key
 can list and restore another host's snapshots through the global **Restore**
 catalogue. Clearing both storage-key fields returns to the automatic key.
@@ -136,7 +159,9 @@ new destination folder; check activity status before using its files.
 ## Optional Shizuku sources
 
 Start Shizuku and grant PBS-X permission using the button in **Settings**. In a
-job's editor, enable Shizuku mode, then opt into individual sources:
+job's editor, enable Shizuku mode, then opt into individual sources. New jobs
+start with nothing selected; Shizuku-dependent options are disabled and greyed
+out until its master switch is enabled:
 
 - **Installed application APKs:** third-party installed packages, including
   base and split APKs, under `Installed-APKs/<package>/<index>.apk`.

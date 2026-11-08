@@ -2692,8 +2692,13 @@ func TestIntegration_PBSEncryptModeBackup(t *testing.T) {
 	}
 
 	manifest := result.Manifest
-	if manifest.CryptMode != string(datastore.CryptModeEncrypt) {
-		t.Errorf("manifest crypt-mode = %q, want %q", manifest.CryptMode, datastore.CryptModeEncrypt)
+	if manifest.CryptMode != "" {
+		t.Error("PBS manifests must not contain a top-level crypt-mode")
+	}
+	for _, file := range manifest.Files {
+		if file.CryptMode != string(datastore.CryptModeEncrypt) {
+			t.Errorf("file %s crypt-mode = %s", file.Filename, file.CryptMode)
+		}
 	}
 
 	if manifest.Signature == "" {
@@ -2758,8 +2763,13 @@ func TestIntegration_PBSSignOnlyModeBackup(t *testing.T) {
 	}
 
 	manifest := result.Manifest
-	if manifest.CryptMode != string(datastore.CryptModeSign) {
-		t.Errorf("manifest crypt-mode = %q, want %q", manifest.CryptMode, datastore.CryptModeSign)
+	if manifest.CryptMode != "" {
+		t.Error("PBS manifests must not contain a top-level crypt-mode")
+	}
+	for _, file := range manifest.Files {
+		if file.CryptMode != string(datastore.CryptModeSign) {
+			t.Errorf("file %s crypt-mode = %s", file.Filename, file.CryptMode)
+		}
 	}
 
 	if manifest.Signature == "" {
@@ -2816,8 +2826,13 @@ func TestIntegration_PBSDataModeEncryptWithCatalog(t *testing.T) {
 	if !result.CatalogUploaded {
 		t.Error("expected catalog to be uploaded")
 	}
-	if result.Manifest.CryptMode != string(datastore.CryptModeEncrypt) {
-		t.Errorf("manifest crypt-mode = %q, want %q", result.Manifest.CryptMode, datastore.CryptModeEncrypt)
+	if result.Manifest.CryptMode != "" {
+		t.Error("PBS manifests must not contain a top-level crypt-mode")
+	}
+	for _, file := range result.Manifest.Files {
+		if file.CryptMode != string(datastore.CryptModeEncrypt) {
+			t.Errorf("file %s crypt-mode = %s", file.Filename, file.CryptMode)
+		}
 	}
 
 	// Verify all expected files in manifest

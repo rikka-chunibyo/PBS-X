@@ -32,6 +32,12 @@ final class BackupCatalogue implements AutoCloseable {
   private final Handler handler = new Handler(Looper.getMainLooper());
   private LinearLayout panel, groups;
   private JSONArray data, warnings = new JSONArray();
+  private String connectionID = "";
+
+  void connection(String id) {
+    connectionID = id == null ? "" : id;
+  }
+
   private String identity = "", query = "", error = "";
   private int page;
   private volatile int generation;
@@ -51,6 +57,7 @@ final class BackupCatalogue implements AutoCloseable {
     this.open = open;
     this.settings = settings;
     if (saved != null) {
+      connectionID = saved.getString("catalogue_connection", "");
       query = saved.getString("catalogue_query", "");
       page = saved.getInt("catalogue_page", 0);
     }
@@ -61,6 +68,7 @@ final class BackupCatalogue implements AutoCloseable {
   }
 
   void save(Bundle out) {
+    out.putString("catalogue_connection", connectionID);
     out.putString("catalogue_query", query);
     out.putInt("catalogue_page", page);
   }
@@ -85,7 +93,7 @@ final class BackupCatalogue implements AutoCloseable {
   void render(LinearLayout target) {
     panel = target;
     try {
-      String config = Vault.load(activity);
+      String config = KeyProfiles.config(activity, connectionID, "", false);
       String fingerprint =
           android.util.Base64.encodeToString(
               MessageDigest.getInstance("SHA-256").digest(config.getBytes(StandardCharsets.UTF_8)),
@@ -124,11 +132,22 @@ final class BackupCatalogue implements AutoCloseable {
     draw();
     final Operations.Cancellation token = new Operations.Cancellation();
     cancellation = token;
+    final String selectedConnection;
+    try {
+      selectedConnection = connectionID.isEmpty() ? KeyProfiles.selected(activity) : connectionID;
+    } catch (Exception e) {
+      loading = false;
+      error = e.getMessage();
+      draw();
+      return;
+    }
     executor.execute(
         () -> {
           try {
             token.check();
-            Client c = Operations.client(activity, Vault.load(activity), token);
+            Client c =
+                Operations.client(
+                    activity, KeyProfiles.config(activity, selectedConnection, "", false), token);
             client = c;
             token.check();
             JSONObject result = new JSONObject(c.listAccessibleBackups());
@@ -138,6 +157,17 @@ final class BackupCatalogue implements AutoCloseable {
                   loading = false;
                   data = result.optJSONArray("groups");
                   if (data == null) data = new JSONArray();
+                  try {
+                    for (int i = 0; i < data.length(); i++)
+                      data.getJSONObject(i)
+                          .put(
+                              "connection_id",
+                              selectedConnection.isEmpty()
+                                  ? KeyProfiles.selected(activity)
+                                  : selectedConnection);
+                  } catch (Exception e) {
+                    error = e.getMessage();
+                  }
                   warnings = result.optJSONArray("warnings");
                   if (warnings == null) warnings = new JSONArray();
                   loaded = System.currentTimeMillis();
@@ -159,12 +189,54 @@ final class BackupCatalogue implements AutoCloseable {
   private void draw() {
     if (panel == null || closed) return;
     panel.removeAllViews();
+    try {
+      JSONArray profiles = Vault.data(activity).getJSONArray("connections");
+      String resolved = connectionID.isEmpty() ? KeyProfiles.selected(activity) : connectionID;
+      String label =
+          resolved.isEmpty()
+              ? "Choose connection"
+              : KeyProfiles.find(Vault.data(activity), "connections", resolved).getString("name");
+      Ui.button(
+          panel,
+          "Connection: " + label,
+          false,
+          v -> {
+            try {
+              String[] names = new String[profiles.length()];
+              for (int i = 0; i < names.length; i++)
+                names[i] = profiles.getJSONObject(i).getString("name");
+              new android.app.AlertDialog.Builder(activity)
+                  .setTitle("Browse with connection")
+                  .setItems(
+                      names,
+                      (d, w) -> {
+                        try {
+                          connectionID = profiles.getJSONObject(w).getString("id");
+                          identity = "";
+                          data = null;
+                          error = "";
+                          cancel();
+                          render(panel);
+                        } catch (Exception e) {
+                          error = e.getMessage();
+                          draw();
+                        }
+                      })
+                  .setNegativeButton("Cancel", null)
+                  .show();
+            } catch (Exception e) {
+              error = e.getMessage();
+            }
+          });
+    } catch (Exception ignored) {
+    }
+
     Ui.title(panel, chooseHistory ? "Choose backup history" : "Restore");
     Ui.hint(
         panel,
         chooseHistory
             ? "Choose a host backup history. Permission to list a group does not necessarily allow"
-                  + " appending snapshots."
+                + " appending snapshots."
             : "All backup groups visible to your storage key, across datastores and namespaces.");
     Button refresh =
         Ui.button(panel, loading ? "Loading backups…" : "Refresh backups", false, v -> load());

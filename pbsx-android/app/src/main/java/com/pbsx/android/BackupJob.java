@@ -8,10 +8,11 @@ import org.json.JSONObject;
 final class BackupJob {
   String id = UUID.randomUUID().toString(), name = "Phone backup", store = "backup", namespace = "";
   String backupID = "backup-" + id.replace("-", "").substring(0, 12);
+  String connectionID = "", encryptionKeyID = "";
   JSONArray sources = new JSONArray();
   int hours = 0, schedulerId = 0;
   boolean wifi = true, charging = true, shizuku = false, apks = false, data = false, obb = false;
-  boolean allApps = true;
+  boolean allApps = false;
   JSONArray packages = new JSONArray(), exports = new JSONArray();
 
   JSONObject json() throws Exception {
@@ -21,6 +22,8 @@ final class BackupJob {
         .put("store", store)
         .put("namespace", namespace)
         .put("backup_id", backupID)
+        .put("connection_id", connectionID)
+        .put("encryption_key_id", encryptionKeyID)
         .put("sources", sources)
         .put("hours", hours)
         .put("scheduler_id", schedulerId)
@@ -48,6 +51,8 @@ final class BackupJob {
     j.namespace = value.optString("namespace", "");
     // Older jobs used the enrolled host ID. Keep that history until explicitly edited.
     j.backupID = value.optString("backup_id", "");
+    j.connectionID = value.optString("connection_id", "");
+    j.encryptionKeyID = value.optString("encryption_key_id", "");
     j.sources =
         new JSONArray(
             value.optJSONArray("sources") == null
@@ -78,6 +83,9 @@ final class BackupJob {
 
   void validate(boolean runnable) throws Exception {
     if (!id.matches("[A-Za-z0-9_-]{1,64}")) throw new Exception("Invalid job identity");
+    for (String identity : new String[] {connectionID, encryptionKeyID})
+      if (!identity.isEmpty() && !identity.matches("[A-Za-z0-9_-]{1,64}"))
+        throw new Exception("Invalid saved credential reference");
     name = name.trim();
     store = store.trim();
     namespace = namespace.trim();
@@ -135,15 +143,24 @@ final class BackupJob {
   }
 
   String backupID(android.content.Context c) throws Exception {
-    return backupID.isEmpty() ? new JSONObject(Vault.load(c)).getString("host_id") : backupID;
+    return backupID.isEmpty()
+        ? new JSONObject(KeyProfiles.config(c, connectionID, "", false)).getString("host_id")
+        : backupID;
   }
 
   static BackupJob create(android.content.Context c) throws Exception {
     BackupJob job = new BackupJob();
+    job.connectionID = KeyProfiles.selected(c);
     job.store = Settings.store(c);
-    String config = Vault.load(c);
+    String config = KeyProfiles.config(c, job.connectionID, "", false);
     if (!config.isEmpty()) {
-      String device = new JSONObject(config).getString("host_id");
+      JSONObject values = new JSONObject(config);
+      job.store = values.optString("default_store", job.store);
+      if (values.has("default_namespace")) {
+        job.namespace = values.getString("default_namespace");
+        return job;
+      }
+      String device = values.getString("host_id");
       // PBS namespace components are limited to 32 characters; preserve the
       // full device ID without a collision-prone truncated name.
       job.namespace =

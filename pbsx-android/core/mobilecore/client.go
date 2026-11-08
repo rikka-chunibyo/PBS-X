@@ -36,15 +36,20 @@ import (
 )
 
 type configuration struct {
-	Server        string `json:"server"`
-	HostID        string `json:"host_id"`
-	Fingerprint   string `json:"fingerprint"`
-	AuthID        string `json:"auth_id"`
-	Secret        string `json:"secret"`
-	StorageAuthID string `json:"storage_auth_id,omitempty"`
-	StorageSecret string `json:"storage_secret,omitempty"`
-	Certificate   string `json:"certificate,omitempty"`
-	PrivateKey    string `json:"private_key,omitempty"`
+	DefaultStore      string   `json:"default_store,omitempty"`
+	DefaultNamespace  *string  `json:"default_namespace,omitempty"`
+	Server            string   `json:"server"`
+	HostID            string   `json:"host_id"`
+	Fingerprint       string   `json:"fingerprint"`
+	AuthID            string   `json:"auth_id"`
+	Secret            string   `json:"secret"`
+	StorageAuthID     string   `json:"storage_auth_id,omitempty"`
+	StorageSecret     string   `json:"storage_secret,omitempty"`
+	Certificate       string   `json:"certificate,omitempty"`
+	PrivateKey        string   `json:"private_key,omitempty"`
+	EncryptionEnabled bool     `json:"encryption_enabled,omitempty"`
+	EncryptionKey     string   `json:"encryption_key,omitempty"`
+	DecryptionKeys    []string `json:"decryption_keys,omitempty"`
 }
 
 func init() {
@@ -61,12 +66,14 @@ type Client struct {
 	cancel  context.CancelFunc
 	dialer  *net.Dialer
 	details ProgressDetails
+	crypt   *datastore.CryptConfig
+	keys    map[string]*datastore.CryptConfig
 }
 
 type responseError struct{ status int }
 
 func (e *responseError) Error() string {
-	return fmt.Sprintf("PBS request failed (%d); check credentials, datastore, namespace and the host backup job", e.status)
+	return fmt.Sprintf("PBS request failed (%d); check credentials and datastore/namespace permissions", e.status)
 }
 
 // SocketBinder binds an unconnected TCP socket to the selected Android network.
@@ -115,6 +122,12 @@ func NewClient(configJSON string) (*Client, error) {
 			return nil, errors.New("invalid API credential")
 		}
 	}
+	if c.DefaultStore != "" && !regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*$`).MatchString(c.DefaultStore) {
+		return nil, errors.New("invalid default datastore")
+	}
+	if c.DefaultNamespace != nil && *c.DefaultNamespace != "" && safePath(*c.DefaultNamespace) != nil {
+		return nil, errors.New("invalid default namespace")
+	}
 	pin, err := hex.DecodeString(strings.ReplaceAll(c.Fingerprint, ":", ""))
 	if err != nil || len(pin) != 32 {
 		return nil, errors.New("a SHA-256 server certificate fingerprint is required")
@@ -137,7 +150,11 @@ func NewClient(configJSON string) (*Client, error) {
 		}
 		return nil
 	}}
-	return &Client{cfg: c, tls: tlsConfig}, nil
+	crypt, keys, err := connectionKeys(c)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{cfg: c, tls: tlsConfig, crypt: crypt, keys: keys}, nil
 }
 
 func (c *Client) begin() (context.Context, func(), error) {
@@ -246,21 +263,33 @@ func Enroll(code, hostname string) (string, error) {
 	}
 	cfg.Certificate = cert
 	cfg.PrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
-	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.4.1-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
+	body, _ := json.Marshal(map[string]any{"host-id": e.HostID, "token": e.Token, "client-certificate": cert, "heartbeat": map[string]any{"hostname": hostname, "operating-system": "other", "os-version": "Android", "architecture": runtime.GOARCH, "agent-version": "android-0.5.2-preview", "capabilities": []string{"android-documents", "manual-backup", "restore"}}})
 	response, err := c.request(context.Background(), "POST", "/pbsx/agent/bootstrap", body, false)
 	if err != nil {
 		return "", err
 	}
 	var result struct {
 		Data struct {
-			ID     string `json:"backup-auth-id"`
-			Secret string `json:"backup-secret"`
+			ID        string  `json:"backup-auth-id"`
+			Store     string  `json:"store"`
+			Namespace *string `json:"ns"`
+			Secret    string  `json:"backup-secret"`
 		} `json:"data"`
 	}
 	if json.Unmarshal(response, &result) != nil || result.Data.ID == "" || result.Data.Secret == "" {
 		return "", errors.New("enrollment did not return an API key")
 	}
 	cfg.AuthID, cfg.Secret = result.Data.ID, result.Data.Secret
+	// Destination comes from the authenticated server response, never from
+	// editable enrollment-code metadata.
+	cfg.DefaultStore, cfg.DefaultNamespace = result.Data.Store, result.Data.Namespace
+	check, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
+	}
+	if _, err := NewClient(string(check)); err != nil {
+		return "", err
+	}
 	out, err := json.Marshal(cfg)
 	return string(out), err
 }
@@ -355,7 +384,11 @@ func (c *Client) backupNamed(store, namespace, backupID, jobID, jobName string, 
 	defer report.close()
 	client := backupproxy.NewLocalClient(&documentFS{docs: docs, ctx: ctx, report: report})
 	server := backupproxy.NewServer(client, backupproxy.NewPBSStore(cfg, buzhash.DefaultConfig(), true))
-	_, err = server.RunBackupWithMode(ctx, ".", backupproxy.BackupConfig{BackupType: datastore.BackupHost, BackupID: backupID, Namespace: namespace, BackupTime: stamp, ChunkConfig: buzhash.DefaultConfig(), DetectionMode: backupproxy.DetectionData, Compress: true, StrictMetadata: true, OnUploadProgress: func(p backupproxy.UploadProgress) {
+	mode := datastore.CryptModeNone
+	if c.crypt != nil {
+		mode = datastore.CryptModeEncrypt
+	}
+	_, err = server.RunBackupWithMode(ctx, ".", backupproxy.BackupConfig{CryptMode: mode, CryptConfig: c.crypt, BackupType: datastore.BackupHost, BackupID: backupID, Namespace: namespace, BackupTime: stamp, ChunkConfig: buzhash.DefaultConfig(), DetectionMode: backupproxy.DetectionData, Compress: true, StrictMetadata: true, OnUploadProgress: func(p backupproxy.UploadProgress) {
 		report.uploaded(int64(p.UploadedBytes))
 		if progress != nil {
 			progress.Update("Uploading", int64(p.UploadedChunks), int64(p.UploadedBytes))
@@ -389,5 +422,5 @@ func backupFailure(err error, host, store, namespace string) error {
 	if namespace == "" {
 		namespace = "(root)"
 	}
-	return fmt.Errorf("Backup destination needs setup. Check the storage key's Permissions for datastore %s, namespace %s. For automatic keys, open Hosts → %s → Jobs and authorize that destination. Then retry Back up; your enrollment is already valid", store, namespace, host)
+	return fmt.Errorf("Backup destination needs setup. Check the storage key's Permissions for datastore %s, namespace %s. For automatic keys, open Hosts → %s → Agent and generate enrollment for that namespace, or grant the key access in PBS Permissions. Then retry Back up; your enrollment is already valid", store, namespace, host)
 }

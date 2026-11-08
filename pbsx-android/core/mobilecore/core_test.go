@@ -414,11 +414,11 @@ func TestEnrollmentKeepsPrivateKeyOnDevice(t *testing.T) {
 		if req.Token != "one-time-test" || req.Heartbeat.OS != "other" {
 			t.Error("incompatible bootstrap request")
 		}
-		io.WriteString(w, `{"data":{"backup-auth-id":"test@pbs!device","backup-secret":"test-secret"}}`)
+		io.WriteString(w, `{"data":{"backup-auth-id":"test@pbs!device","backup-secret":"test-secret","store":"family-store","ns":"family/existing"}}`)
 	}))
 	defer server.Close()
 	sum := sha256.Sum256(server.Certificate().Raw)
-	block, _ := json.Marshal(map[string]any{"v": 1, "host_id": "android-test", "server_url": server.URL, "bootstrap_token": "one-time-test", "server_ca_fingerprint": hex.EncodeToString(sum[:])})
+	block, _ := json.Marshal(map[string]any{"v": 1, "host_id": "android-test", "server_url": server.URL, "bootstrap_token": "one-time-test", "default_store": "tampered", "default_namespace": "unapproved", "server_ca_fingerprint": hex.EncodeToString(sum[:])})
 	result, err := Enroll("pbsx1."+base64.RawURLEncoding.EncodeToString(block), "Samsung S20 FE")
 	if err != nil {
 		t.Fatal(err)
@@ -427,6 +427,9 @@ func TestEnrollmentKeepsPrivateKeyOnDevice(t *testing.T) {
 	json.Unmarshal([]byte(result), &cfg)
 	if cfg.PrivateKey == "" || cfg.AuthID != "test@pbs!device" {
 		t.Fatal("missing saved device identity or API key")
+	}
+	if cfg.DefaultStore != "family-store" || cfg.DefaultNamespace == nil || *cfg.DefaultNamespace != "family/existing" {
+		t.Fatal("enrollment did not use the server-approved destination")
 	}
 	if _, err := NewClient(result); err != nil {
 		t.Fatal(err)
@@ -484,12 +487,12 @@ func TestSocketBindingFailureCannotFallBack(t *testing.T) {
 	}
 }
 
-func TestMissingBackupJobExplainsSetupWithoutReenrollment(t *testing.T) {
+func TestMissingStorageAccessExplainsSetupWithoutReenrollment(t *testing.T) {
 	original := errors.New("start session: PBS H2 connect: upgrade failed: HTTP 403: PBS-X host 'phone' has no enabled backup job targeting this datastore/namespace")
 	for _, ns := range []string{"", "family/phones"} {
 		err := backupFailure(original, "phone", "backup", ns)
 		message := err.Error()
-		for _, want := range []string{"Hosts → phone → Jobs", "datastore backup", "enrollment is already valid"} {
+		for _, want := range []string{"Hosts → phone → Agent", "datastore backup", "enrollment is already valid"} {
 			if !strings.Contains(message, want) {
 				t.Fatalf("missing %q in %q", want, message)
 			}

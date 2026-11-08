@@ -119,6 +119,7 @@ final class Ui {
             | (secret
                 ? InputType.TYPE_TEXT_VARIATION_PASSWORD
                 : InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS));
+    if (secret) e.setSaveEnabled(false);
     e.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
     p.addView(e, new LinearLayout.LayoutParams(-1, dp(c, 48)));
     return e;

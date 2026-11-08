@@ -22,6 +22,7 @@ public final class JobEditorActivity extends Activity {
   private Button chooseApps;
   private boolean choosingApps;
   private LinearLayout folders;
+  private Button connection, encryption;
 
   @Override
   public void onCreate(Bundle state) {
@@ -30,6 +31,8 @@ public final class JobEditorActivity extends Activity {
       String id = getIntent().getStringExtra("job_id");
       job = id == null ? BackupJob.create(this) : JobStore.get(this, id);
       if (state != null) {
+        job.connectionID = state.getString("connection_id", job.connectionID);
+        job.encryptionKeyID = state.getString("encryption_key_id", job.encryptionKeyID);
         job.id = state.getString("job_id", job.id);
         job.sources = new JSONArray(state.getString("sources", "[]"));
         job.packages = new JSONArray(state.getString("packages", job.packages.toString()));
@@ -42,6 +45,9 @@ public final class JobEditorActivity extends Activity {
       Ui.hint(basic, "Display label only. Renaming this job does not change its backup history.");
       LinearLayout dest = Ui.card(page);
       Ui.text(dest, "Destination", 18, Ui.TEXT);
+      connection = Ui.button(dest, "", false, v -> chooseCredential(false));
+      encryption = Ui.button(dest, "", false, v -> chooseCredential(true));
+      credentialLabels();
       store = Ui.input(dest, "Datastore", job.store, false);
       namespace = Ui.input(dest, "Namespace · leave blank for root", job.namespace, false);
       backupID = Ui.input(dest, "Backup ID", job.backupID(this), false);
@@ -50,7 +56,11 @@ public final class JobEditorActivity extends Activity {
           dest,
           "Use existing backup",
           false,
-          v -> startActivityForResult(new Intent(this, SelectBackupActivity.class), 101));
+          v ->
+              startActivityForResult(
+                  new Intent(this, SelectBackupActivity.class)
+                      .putExtra("connection_id", job.connectionID),
+                  101));
       Ui.hint(
           dest,
           "The datastore, namespace and Backup ID identify one snapshot history. Jobs using the"
@@ -87,9 +97,8 @@ public final class JobEditorActivity extends Activity {
               + " these three sources together.");
       appSummary = Ui.hint(extra, "Selected apps: " + job.packages.length());
       chooseApps = Ui.button(extra, "Choose apps", false, v -> chooseApps());
-      chooseApps.setEnabled(shizuku.isChecked());
-      shizuku.setOnCheckedChangeListener(
-          (button, checked) -> chooseApps.setEnabled(checked && !choosingApps));
+      updateShizukuControls();
+      shizuku.setOnCheckedChangeListener((button, checked) -> updateShizukuControls());
       Ui.text(extra, "Device data exports", 18, Ui.TEXT);
       for (int i = 0; i < exportOptions.length; i++) {
         String category = DeviceExport.CATEGORIES.get(i);
@@ -150,6 +159,68 @@ public final class JobEditorActivity extends Activity {
           exportOptions[i].setChecked(
               state.getBoolean("export_" + i, exportOptions[i].isChecked()));
       }
+      updateShizukuControls();
+    } catch (Exception e) {
+      error(e);
+    }
+  }
+
+  private void updateShizukuControls() {
+    boolean enabled = shizuku.isChecked();
+    for (android.view.View option : new android.view.View[] {apks, data, obb, allApps, appSummary})
+      shizukuControl(option, enabled);
+    shizukuControl(chooseApps, enabled && !choosingApps);
+    for (CheckBox option : exportOptions) shizukuControl(option, enabled);
+  }
+
+  private static void shizukuControl(android.view.View option, boolean enabled) {
+    if (option == null) return;
+    option.setEnabled(enabled);
+    option.setAlpha(enabled ? 1f : 0.4f);
+  }
+
+  private void credentialLabels() throws Exception {
+    JSONObject vault = Vault.data(this);
+    String id =
+        job.connectionID.isEmpty() ? vault.optString("default_connection") : job.connectionID;
+    String label = "Choose connection";
+    if (!id.isEmpty()) label = KeyProfiles.find(vault, "connections", id).getString("name");
+    connection.setText("Connection: " + label);
+    encryption.setText(
+        "Encryption: "
+            + (job.encryptionKeyID.isEmpty()
+                ? "Off"
+                : KeyProfiles.find(vault, "keys", job.encryptionKeyID).getString("name")));
+  }
+
+  private void chooseCredential(boolean key) {
+    try {
+      JSONArray values = Vault.data(this).getJSONArray(key ? "keys" : "connections");
+      String[] labels = new String[values.length() + (key ? 1 : 0)];
+      if (key) labels[0] = "Off";
+      for (int i = 0; i < values.length(); i++)
+        labels[i + (key ? 1 : 0)] = values.getJSONObject(i).getString("name");
+      if (labels.length == 0) {
+        error(new Exception("Add a connection in Keys & credentials first"));
+        return;
+      }
+      new AlertDialog.Builder(this)
+          .setTitle(key ? "Backup encryption key" : "PBS connection")
+          .setItems(
+              labels,
+              (d, w) -> {
+                try {
+                  String id =
+                      key && w == 0 ? "" : values.getJSONObject(w - (key ? 1 : 0)).getString("id");
+                  if (key) job.encryptionKeyID = id;
+                  else job.connectionID = id;
+                  credentialLabels();
+                } catch (Exception e) {
+                  error(e);
+                }
+              })
+          .setNegativeButton("Cancel", null)
+          .show();
     } catch (Exception e) {
       error(e);
     }
@@ -158,7 +229,7 @@ public final class JobEditorActivity extends Activity {
   private void chooseApps() {
     if (choosingApps) return;
     choosingApps = true;
-    chooseApps.setEnabled(false);
+    updateShizukuControls();
     executor.execute(
         () -> {
           try (ShizukuBridge bridge = new ShizukuBridge(this)) {
@@ -186,7 +257,7 @@ public final class JobEditorActivity extends Activity {
                 () -> {
                   if (isDestroyed() || isFinishing()) return;
                   choosingApps = false;
-                  chooseApps.setEnabled(shizuku.isChecked());
+                  updateShizukuControls();
                   new AlertDialog.Builder(this)
                       .setTitle("Choose apps and app folders")
                       .setMultiChoiceItems(
@@ -208,7 +279,7 @@ public final class JobEditorActivity extends Activity {
                 () -> {
                   if (!isDestroyed() && !isFinishing()) {
                     choosingApps = false;
-                    chooseApps.setEnabled(shizuku.isChecked());
+                    updateShizukuControls();
                     error(e);
                   }
                 });
@@ -266,6 +337,13 @@ public final class JobEditorActivity extends Activity {
   protected void onActivityResult(int request, int result, Intent intent) {
     super.onActivityResult(request, result, intent);
     if (request == 101 && result == RESULT_OK && intent != null) {
+      job.connectionID = intent.getStringExtra("connection_id");
+      if (job.connectionID == null) job.connectionID = "";
+      try {
+        credentialLabels();
+      } catch (Exception e) {
+        error(e);
+      }
       store.setText(intent.getStringExtra("store"));
       namespace.setText(intent.getStringExtra("namespace"));
       backupID.setText(intent.getStringExtra("backup_id"));
@@ -342,6 +420,7 @@ public final class JobEditorActivity extends Activity {
       for (int i = 0; i < exportOptions.length; i++)
         if (exportOptions[i].isChecked()) job.exports.put(DeviceExport.CATEGORIES.get(i));
       job.validate(true);
+      KeyProfiles.validateJob(this, job);
       JobStore.save(this, job);
       ScheduleService.configureAll(this);
       finish();
@@ -367,6 +446,8 @@ public final class JobEditorActivity extends Activity {
     out.putString("namespace", namespace.getText().toString());
     out.putString("backup_id", backupID.getText().toString());
     out.putString("job_id", job.id);
+    out.putString("connection_id", job.connectionID);
+    out.putString("encryption_key_id", job.encryptionKeyID);
     out.putString("hours", hours.getText().toString());
     out.putBoolean("wifi", wifi.isChecked());
     out.putBoolean("charging", charging.isChecked());

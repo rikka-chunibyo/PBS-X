@@ -231,6 +231,9 @@ func NewPBSStore(config PBSConfig, chunkCfg buzhash.Config, compress bool) *PBSS
 
 // StartSession dials PBS via H2 upgrade and returns a backup session.
 func (ps *PBSStore) StartSession(ctx context.Context, config BackupConfig) (BackupSession, error) {
+	if config.CryptMode == datastore.CryptModeEncrypt && config.CryptConfig == nil {
+		return nil, fmt.Errorf("encrypted backup requires an encryption key")
+	}
 	h2Conn, err := dialPBSH2(ctx, ps.config.BaseURL, ps.config.Datastore, ps.config.AuthToken, config, ps.config.TLSConfig, ps.config.SkipTLSVerify, ps.config.Dialer)
 	if err != nil {
 		return nil, fmt.Errorf("PBS H2 connect: %w", err)
@@ -809,8 +812,9 @@ func (s *pbsSession) Finish(_ context.Context) (*datastore.Manifest, error) {
 		BackupID:   s.config.BackupID,
 		BackupTime: s.config.BackupTime,
 		Files:      files,
-		CryptMode:  string(s.config.CryptMode),
 	}
+	// PBS records encryption per file. A top-level crypt-mode is not part of
+	// its manifest schema and is discarded on rewrite, invalidating signatures.
 
 	if s.config.CryptConfig != nil && s.config.CryptMode != datastore.CryptModeNone {
 		if err := datastore.SignManifest(manifest, s.config.CryptConfig); err != nil {

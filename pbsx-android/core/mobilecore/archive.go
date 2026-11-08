@@ -10,6 +10,7 @@ import (
 
 	pxar "github.com/pbs-plus/pxar"
 	"github.com/pbs-plus/pxar/backupproxy"
+	"github.com/pbs-plus/pxar/datastore"
 	"github.com/pbs-plus/pxar/transfer"
 	"github.com/pbs-plus/pxar/vfs"
 )
@@ -49,20 +50,56 @@ func (c *Client) openGroupSnapshot(ctx context.Context, store, namespace, backup
 		}
 	}()
 	fail := func(err error) (*openSnapshot, error) { close(stopped); reader.Close(); return nil, err }
+	rawManifest, err := reader.DownloadFile("index.json.blob")
+	if err != nil {
+		return fail(err)
+	}
+	manifest, key, err := c.snapshotManifest(rawManifest, backupType, source, stamp)
+	if err != nil {
+		return fail(err)
+	}
+	sources := func(name string) datastore.ChunkSource {
+		encrypted := false
+		for _, f := range manifest.Files {
+			if f.Filename == name {
+				encrypted = f.CryptMode == string(datastore.CryptModeEncrypt)
+			}
+		}
+		return &verifiedChunkSource{reader.AsChunkSource(), key, encrypted}
+	}
 	meta, metaErr := reader.DownloadFile("root.mpxar.didx")
 	var archive transfer.ArchiveReader
 	if metaErr == nil {
+		if err = verifySnapshotIndex(manifest, "root.mpxar.didx", meta); err != nil {
+			return fail(err)
+		}
 		payload, e := reader.DownloadFile("root.ppxar.didx")
 		if e != nil {
 			return fail(e)
 		}
-		archive, err = transfer.NewSplitReader(meta, payload, reader.AsChunkSource())
+		if err = verifySnapshotIndex(manifest, "root.ppxar.didx", payload); err != nil {
+			return fail(err)
+		}
+		// Split archives produced by PBS use one encryption mode for both streams.
+		for _, f := range manifest.Files {
+			if f.Filename == "root.ppxar.didx" {
+				for _, mf := range manifest.Files {
+					if mf.Filename == "root.mpxar.didx" && mf.CryptMode != f.CryptMode {
+						return fail(errors.New("mixed split-archive encryption is unsupported"))
+					}
+				}
+			}
+		}
+		archive, err = transfer.NewSplitReader(meta, payload, sources("root.mpxar.didx"))
 	} else {
 		legacy, e := reader.DownloadFile("root.pxar.didx")
 		if e != nil {
 			return fail(fmt.Errorf("no readable root archive: %w", metaErr))
 		}
-		archive, err = transfer.NewChunkedReader(legacy, reader.AsChunkSource())
+		if err = verifySnapshotIndex(manifest, "root.pxar.didx", legacy); err != nil {
+			return fail(err)
+		}
+		archive, err = transfer.NewChunkedReader(legacy, sources("root.pxar.didx"))
 	}
 	if err != nil {
 		return fail(err)

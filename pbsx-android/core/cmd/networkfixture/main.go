@@ -137,7 +137,27 @@ func main() {
 			if err := rw.Flush(); err != nil {
 				return
 			}
-			(&http2.Server{}).ServeConn(conn, &http2.ServeConnOpts{Handler: readerHandler})
+			(&http2.Server{}).ServeConn(conn, &http2.ServeConnOpts{Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if filepath.Base(req.URL.Path) == "download" && req.URL.Query().Get("file-name") == "index.json.blob" {
+					raw, e := os.ReadFile(filepath.Join(storeDir, "index.json"))
+					if e != nil {
+						http.Error(w, "fixture manifest", 500)
+						return
+					}
+					manifest, e := datastore.UnmarshalManifest(raw)
+					if e != nil {
+						http.Error(w, "fixture manifest", 500)
+						return
+					}
+					manifest.BackupType = g.Kind
+					manifest.BackupID = g.ID
+					plain, _ := manifest.Marshal()
+					blob, _ := datastore.EncodeBlob(nil, plain)
+					w.Write(blob)
+					return
+				}
+				readerHandler.ServeHTTP(w, req)
+			})})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

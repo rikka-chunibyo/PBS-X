@@ -37,6 +37,7 @@ final class AndroidDocuments implements Documents, AutoCloseable {
   private static BackupJob legacy(
       JSONArray sources, boolean shizuku, boolean apks, boolean data, boolean obb) {
     BackupJob job = new BackupJob();
+    job.allApps = true; // The explicit legacy constructor requests all applications.
     job.sources = sources;
     job.shizuku = shizuku;
     job.apks = apks;
