@@ -1,7 +1,9 @@
 # PBS-X APT repository host
 
-Provisioned on 2026-11-08 for repository hosting. This is preparation for a
-signed APT repository; it is not yet an installable APT source.
+Provisioned on 2026-11-08 for repository hosting. A signed HTTPS **lab** feed
+was subsequently tested against VM115; see the
+[APT validation report](apt-repository-validation.md). It is not a production
+release feed.
 
 ## Container
 
@@ -47,12 +49,19 @@ Installed tools: nginx, reprepro, GnuPG, curl and CA certificates.
 - Private package staging: `/srv/pbs-x-apt/incoming`, mode `0700`.
 - Local administration notes: `/root/README-pbs-x-apt.txt`.
 
-The HTTP landing page states that publication is pending. There is no signing
-key, signed repository metadata, public TLS configuration or client source
-configuration yet. Do not add this host to APT until those are ready.
+The lab feed is `https://10.0.1.37/lab/`, with `trixie` and `trixie-baseline`
+suites and the `main` component. Its temporary signing key and private TLS CA
+expire after 30 days; repository metadata expires after seven days. Public
+certificates were bootstrapped to VM115 over SSH. Production client trust and
+public DNS/TLS have not been configured.
 
-Next work is to choose the full public hostname, route HTTPS, implement signing
-and key recovery/rotation, publish testing/stable releases, and carry the bundle
+Lab signing/admin state is under `/var/lib/pbs-x-apt/lab` (mode `0700`), outside
+the web root. Only the lab public key, package pool and signed indexes are
+published. The deliberately corrupt security-test fixtures were removed, and
+VM115's lab APT source is disabled after the rehearsal.
+
+Next work is to choose the full public hostname, route public HTTPS, implement
+production signing and key recovery/rotation, publish testing/stable releases, and carry the bundle
 installer's state backups and active-task handling into the APT upgrade path.
 The current supported installation/update method remains the
 [release bundle installer](pbsx-installation.md).
