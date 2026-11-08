@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use proxmox_router::{Permission, Router, RpcEnvironment, http_bail};
 use proxmox_schema::{api, param_bail};
+use proxmox_section_config::SectionConfigData;
 
 use pbs_api_types::{
     Authid, DRIVE_NAME_SCHEMA, LtoTapeDrive, LtoTapeDriveUpdater, PRIV_TAPE_AUDIT,
@@ -12,6 +13,61 @@ use pbs_api_types::{
 use pbs_config::CachedUserInfo;
 
 use pbs_tape::linux_list_drives::{check_drive_path, lto_tape_device_list};
+
+fn check_drive_in_use(
+    new_drive: &LtoTapeDrive,
+    section_config: &SectionConfigData,
+) -> Result<(), Error> {
+    let existing: Vec<LtoTapeDrive> = section_config.convert_to_typed_array("lto")?;
+
+    for drive in existing {
+        if drive.name == new_drive.name {
+            continue;
+        }
+        if drive.path == new_drive.path {
+            param_bail!(
+                "path",
+                "Path '{}' already used in drive '{}'",
+                new_drive.path,
+                drive.name
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn check_unique_drive_changer_assignment(
+    new_drive: &LtoTapeDrive,
+    section_config: &SectionConfigData,
+) -> Result<(), Error> {
+    let Some(new_changer) = new_drive.changer.as_ref() else {
+        return Ok(());
+    };
+
+    let new_drive_num = new_drive.changer_drivenum.unwrap_or(0);
+
+    let existing: Vec<LtoTapeDrive> = section_config.convert_to_typed_array("lto")?;
+
+    for drive in existing {
+        if drive.name == new_drive.name {
+            continue;
+        }
+        let Some(changer) = drive.changer.as_ref() else {
+            continue;
+        };
+        let drive_num = drive.changer_drivenum.unwrap_or(0);
+        if changer == new_changer && drive_num == new_drive_num {
+            param_bail!(
+                "changer_drivenum",
+                "Changer drive number '{drive_num}' already used in drive '{}'",
+                drive.name
+            );
+        }
+    }
+
+    Ok(())
+}
 
 #[api(
     protected: true,
@@ -41,18 +97,9 @@ pub fn create_drive(config: LtoTapeDrive) -> Result<(), Error> {
 
     check_drive_path(&lto_drives, &config.path)?;
 
-    let existing: Vec<LtoTapeDrive> = section_config.convert_to_typed_array("lto")?;
+    check_drive_in_use(&config, &section_config)?;
 
-    for drive in existing {
-        if drive.path == config.path {
-            param_bail!(
-                "path",
-                "Path '{}' already used in drive '{}'",
-                config.path,
-                drive.name
-            );
-        }
-    }
+    check_unique_drive_changer_assignment(&config, &section_config)?;
 
     section_config.set_data(&config.name, "lto", &config)?;
 
@@ -207,6 +254,7 @@ pub fn update_drive(
         check_drive_path(&lto_drives, &path)?;
         data.path = path;
     }
+    check_drive_in_use(&data, &config)?;
 
     if let Some(changer) = update.changer {
         let _: ScsiTapeChanger = config.lookup("changer", &changer)?;
@@ -226,6 +274,8 @@ pub fn update_drive(
             data.changer_drivenum = Some(changer_drivenum);
         }
     }
+
+    check_unique_drive_changer_assignment(&data, &config)?;
 
     config.set_data(&name, "lto", &data)?;
 

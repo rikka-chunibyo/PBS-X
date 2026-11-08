@@ -30,3 +30,4 @@ __pycache__/
 build/
 local.mak
 target/
+/artifacts/

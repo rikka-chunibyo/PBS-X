@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -258,7 +259,11 @@ func nativeFormatStat(abs string, info, xinfo fswire.AgentFileInfo) format.Stat 
 	}
 
 	var mtime time.Time
-	if xinfo.LastWriteTime != 0 {
+	if runtime.GOOS != "windows" {
+		// Unix platformStat already supplies nanoseconds. Its legacy metadata
+		// xattrs use seconds and must not erase subsecond change detection.
+		mtime = time.Unix(0, info.ModTime)
+	} else if xinfo.LastWriteTime != 0 {
 		mtime = time.Unix(xinfo.LastWriteTime, 0)
 	} else if stat, err := os.Lstat(abs); err == nil {
 		mtime = stat.ModTime()

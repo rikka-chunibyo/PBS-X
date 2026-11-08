@@ -221,7 +221,7 @@ func statDirent(fd int, ent dirent, blockSize uint64, info *fswire.AgentFileInfo
 
 	isDir := (sx.Mode & unix.S_IFMT) == unix.S_IFDIR
 
-	mode := uint32(sx.Mode & 0777)
+	mode := modeFromUnix(uint32(sx.Mode))
 	if isDir {
 		mode |= 0x80000000
 	}

@@ -66,16 +66,47 @@ fn is_correct_owner(auth_id: &Authid, job: &SyncJobConfig) -> bool {
 fn sync_user_can_access_optional_key(
     key_id: Option<&str>,
     owner: &Authid,
+    modifier: &Authid,
     fail_on_archived: bool,
 ) -> Result<(), Error> {
     if let Some(key_id) = key_id {
-        if crate::server::sync::check_privs_and_load_key_config(key_id, owner, fail_on_archived)
+        if crate::server::sync::check_key_access(key_id, owner)
+            .and_then(|_| crate::server::sync::check_key_access(key_id, modifier))
+            .and_then(|_| crate::server::sync::load_key_config(key_id, fail_on_archived))
             .is_err()
         {
             bail!("no such key or cannot access key '{key_id}'");
         }
     }
     Ok(())
+}
+
+// Check sync job has access the local source datastore/namespace by given ACL path
+fn check_local_source_ns_privs(
+    auth_id: &Authid,
+    user_info: &CachedUserInfo,
+    job: &SyncJobConfig,
+    source_acl_path: &[&str],
+) -> bool {
+    let source_privs = user_info.lookup_privs(auth_id, source_acl_path);
+    // datastore is required to be accessible
+    if source_privs & PRIV_DATASTORE_AUDIT == 0 {
+        return false;
+    }
+
+    // check read from datastore/namespace, grants access independent of job ownership
+    if source_privs & PRIV_DATASTORE_READ != 0 {
+        return true;
+    }
+
+    // check datastore modify permission if user is not the owner of the sync job
+    // this implies permissions to change group ownership
+    if !is_correct_owner(auth_id, job) && source_privs & PRIV_DATASTORE_MODIFY == 0 {
+        return false;
+    }
+
+    // no read on full datastore/namespace, check backup access for owned backups
+    source_privs & PRIV_DATASTORE_BACKUP != 0
 }
 
 /// checks whether user can run the corresponding sync job, depending on sync direction
@@ -119,9 +150,15 @@ pub fn check_sync_job_modify_access(
                 // remote read access check
                 let remote_privs =
                     user_info.lookup_privs(auth_id, &["remote", remote, &job.remote_store]);
-                return remote_privs & PRIV_REMOTE_READ != 0;
+                remote_privs & PRIV_REMOTE_READ != 0
+            } else {
+                // local pull sync job
+                let source_acl_path = match &job.remote_ns {
+                    Some(source_ns) => source_ns.acl_path(&job.remote_store),
+                    None => vec!["datastore", &job.remote_store],
+                };
+                check_local_source_ns_privs(auth_id, user_info, job, &source_acl_path)
             }
-            true
         }
         SyncDirection::Push => {
             // Remote must always be present for sync in push direction, fail otherwise
@@ -143,26 +180,7 @@ pub fn check_sync_job_modify_access(
                 }
             }
 
-            let source_privs = user_info.lookup_privs(auth_id, &job.acl_path());
-            // only allow to modify jobs the user is also allowed to read
-            if source_privs & PRIV_DATASTORE_AUDIT == 0 {
-                return false;
-            }
-
-            // check user is allowed to read from (local) source datastore/namespace, independent
-            // of job ownership
-            if source_privs & PRIV_DATASTORE_READ != 0 {
-                return true;
-            }
-
-            // check datastore modify permission if user is not the owner of the sync job
-            // this implies permissions to change group ownership
-            if !is_correct_owner(auth_id, job) && source_privs & PRIV_DATASTORE_MODIFY == 0 {
-                return false;
-            }
-
-            // no read on full datastore, so check backup access for owned backups
-            source_privs & PRIV_DATASTORE_BACKUP != 0
+            check_local_source_ns_privs(auth_id, user_info, job, &job.acl_path())
         }
     }
 }
@@ -276,10 +294,15 @@ pub fn create_sync_job(
         .unwrap_or_else(|| Authid::root_auth_id());
 
     if sync_direction == SyncDirection::Push {
-        sync_user_can_access_optional_key(config.active_encryption_key.as_deref(), owner, true)?;
+        sync_user_can_access_optional_key(
+            config.active_encryption_key.as_deref(),
+            owner,
+            &auth_id,
+            true,
+        )?;
     } else {
         for key in config.associated_key.as_deref().unwrap_or(&[]) {
-            sync_user_can_access_optional_key(Some(key), owner, false)?;
+            sync_user_can_access_optional_key(Some(key), owner, &auth_id, false)?;
         }
     }
 
@@ -431,15 +454,17 @@ pub enum DeletableProperty {
 datastore, and Remote.Read on source remote. Additionally, remove_vanished requires \
 Datastore.Prune, and any owner other than the user themselves requires Datastore.Modify.\n\
 For sync jobs in push direction, user needs RemoteDatastore.Backup on remote datastore, and \
-Datastore.Audit, Datastore.Read and Datastore.Modify on the source datastore, the latter not \
-required sync job owned by user. Additionally, remove vanished requires RemoteDatastore.Modify.",
+Datastore.Audit, and either Datastore.Backup (user == owner) or either Datastore.Read or \
+Datastore.Modify (user != owner) on the source  datastore. Additionally, remove vanished \
+requires RemoteDatastore.Modify.\n These privilege requirements are checked against the old \
+and new job configuration.",
     },
 )]
 /// Update sync job config.
 #[allow(clippy::too_many_arguments)]
 pub fn update_sync_job(
     id: String,
-    mut update: SyncJobConfigUpdater,
+    update: SyncJobConfigUpdater,
     delete: Option<Vec<DeletableProperty>>,
     digest: Option<String>,
     rpcenv: &mut dyn RpcEnvironment,
@@ -454,6 +479,31 @@ pub fn update_sync_job(
     pbs_config::detect_modified_configuration_file(digest, &expected_digest)?;
 
     let mut data: SyncJobConfig = config.lookup("sync", &id)?;
+    let schedule_changed =
+        do_update_sync_job_config(&mut data, update, delete, &auth_id, &user_info)?;
+    config.set_data(&id, "sync", &data)?;
+
+    sync::save_config(&config)?;
+
+    if schedule_changed {
+        crate::server::jobstate::update_job_last_run_time("syncjob", &id)?;
+    }
+
+    Ok(())
+}
+
+/// Safety: job config lock must be held
+fn do_update_sync_job_config(
+    data: &mut SyncJobConfig,
+    mut update: SyncJobConfigUpdater,
+    delete: Option<Vec<DeletableProperty>>,
+    auth_id: &Authid,
+    user_info: &CachedUserInfo,
+) -> Result<bool, Error> {
+    // user needs privs on previous state to protect against sync job hijacking
+    if !check_sync_job_modify_access(user_info, auth_id, data) {
+        bail!("permission check failed");
+    }
 
     if update.sync_direction.unwrap_or_default() == SyncDirection::Push
         && update.resync_corrupt.is_some()
@@ -575,11 +625,16 @@ pub fn update_sync_job(
         // must assure new owner can access pre-configured keys, other cases are
         // checked on respective key updates
         if update.active_encryption_key.is_none() {
-            sync_user_can_access_optional_key(data.active_encryption_key.as_deref(), owner, true)?;
+            sync_user_can_access_optional_key(
+                data.active_encryption_key.as_deref(),
+                owner,
+                auth_id,
+                true,
+            )?;
         }
         if update.associated_key.is_none() {
             for key in data.associated_key.as_deref().unwrap_or(&[]) {
-                sync_user_can_access_optional_key(Some(key), owner, true)?;
+                sync_user_can_access_optional_key(Some(key), owner, auth_id, true)?;
             }
         }
     }
@@ -630,7 +685,7 @@ pub fn update_sync_job(
             .owner
             .as_ref()
             .unwrap_or_else(|| Authid::root_auth_id());
-        sync_user_can_access_optional_key(Some(&active_encryption_key), owner, true)?;
+        sync_user_can_access_optional_key(Some(&active_encryption_key), owner, auth_id, true)?;
 
         let associated_keys = if update.associated_key.is_some() {
             &mut update.associated_key
@@ -638,7 +693,7 @@ pub fn update_sync_job(
             &mut data.associated_key
         };
         keep_previous_key_as_associated(data.active_encryption_key.as_ref(), associated_keys);
-        data.active_encryption_key = Some(active_encryption_key);
+        data.active_encryption_key = Some(active_encryption_key.to_owned());
     }
 
     if let Some(associated_key) = update.associated_key {
@@ -649,7 +704,7 @@ pub fn update_sync_job(
             .unwrap_or_else(|| Authid::root_auth_id());
         // Don't allow associating keys the local user/owner can't access
         for key in &associated_key {
-            sync_user_can_access_optional_key(Some(key), owner, false)?;
+            sync_user_can_access_optional_key(Some(key), owner, auth_id, false)?;
         }
         data.associated_key = Some(associated_key);
     }
@@ -690,19 +745,11 @@ pub fn update_sync_job(
         }
     }
 
-    if !check_sync_job_modify_access(&user_info, &auth_id, &data) {
+    if !check_sync_job_modify_access(user_info, auth_id, data) {
         bail!("permission check failed");
     }
 
-    config.set_data(&id, "sync", &data)?;
-
-    sync::save_config(&config)?;
-
-    if schedule_changed {
-        crate::server::jobstate::update_job_last_run_time("syncjob", &id)?;
-    }
-
-    Ok(())
+    Ok(schedule_changed)
 }
 
 #[api(
@@ -957,6 +1004,133 @@ acl:1:/remote/remote1/remotestore1:write@pbs:RemoteSyncOperator
         &write_auth_id,
         &job,
     ));
+
+    // setting a local sync source datastore without user read access must fail,
+    // independent of job owner.
+    job.store = "localstore1".to_string();
+    job.remote_store = "localstore0".to_string();
+    job.owner = None;
+    assert!(!check_sync_job_modify_access(
+        &user_info,
+        &write_auth_id,
+        &job,
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn sync_job_modify_test() -> Result<(), Error> {
+    let (user_cfg, _) = pbs_config::user::test_cfg_from_str(
+        r###"
+user: alice@pbs
+
+user: bob@pbs
+
+"###,
+    )
+    .expect("test user.cfg is not parsable");
+    let acl_tree = pbs_config::acl::AclTree::from_raw(
+        r###"
+acl:1:/datastore/alice1:alice@pbs:DatastoreAdmin
+acl:1:/datastore/alice2:alice@pbs:DatastoreAdmin
+acl:1:/datastore/bob1:bob@pbs,alice@pbs:DatastoreAdmin
+acl:1:/datastore/bob2:bob@pbs,alice@pbs:DatastoreAdmin
+acl:1:/remote/remote1:alice@pbs:RemoteAudit
+acl:1:/remote/remote1/remotealice1:alice@pbs:RemoteSyncOperator,RemoteSyncPushOperator
+"###,
+    )
+    .expect("test acl.cfg is not parsable");
+
+    let user_info = CachedUserInfo::test_new(user_cfg, acl_tree);
+
+    let alice_auth_id: Authid = "alice@pbs".parse()?;
+    let bob_auth_id: Authid = "bob@pbs".parse()?;
+
+    let mut job = SyncJobConfig {
+        id: "sync-alice1-to-alice2".to_string(),
+        remote: None,
+        remote_store: "alice1".to_string(),
+        remote_ns: None,
+        store: "alice2".to_string(),
+        ns: None,
+        owner: None,
+        comment: None,
+        resync_corrupt: None,
+        remove_vanished: None,
+        max_depth: None,
+        group_filter: None,
+        schedule: None,
+        limit: pbs_api_types::RateLimitConfig::default(), // no limit
+        transfer_last: None,
+        encrypted_only: None,
+        verified_only: None,
+        run_on_mount: None,
+        unmount_on_done: None,
+        sync_direction: None, // use default
+        worker_threads: None,
+        active_encryption_key: None,
+        associated_key: None,
+    };
+
+    let mut update_alice = SyncJobConfigUpdater {
+        remote_store: Some("bob1".to_string()),
+        store: Some("bob2".to_string()),
+        ..Default::default()
+    };
+    let update_bob = update_alice.clone();
+
+    assert!(
+        do_update_sync_job_config(&mut job, update_bob.clone(), None, &bob_auth_id, &user_info)
+            .is_err()
+    );
+    assert!(
+        do_update_sync_job_config(
+            &mut job,
+            update_alice.clone(),
+            None,
+            &alice_auth_id,
+            &user_info
+        )
+        .is_ok()
+    );
+
+    update_alice.remote_store = Some("remotealice1".to_string());
+    update_alice.remote = Some("remote1".to_string());
+    let delete_bob = Some(vec![DeletableProperty::Remote]);
+    assert!(
+        do_update_sync_job_config(
+            &mut job,
+            update_alice.clone(),
+            None,
+            &alice_auth_id,
+            &user_info
+        )
+        .is_ok()
+    );
+    assert!(
+        do_update_sync_job_config(
+            &mut job,
+            update_bob.clone(),
+            delete_bob,
+            &bob_auth_id,
+            &user_info
+        )
+        .is_err()
+    );
+
+    update_alice.sync_direction = Some(SyncDirection::Push);
+    let delete_bob = Some(vec![
+        DeletableProperty::Remote,
+        DeletableProperty::SyncDirection,
+    ]);
+    assert!(
+        do_update_sync_job_config(&mut job, update_alice, None, &alice_auth_id, &user_info).is_ok()
+    );
+    assert!(
+        do_update_sync_job_config(&mut job, update_bob, delete_bob, &bob_auth_id, &user_info)
+            .is_err()
+    );
 
     Ok(())
 }

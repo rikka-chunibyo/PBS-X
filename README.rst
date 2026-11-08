@@ -47,15 +47,15 @@ example for proxmox crate above).
 
 Build
 =====
-on Debian 12 Bookworm
+on Debian 13 Trixie
 
 Setup:
-  1. # echo 'deb http://download.proxmox.com/debian/devel/ bookworm main' | sudo tee /etc/apt/sources.list.d/proxmox-devel.list
-  2. # sudo wget https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg -O /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
+  1. # echo 'deb [signed-by=/usr/share/keyrings/proxmox-archive-keyring.gpg] http://download.proxmox.com/debian/devel/ trixie main' | sudo tee /etc/apt/sources.list.d/proxmox-devel.list
+  2. # sudo wget https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg -O /usr/share/keyrings/proxmox-archive-keyring.gpg
   3. # sudo apt update
   4. # sudo apt install devscripts debcargo clang
-  5. # git clone git://git.proxmox.com/git/proxmox-backup.git
-  6. # cd proxmox-backup; sudo mk-build-deps -ir
+  5. # git clone https://github.com/rikka-chunibyo/PBS-X.git
+  6. # cd PBS-X; sudo mk-build-deps -ir
 
 Note: 2. may be skipped if you already added the PVE or PBS package repository
 

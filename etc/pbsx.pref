@@ -1,0 +1,9 @@
+# Prefer PBS-X builds and reject upstream replacements of forked executables.
+# Debian, kernel, GUI dependencies and upstream documentation remain updatable.
+Package: proxmox-backup-server proxmox-backup-client proxmox-backup-client-static proxmox-backup-file-restore
+Pin: version /.*[+]pbsx.*/
+Pin-Priority: 990
+
+Package: proxmox-backup-server proxmox-backup-client proxmox-backup-client-static proxmox-backup-file-restore
+Pin: version *
+Pin-Priority: -1

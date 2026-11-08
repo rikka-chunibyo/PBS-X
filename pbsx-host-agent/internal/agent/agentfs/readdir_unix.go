@@ -84,7 +84,7 @@ func (r *DirReader) readdir(n int, blockSize uint64) ([]fswire.AgentFileInfo, er
 
 			isDir := (st.Mode & unix.S_IFMT) == unix.S_IFDIR
 
-			mode := uint32(st.Mode & 0777)
+			mode := modeFromUnix(uint32(st.Mode))
 			if isDir {
 				mode |= 0x80000000
 			}

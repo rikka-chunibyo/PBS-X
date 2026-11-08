@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -101,7 +102,12 @@ func TestLiveEnrollmentNamespace(t *testing.T) {
 	if strings.Contains(string(jobs), host) {
 		t.Fatal("fixture unexpectedly has a server job")
 	}
-	stat, err := exec.Command("stat", "-c", "%U:%G", "/media/backup/ns/"+ns).Output()
+	datastore := api("get", "/config/datastore/backup")
+	var datastorePath string
+	if err := json.Unmarshal(datastore["path"], &datastorePath); err != nil || datastorePath == "" {
+		t.Fatal("read test datastore path", err)
+	}
+	stat, err := exec.Command("stat", "-c", "%U:%G", filepath.Join(datastorePath, "ns", ns)).Output()
 	if err != nil || strings.TrimSpace(string(stat)) != "backup:backup" {
 		t.Fatal("created namespace is not owned by backup")
 	}
