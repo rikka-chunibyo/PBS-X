@@ -1,0 +1,3 @@
+DPkg::Pre-Install-Pkgs { "/usr/lib/pbsx-repository/pre-install"; };
+DPkg::Tools::Options::/usr/lib/pbsx-repository/pre-install::Version "2";
+DPkg::Post-Invoke { "test ! -x /usr/lib/pbsx-repository/post-install || /usr/lib/pbsx-repository/post-install"; };

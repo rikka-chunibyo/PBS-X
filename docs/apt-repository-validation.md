@@ -2,6 +2,10 @@
 
 Development branch: `pbsx-apt-repository-tests`.
 
+This report records the initial lab stage. The subsequent
+[public bootstrap and APT protection](pbsx-apt-installation.md) implement the
+missing safeguards described below and use the public domain through NPM.
+
 ## Scope
 
 Used Ubuntu LXC116 (`pbs-x-apt`, `10.0.1.37`) to serve a signed lab repository

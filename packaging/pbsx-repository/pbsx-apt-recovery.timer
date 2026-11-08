@@ -1,0 +1,9 @@
+[Unit]
+Description=Check for interrupted PBS-X package updates
+
+[Timer]
+OnBootSec=1min
+OnCalendar=*-*-* *:*:00
+
+[Install]
+WantedBy=timers.target

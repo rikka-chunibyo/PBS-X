@@ -1,9 +1,10 @@
 # PBS-X APT repository host
 
-Provisioned on 2026-11-08 for repository hosting. A signed HTTPS **lab** feed
-was subsequently tested against VM115; see the
-[APT validation report](apt-repository-validation.md). It is not a production
-release feed.
+Provisioned on 2026-11-08 for repository hosting. The public signed feed is now
+`https://pbsx.rikka.ca/apt`; see the [public installation guide](pbsx-apt-installation.md).
+The earlier [lab rehearsal](apt-repository-validation.md) remains as validation
+history. The user routes public HTTPS through Nginx Proxy Manager to HTTP
+backend `10.0.1.37:80`; the container has no active TLS listener.
 
 ## Container
 
@@ -49,19 +50,18 @@ Installed tools: nginx, reprepro, GnuPG, curl and CA certificates.
 - Private package staging: `/srv/pbs-x-apt/incoming`, mode `0700`.
 - Local administration notes: `/root/README-pbs-x-apt.txt`.
 
-The lab feed is `https://10.0.1.37/lab/`, with `trixie` and `trixie-baseline`
-suites and the `main` component. Its temporary signing key and private TLS CA
-expire after 30 days; repository metadata expires after seven days. Public
-certificates were bootstrapped to VM115 over SSH. Production client trust and
-public DNS/TLS have not been configured.
+The public feed uses suite `trixie`, component `main`, and release signing key
+`85177E09BEAB50C669C0D68125C3A26BDAB0FCB4`. `pbsx-repository` installs the
+client's signing key, source, package policy and protected APT transaction hooks.
+VM115 uses this public source with normal system TLS trust.
 
-Lab signing/admin state is under `/var/lib/pbs-x-apt/lab` (mode `0700`), outside
-the web root. Only the lab public key, package pool and signed indexes are
-published. The deliberately corrupt security-test fixtures were removed, and
-VM115's lab APT source is disabled after the rehearsal.
+Release signing/admin state is under `/var/lib/pbs-x-apt/release` (mode `0700`),
+outside the web root. Public keys, packages and signed indexes live under the
+static root. `pbsx-apt-refresh.timer` refreshes signed metadata daily. Encrypted
+signing-key recovery was tested and a protected second copy was approved by the
+user. No secret recovery material is published.
 
-Next work is to choose the full public hostname, route public HTTPS, implement
-production signing and key recovery/rotation, publish testing/stable releases, and carry the bundle
-installer's state backups and active-task handling into the APT upgrade path.
-The current supported installation/update method remains the
-[release bundle installer](pbsx-installation.md).
+The old lab state remains under `/var/lib/pbs-x-apt/lab`, with its source disabled
+on VM115 and its TLS site disabled on the repository container. Deliberately
+corrupt fixtures and the version-only upgrade were withdrawn. See the public
+guide for release publishing, key lifetime and remaining validation limits.

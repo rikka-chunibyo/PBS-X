@@ -1,0 +1,7 @@
+[Unit]
+Description=Recover PBS-X services after an interrupted APT transaction
+ConditionPathExists=/run/pbsx-repository-update.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/pbsx-repository/apt-guard.py recover

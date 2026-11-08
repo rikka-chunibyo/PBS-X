@@ -8,6 +8,10 @@ This branch uses upstream PBS 4.2.9 plus the PBS-X changes, packaged as
 See the [fresh-install validation](production-install-validation.md) for tested
 behavior and remaining hardware/recovery limits.
 
+The public [APT installer](pbsx-apt-installation.md) configures the signed feed
+at `https://pbsx.rikka.ca/apt` and protected APT updates. The bundle procedure
+below remains available for manual installation and rollback.
+
 ## Install on a dedicated server or VM
 
 1. Install the official PBS ISO on the intended OS disk(s). Selected disks are
@@ -88,6 +92,12 @@ update an already installed systemd unit. Preserve `/etc/pbsx-agent` and
 `/var/lib/pbsx-agent`, including the local credential-sealing keys.
 
 ## Updates and rollback
+
+When installed through the public bootstrap, use `apt update` followed by
+`apt upgrade`. The `pbsx-repository` package supplies repository trust, policy
+and the APT protection hooks described in the [APT guide](pbsx-apt-installation.md).
+Keep this package installed while using the feed. Direct `dpkg -i` bypasses the
+APT hooks; the bundle installer supplies its own checks and backup instead.
 
 The server package installs `/etc/apt/preferences.d/pbsx.pref`. It permits PBS-X
 versions of the fork's executable packages and rejects upstream replacements of
