@@ -12,6 +12,17 @@ preserves their Backup IDs in queued restores. See
 checks, live PBS tests and test-VM deployment. Android production code and the
 0.4.0 APK below are unchanged by that fix.
 
+## 0.5.3: audit follow-up
+
+Fixes HTTPS port consistency, equivalent-origin encryption-policy bypasses,
+invalid imported preference types/legacy folder defaults, and the server ACL
+write race during host deletion. Android enrollment guidance now matches the
+automatic namespace grants. All 43 Android tests, 33 Go core race tests and six
+live PBS suites passed. Version `0.5.3-preview`, code 12; settings formats remain
+compatible with existing 0.5.x installs. APK SHA-256:
+`7bb14d3fb2c10932979aafd7ed10f09eab57f4bdc0100274c59432f2075a4660`.
+See [audit follow-up validation](../docs/audit-followup-validation.md).
+
 ## 0.5.2: automatic enrollment namespaces and independent storage access
 
 The enrollment popup now has editable datastore and namespace fields. Namespace

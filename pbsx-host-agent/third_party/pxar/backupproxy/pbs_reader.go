@@ -159,7 +159,7 @@ func dialPBSReaderH2(ctx context.Context, cfg PBSConfig, backupType, backupID st
 
 	host := u.Host
 	if _, _, splitErr := net.SplitHostPort(host); splitErr != nil {
-		host = host + ":8007"
+		host = net.JoinHostPort(u.Hostname(), "443")
 	}
 
 	// Build reader upgrade path

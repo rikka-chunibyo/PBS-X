@@ -111,6 +111,7 @@ final class KeyProfiles {
     JSONObject data = Vault.data(c);
     find(data, "connections", id);
     data.put("default_connection", id);
+    validateHistories(data, JobStore.all(c));
     Vault.store(c, data);
   }
 
@@ -128,6 +129,7 @@ final class KeyProfiles {
     Mobilecore.newClient(config.toString());
     JSONObject data = Vault.data(c);
     find(data, "connections", id).put("config", config);
+    validateHistories(data, JobStore.all(c));
     Vault.store(c, data);
   }
 
@@ -166,20 +168,34 @@ final class KeyProfiles {
 
   static void validateJob(Context c, BackupJob job) throws Exception {
     JSONObject vault = Vault.data(c);
-    validateJob(vault, job);
-    // One history uses one key policy. Connection credentials may differ.
-    String server = connection(c, job.connectionID).getJSONObject("config").getString("server");
-    for (BackupJob other : JobStore.all(c))
-      if (!other.id.equals(job.id)
-          && other.store.equals(job.store)
-          && other.namespace.equals(job.namespace)
-          && other.backupID.equals(job.backupID)) {
-        String theirs =
-            connection(c, other.connectionID).getJSONObject("config").getString("server");
-        if (server.equals(theirs) && !other.encryptionKeyID.equals(job.encryptionKeyID))
-          throw new Exception(
-              "Jobs sharing this backup history must use the same encryption key setting");
+    java.util.List<BackupJob> jobs = JobStore.all(c);
+    jobs.removeIf(other -> other.id.equals(job.id));
+    jobs.add(job);
+    validateHistories(vault, jobs);
+  }
+
+  // Use the same origin normalization as the network client, including default
+  // HTTPS ports, trailing slash and host casing. Import and editing share this check.
+  static void validateHistories(JSONObject vault, java.util.List<BackupJob> jobs) throws Exception {
+    java.util.Map<String, String> policies = new java.util.HashMap<>();
+    java.util.Map<String, String> servers = new java.util.HashMap<>();
+    for (BackupJob job : jobs) {
+      validateJob(vault, job);
+      String id =
+          job.connectionID.isEmpty() ? vault.getString("default_connection") : job.connectionID;
+      JSONObject config = find(vault, "connections", id).getJSONObject("config");
+      String server = servers.get(id);
+      if (server == null) {
+        server = Mobilecore.canonicalServerURL(config.getString("server"));
+        servers.put(id, server);
       }
+      String backup = job.backupID.isEmpty() ? config.getString("host_id") : job.backupID;
+      String history = server + "\n" + job.store + "\n" + job.namespace + "\n" + backup;
+      String previous = policies.put(history, job.encryptionKeyID);
+      if (previous != null && !previous.equals(job.encryptionKeyID))
+        throw new Exception(
+            "Jobs sharing this backup history must use the same encryption key setting");
+    }
   }
 
   static void validateJob(JSONObject vault, BackupJob job) throws Exception {

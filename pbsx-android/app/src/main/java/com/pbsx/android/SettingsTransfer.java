@@ -88,6 +88,7 @@ final class SettingsTransfer {
     if (list.length() > 100) throw new Exception("Too many jobs");
     Set<String> identities = new HashSet<>();
     Set<Integer> schedules = new HashSet<>();
+    java.util.List<BackupJob> histories = new java.util.ArrayList<>();
     for (int i = 0; i < list.length(); i++) {
       BackupJob job = BackupJob.from(list.getJSONObject(i));
       KeyProfiles.validateJob(vault, job);
@@ -96,34 +97,9 @@ final class SettingsTransfer {
           || job.schedulerId == Integer.MAX_VALUE
           || !schedules.add(job.schedulerId))
         throw new Exception("Invalid or duplicate job/schedule identity");
-      for (int j = 0; j < i; j++) {
-        BackupJob other = BackupJob.from(list.getJSONObject(j));
-        String a =
-            KeyProfiles.find(
-                    vault,
-                    "connections",
-                    job.connectionID.isEmpty()
-                        ? vault.getString("default_connection")
-                        : job.connectionID)
-                .getJSONObject("config")
-                .getString("server");
-        String b =
-            KeyProfiles.find(
-                    vault,
-                    "connections",
-                    other.connectionID.isEmpty()
-                        ? vault.getString("default_connection")
-                        : other.connectionID)
-                .getJSONObject("config")
-                .getString("server");
-        if (a.equals(b)
-            && job.store.equals(other.store)
-            && job.namespace.equals(other.namespace)
-            && job.backupID.equals(other.backupID)
-            && !job.encryptionKeyID.equals(other.encryptionKeyID))
-          throw new Exception("Jobs sharing a history have conflicting encryption settings");
-      }
+      histories.add(job);
     }
+    KeyProfiles.validateHistories(vault, histories);
     if (jobs.has("next_scheduler_id")) {
       JSONObject next = jobs.getJSONObject("next_scheduler_id");
       if (!next.getString("type").equals("int"))
@@ -148,7 +124,24 @@ final class SettingsTransfer {
         })
       if (settings.has(flag) && !settings.getJSONObject(flag).getString("type").equals("boolean"))
         throw new Exception("Invalid setting type: " + flag);
+    for (String key : new String[] {"store", "namespace", "sources", "status"})
+      requireType(settings, key, "string");
+    requireType(settings, "hours", "int");
+    requireType(settings, "status_time", "long");
+    // These defaults are consumed if an imported jobs store needs legacy migration.
+    // Validate their values before installation can trigger that migration.
+    BackupJob legacy = new BackupJob();
+    legacy.store = stringPreference(settings, "store", "backup");
+    legacy.namespace = stringPreference(settings, "namespace", "");
+    legacy.sources = new JSONArray(stringPreference(settings, "sources", "[]"));
+    if (settings.has("hours")) legacy.hours = settings.getJSONObject("hours").getInt("value");
+    legacy.validate(false);
     return root;
+  }
+
+  private static void requireType(JSONObject section, String key, String type) throws Exception {
+    if (section.has(key) && !section.getJSONObject(key).getString("type").equals(type))
+      throw new Exception("Invalid preference type: " + key);
   }
 
   private static String stringPreference(JSONObject section, String key, String fallback)

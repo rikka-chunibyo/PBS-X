@@ -133,7 +133,7 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 
 	host := u.Host
 	if _, _, splitErr := net.SplitHostPort(host); splitErr != nil {
-		host = host + ":8007"
+		host = net.JoinHostPort(u.Hostname(), "443")
 	}
 
 	params := url.Values{}
