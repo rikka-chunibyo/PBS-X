@@ -2,6 +2,14 @@
 Build & Release Notes
 *********************
 
+PBS-X installation
+==================
+
+For packaged installation, updates, rollback and recovery, see
+`the PBS-X installation guide <docs/pbsx-installation.md>`_. The
+`validation report <docs/production-install-validation.md>`_ records the clean
+Debian installation and backup/restore rehearsal.
+
 ``rustup`` Toolchain
 ====================
 

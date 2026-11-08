@@ -91,6 +91,7 @@ lines = [line for line in p.read_text().splitlines() if not line.lower().startsw
 p.write_text('\n'.join(lines).rstrip() + '\nEnabled: false\n')
 PY
 fi
+systemctl start proxmox-backup.service proxmox-backup-proxy.service
 for unit in proxmox-backup.service proxmox-backup-proxy.service; do systemctl is-active --quiet "$unit"; done
 curl --insecure --fail --silent --show-error --retry 10 --retry-connrefused --retry-delay 1 --max-time 5 https://127.0.0.1:8007/ >/dev/null
 echo "PBS-X $version installed. Protected pre-install state: $backup"

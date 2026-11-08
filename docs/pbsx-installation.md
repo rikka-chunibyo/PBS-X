@@ -5,6 +5,8 @@ The official PBS ISO supplies the operating system, kernel, ZFS and ordinary
 PBS dependencies; it does not contain this fork. A custom ISO is not required.
 This branch uses upstream PBS 4.2.9 plus the PBS-X changes, packaged as
 `4.2.9-1+pbsx1`.
+See the [fresh-install validation](production-install-validation.md) for tested
+behavior and remaining hardware/recovery limits.
 
 ## Install on a dedicated server or VM
 
@@ -123,8 +125,9 @@ The server cannot reconstruct a missing client encryption key.
 
 ## Build a bundle
 
-Use a Debian 13 amd64 builder with the official Proxmox development repository
-and its signing key configured, then install the source's build dependencies:
+Check out `pbsx-production-install` for this validation build. Use a Debian 13
+amd64 builder with the official Proxmox development repository and its signing
+key configured, then install the source's build dependencies:
 
 ```sh
 sudo apt-get install git git-lfs devscripts debcargo clang fakeroot

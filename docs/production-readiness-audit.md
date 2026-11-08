@@ -5,6 +5,8 @@ The findings below describe the pre-fix state. Follow-up work is on
 `pbsx-production-install`; see [installation and recovery](pbsx-installation.md)
 for the package-based workflow. Validation of the R710's actual hardware and
 disk layout remains separate from the disposable VM rehearsal.
+The fixes and completed test results are recorded in
+[production-install-validation.md](production-install-validation.md).
 
 ## Findings
 
