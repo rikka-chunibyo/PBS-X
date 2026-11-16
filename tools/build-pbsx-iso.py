@@ -36,6 +36,8 @@ def build(args):
     selected = {fields['Package']: (path, fields) for path in requested for fields in [iso.package(path)]}
     if not all(name in selected for name in (*iso.CORE, 'pbsx-repository')):
         raise ValueError('server, client, file-restore and repository packages are all required')
+    if subprocess.run(['dpkg', '--compare-versions', selected['pbsx-repository'][1]['Version'], 'ge', '1.0.3']).returncode:
+        raise ValueError('offline installation requires chroot-safe pbsx-repository >= 1.0.3')
     versions = {selected[name][1]['Version'] for name in iso.CORE}
     if len(versions) != 1 or '+pbsx' not in next(iter(versions)):
         raise ValueError('PBS-X executables must have one matching fork version')

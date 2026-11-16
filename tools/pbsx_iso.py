@@ -262,7 +262,7 @@ Section: admin
 Priority: optional
 Architecture: all
 Maintainer: PBS-X developers <apt@pbsx.rikka.ca>
-Depends: pbsx-repository (>= 1.0.2), proxmox-backup-server, python3
+Depends: pbsx-repository (>= 1.0.3), proxmox-backup-server, python3
 Description: PBS-X offline installation defaults and image provenance
  Configures fresh installer targets for signed PBS-X and community system
  updates. Does not reset administrator repository choices on later upgrades.
