@@ -1,0 +1,10 @@
+{
+  "url": "https://enterprise.proxmox.com/iso/proxmox-backup-server_4.2-1.iso",
+  "sha256": "2fb299deac3929253712c9c3dfc9237edbe70af83c8848467616b771a1d5453e",
+  "product": "pbs",
+  "architecture": "amd64",
+  "repository": "https://pbsx.rikka.ca/apt",
+  "repository_fingerprint": "85177E09BEAB50C669C0D68125C3A26BDAB0FCB4",
+  "proxmox_key_url": "https://enterprise.proxmox.com/debian/proxmox-release-trixie.gpg",
+  "proxmox_key_fingerprint": "24B30F06ECC1836A4E5EFECBA7BCD1420BFE778E"
+}

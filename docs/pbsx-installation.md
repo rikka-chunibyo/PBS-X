@@ -1,8 +1,13 @@
 # Installing and updating PBS-X
 
-PBS-X is installed as Debian packages over a PBS 4.x / Debian 13 amd64 base.
-The official PBS ISO supplies the operating system, kernel, ZFS and ordinary
-PBS dependencies; it does not contain this fork. A custom ISO is not required.
+PBS-X can be installed directly using the [offline PBS-X ISO](pbsx-offline-iso.md),
+which includes the operating system, kernel, ZFS, PBS-X packages and signed APT
+repository configuration. Installation needs no Internet connection. Once
+connected, use `apt update` and `apt upgrade` for updates.
+
+The alternative procedure below installs Debian packages over a PBS 4.x /
+Debian 13 amd64 base. The official upstream PBS ISO supplies the base but does
+not contain this fork.
 This branch uses upstream PBS 4.2.9 plus the PBS-X changes, packaged as
 `4.2.9-1+pbsx1`.
 See the [fresh-install validation](production-install-validation.md) for tested
