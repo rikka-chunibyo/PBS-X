@@ -5,7 +5,13 @@ set -euo pipefail
 state=/var/lib/pbs-x-apt/release
 public=/srv/pbs-x-apt/public/apt
 export GNUPGHOME=$state/gnupg
-repo() { reprepro --keepunreferencedfiles --basedir "$state/repository" --outdir "$public" "$@"; }
+repo() {
+    # A root shell or backup wrapper may use umask 077. Only archive payloads
+    # and indexes belong here; signer/admin state stays under its 0700 parent.
+    (umask 022; reprepro --keepunreferencedfiles --basedir "$state/repository" --outdir "$public" "$@")
+    find "$public" -type d -exec chmod 0755 {} +
+    find "$public" -type f -exec chmod 0644 {} +
+}
 case ${1:-} in
     init)
         [[ ! -e $state ]] || { echo 'Release state already exists; refusing to replace signing keys'; exit 1; }
