@@ -6,6 +6,7 @@ on:
       - 'tools/pbsx_iso.py'
       - 'tools/build-pbsx-iso.py'
       - 'tests/pbsx-iso.test.py'
+      - 'tools/build-pbsx-repository-package.sh'
       - '.github/workflows/iso.yml'
   push:
     paths:
@@ -13,6 +14,7 @@ on:
       - 'tools/pbsx_iso.py'
       - 'tools/build-pbsx-iso.py'
       - 'tests/pbsx-iso.test.py'
+      - 'tools/build-pbsx-repository-package.sh'
       - '.github/workflows/iso.yml'
   workflow_dispatch:
     inputs:
@@ -30,7 +32,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Offline package and repository regression tests
-        run: python3 tests/pbsx-iso.test.py
+        run: |
+          python3 tests/pbsx-iso.test.py
+          python3 packaging/pbsx-repository/test_apt_guard.py
   build:
     if: github.event_name == 'workflow_dispatch'
     needs: checks

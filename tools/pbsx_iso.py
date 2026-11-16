@@ -94,6 +94,7 @@ def download(url, path, limit=2 << 30):
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(path.name+'.part')
     subprocess.run(['curl', '--fail', '--silent', '--show-error', '--location', '--retry', '2',
+                    '--user-agent', 'Debian APT-HTTP/1.3 (PBS-X ISO builder)',
                     '--proto', '=https', '--proto-redir', '=https', '--connect-timeout', '20',
                     '--max-time', '1800', '--max-filesize', str(limit), '--output', str(partial), url], check=True)
     partial.replace(path)

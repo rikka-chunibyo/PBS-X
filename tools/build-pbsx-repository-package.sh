@@ -46,7 +46,7 @@ Section: admin
 Priority: optional
 Architecture: all
 Maintainer: PBS-X developers <apt@pbsx.rikka.ca>
-Depends: python3, ca-certificates, systemd, tar
+Depends: python3, ca-certificates, systemd, init-system-helpers, tar
 Description: PBS-X repository trust and protected APT updates
  Installs the PBS-X source, signing key and package policy, with server state
  backups, active-work checks and service recovery around APT transactions.
@@ -71,8 +71,13 @@ cat > "$root/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
 if [ "$1" = configure ]; then
-    systemctl daemon-reload
-    systemctl enable --now pbsx-apt-recovery.timer
+    # The ISO configures packages in a chroot without a running systemd.
+    # Enable for the installed system, starting it only on a booted machine.
+    deb-systemd-helper enable pbsx-apt-recovery.timer
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        deb-systemd-invoke start pbsx-apt-recovery.timer
+    fi
 fi
 EOF
 cat > "$root/DEBIAN/prerm" <<'EOF'
