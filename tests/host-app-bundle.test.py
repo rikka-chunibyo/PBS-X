@@ -10,6 +10,9 @@ import unittest
 spec = importlib.util.spec_from_file_location('pbsx_installer', Path(__file__).resolve().parents[1]/'packaging/host-app/install.py')
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
+builder_spec = importlib.util.spec_from_file_location('pbsx_builder', Path(__file__).resolve().parents[1]/'tools/build-host-app.py')
+builder = importlib.util.module_from_spec(builder_spec)
+builder_spec.loader.exec_module(builder)
 
 
 class BundleChecks(unittest.TestCase):
@@ -27,6 +30,18 @@ class BundleChecks(unittest.TestCase):
 
     def write_manifest(self):
         (self.root/'manifest.json').write_text(json.dumps(self.manifest))
+
+    def test_portable_source_export_records_commit_without_claiming_clean_index(self):
+        (self.root/'.repoid').write_text('a'*40+'\n')
+        info = builder.source_info(self.root)
+        self.assertEqual(info['source_commit'], 'a'*40)
+        self.assertIsNone(info['dirty'])
+
+    def test_portable_source_export_rejects_invalid_commit_marker(self):
+        for value in ('unknown', '../source', 'a'*100):
+            (self.root/'.repoid').write_text(value)
+            with self.assertRaises(ValueError):
+                builder.source_info(self.root)
 
     def test_valid_headless_bundle(self):
         self.assertEqual(installer.validate(self.root)['version'], '0.7.0-preview')

@@ -31,15 +31,12 @@ python3 tools/build-host-app.py --os windows --version 0.7.0-preview --output ar
 ```
 
 The full PBS repository contains Linux-only filenames (including a systemd
-unit name with a literal backslash), so Windows needs an agent-only sparse
-checkout, as configured in the workflow. For a new Windows checkout:
-
-```powershell
-git clone --no-checkout --filter=blob:none --branch pbsx-agent-desktop-readiness git@github.com:rikka-chunibyo/PBS-X.git
-cd PBS-X
-git sparse-checkout set --no-cone '/.gitignore' '/pbsx-host-agent/' '/packaging/host-app/' '/tools/build-host-app.py'
-git checkout pbsx-agent-desktop-readiness
-```
+unit name with a literal backslash). Windows Git rejects those paths even with
+sparse checkout. The workflow exports only portable host-app sources on Linux,
+then builds and tests that archive natively on Windows. Download its
+`host-app-sources` artifact and extract the inner ZIP to build on Windows; it
+includes a `.repoid` source-commit marker. Archive builds record `dirty: null`,
+since there is no Git index against which to detect local edits.
 
 The Windows build command runs natively with a C compiler on PATH. To build
 it on Linux, add `--cc x86_64-w64-mingw32-gcc`. Native desktop builds need the

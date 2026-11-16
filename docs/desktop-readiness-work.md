@@ -99,7 +99,7 @@ mock/temporary-filesystem checks must report their scope explicitly.
   console session, so Windows visual/UAC acceptance remains pending.
 - Rust/Python flock interoperability and transaction-marker test passed; all
   14 `pbs-config` unit tests passed; the server library passed `cargo check`.
-- Eleven APT hook tests, eight bundle safety tests and both Host UI scripts
+- Eleven APT hook tests, ten bundle/source-archive safety tests and both Host UI scripts
   passed. `pbsx-repository_1.0.3_all.deb` built locally; not published.
 
 ## Remaining release work

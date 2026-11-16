@@ -11,6 +11,26 @@ concurrency:
   group: host-app-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Export portable host app sources
+        run: |
+          git archive --format=zip --output="$RUNNER_TEMP/host-app-source.zip" HEAD .gitignore pbsx-host-agent packaging/host-app tools/build-host-app.py
+          python3 - <<'PYCODE'
+          import os, zipfile
+          with zipfile.ZipFile(os.path.join(os.environ['RUNNER_TEMP'], 'host-app-source.zip'), 'a') as archive:
+              archive.writestr('.repoid', os.environ['GITHUB_SHA']+'\n')
+          PYCODE
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: host-app-sources
+          path: ${{ runner.temp }}/host-app-source.zip
+          retention-days: 14
   linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -44,6 +64,7 @@ jobs:
       - name: Native window smoke test
         run: xvfb-run -a -s '-screen 0 1200x800x24' env LIBGL_ALWAYS_SOFTWARE=1 python3 tools/smoke-host-desktop.py artifacts/host-app-linux/pbsx-desktop artifacts/desktop-linux.png
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
         with:
           name: host-app-linux-preview
           path: |
@@ -51,20 +72,19 @@ jobs:
             artifacts/desktop-linux.png
           retention-days: 14
   windows:
+    needs: sources
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      # Export on Linux: Windows Git validates incompatible PBS paths even
+      # when those files are excluded by sparse checkout.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          persist-credentials: false
-          # PBS systemd unit names contain literal backslashes, which Windows
-          # cannot check out. This job only needs the host application sources.
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            /.gitignore
-            /pbsx-host-agent/
-            /packaging/host-app/
-            /tools/build-host-app.py
+          name: host-app-sources
+          path: ${{ runner.temp }}/pbsx-source
+      - name: Extract portable host app sources
+        shell: pwsh
+        run: Expand-Archive -LiteralPath "$env:RUNNER_TEMP/pbsx-source/host-app-source.zip" -DestinationPath .
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: pbsx-host-agent/go.mod

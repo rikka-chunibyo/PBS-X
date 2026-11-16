@@ -13,6 +13,22 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def source_info(root):
+    if (root/'.git').exists():
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+        dirty = bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=root, text=True).strip())
+    else:
+        # Portable source exports avoid Windows-incompatible PBS filenames.
+        marker = root/'.repoid'
+        if marker.stat().st_size > 64:
+            raise ValueError('invalid source commit marker')
+        commit = marker.read_text().strip()
+        dirty = None  # A source archive has no index against which to check edits.
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('invalid source commit marker')
+    return {'source_commit': commit, 'dirty': dirty}
+
+
 def build(args):
     if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?', args.version):
         raise ValueError('use a plain semantic version, for example 0.7.0-preview')
@@ -50,8 +66,7 @@ def build(args):
         names.append(installer)
         manifest = {
             'schema': 1, 'version': args.version, 'os': args.os, 'arch': 'amd64',
-            'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
-            'dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()),
+            **source_info(ROOT),
             'go': subprocess.check_output([go, 'version'], text=True).strip(),
             'files': {name: {'sha256': hashlib.sha256((staging/name).read_bytes()).hexdigest(),
                              'size': (staging/name).stat().st_size} for name in names},
