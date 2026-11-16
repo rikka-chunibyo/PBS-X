@@ -123,8 +123,9 @@ into user preferences. Closing the window does not stop scheduled backups.
 `.github/workflows/host-app.yml` runs Linux race tests, native Windows unit tests,
 GUI builds, bundle checks, Host UI tests and a Linux virtual-display smoke test.
 It uploads preview artifacts only; it has read-only repository permissions and
-no signing/publishing credentials. GitHub-hosted execution is still to be observed
-once the branch is pushed. The local smoke command is:
+no signing/publishing credentials. Windows uses a portable source archive, and
+the Linux smoke test isolates its X11 display from any inherited Wayland session.
+The local smoke command is:
 
 ```sh
 xvfb-run -a -s '-screen 0 1200x800x24' env LIBGL_ALWAYS_SOFTWARE=1 python3 tools/smoke-host-desktop.py artifacts/host-app-linux/pbsx-desktop artifacts/desktop-linux.png

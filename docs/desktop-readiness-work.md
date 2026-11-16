@@ -102,6 +102,14 @@ mock/temporary-filesystem checks must report their scope explicitly.
 - Eleven APT hook tests, ten bundle/source-archive safety tests and both Host UI scripts
   passed. `pbsx-repository_1.0.3_all.deb` built locally; not published.
 
+Hosted CI also passed for source commit `986617a06`: portable source export,
+Linux race/UI/installer/render checks, and native Windows unit tests, desktop
+build and bundle validation. [Successful run](https://github.com/rikka-chunibyo/PBS-X/actions/runs/43943105476).
+The portable source export produced byte-identical static Linux agent/CLI
+executables compared with the Git-checkout build. All three lab VMs were returned
+to their original stopped state; VM103's 32 GiB/8 GiB balloon settings were restored.
+The dev VM and hypervisor were left running.
+
 ## Remaining release work
 
 1. Interactive Windows/Linux UAC/PolicyKit enrollment checks and real-browser
@@ -113,6 +121,5 @@ mock/temporary-filesystem checks must report their scope explicitly.
    desktop. This first companion uses the server UI for those operations.
 4. Wider backup failure/large-data coverage and gating of upstream PBS workers
    during maintenance. The new gate specifically covers native host dispatch.
-5. Run the new workflow on the remote CI service and release the paired server
-   and protection-package update after acceptance. This branch is a preview,
+5. Release the paired server and protection-package update after acceptance. This branch is a preview,
    not a production release or an APT publication.
