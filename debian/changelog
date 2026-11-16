@@ -1,3 +1,11 @@
+rust-proxmox-backup (4.2.9-1+pbsx2) UNRELEASED; urgency=medium
+
+  * Coordinate native host dispatch with PBS-X APT maintenance protection.
+  * Add authorized snapshot file browsing and selected-path native restore to
+    the Host Backups UI, preserving namespace and backup group identity.
+
+ -- PBS-X Developers <pbsx@localhost>  Mon, 16 Nov 2026 14:24:33 -0500
+
 rust-proxmox-backup (4.2.9-1+pbsx1) trixie; urgency=medium
 
   * Integrate upstream PBS 4.2.9 stability and security fixes.

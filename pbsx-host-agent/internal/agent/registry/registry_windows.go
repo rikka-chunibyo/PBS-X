@@ -14,6 +14,7 @@ import (
 
 	"github.com/billgraziano/dpapi"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -42,6 +43,17 @@ func ensureInitialized() error {
 		legacySecretFilePath = filepath.Join(serviceDataDir, "secrets.json")
 		legacyKeyFilePath = filepath.Join(serviceDataDir, "master.key")
 
+		// Machine-local DPAPI can be decrypted by other local accounts if they
+		// can read the blob. Restrict current and retained legacy vault keys
+		// before migrating or writing any values. Public desktop status uses a
+		// separate key and never imports this privileged registry package.
+		for _, path := range []string{CONFIG, AUTH, legacyConfig, legacyAuth} {
+			if err := protectCredentialKey(path, path == CONFIG || path == AUTH); err != nil {
+				initErr = fmt.Errorf("protect credential registry: %w", err)
+				return
+			}
+		}
+
 		if err := migrateLegacyRegistryPath(legacyConfig, CONFIG); err != nil {
 			initErr = err
 			return
@@ -53,6 +65,37 @@ func ensureInitialized() error {
 		_ = migrateFromFileSecretsToRegistry()
 	})
 	return initErr
+}
+
+func protectCredentialKey(path string, create bool) error {
+	access := uint32(registry.READ | registry.SET_VALUE | registry.WOW64_64KEY | windows.WRITE_DAC)
+	var key registry.Key
+	var err error
+	if create {
+		key, _, err = registry.CreateKey(registry.LOCAL_MACHINE, path, access)
+	} else {
+		key, err = registry.OpenKey(registry.LOCAL_MACHINE, path, access)
+		if errors.Is(err, registry.ErrNotExist) {
+			return nil
+		}
+	}
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;CI;KA;;;SY)(A;CI;KA;;;BA)")
+	if err != nil {
+		return err
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil {
+		return err
+	}
+	if dacl == nil {
+		return fmt.Errorf("credential security descriptor has no restricted DACL")
+	}
+	return windows.SetSecurityInfo(windows.Handle(key), windows.SE_REGISTRY_KEY,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
 
 func migrateLegacyRegistryPath(oldPath, newPath string) error {
@@ -139,6 +182,19 @@ func migrateFromFileSecretsToRegistry() error {
 }
 
 func writeSecretDPAPIToRegistry(path, key, plaintext string) error {
+	// Legacy file entries must land in the protected current vault, never in
+	// arbitrary HKLM locations supplied by the old file's encoded path.
+	switch {
+	case strings.EqualFold(path, AUTH), strings.EqualFold(path, legacyAuth):
+		path = AUTH
+	case strings.EqualFold(path, CONFIG), strings.EqualFold(path, legacyConfig):
+		path = CONFIG
+	default:
+		return fmt.Errorf("unsupported credential registry path")
+	}
+	if err := protectCredentialKey(path, true); err != nil {
+		return err
+	}
 	enc, err := dpapi.EncryptMachineLocal(plaintext)
 	if err != nil {
 		return fmt.Errorf("dpapi encrypt failed: %w", err)

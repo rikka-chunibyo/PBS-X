@@ -13,12 +13,12 @@ import (
 
 	"github.com/kardianos/service"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent"
-	"github.com/pbs-x/pbsx-host-agent/internal/agent/binswap"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/cli"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/lifecycle"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativebackup"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativerestore"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/updater"
+	"github.com/pbs-x/pbsx-host-agent/internal/agentstatus"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 	"golang.org/x/sys/windows"
@@ -37,7 +37,7 @@ type pbsService struct {
 func (p *pbsService) Start(s service.Service) error {
 	if conf.Env.EnableAutoUpdate {
 		_, _ = updater.New(updater.Config{
-			MinConstraint: ">= 0.52.0", PollInterval: 2 * time.Minute, FetchOnStart: true,
+			MinConstraint: updater.DefaultMinConstraint, PollInterval: 2 * time.Minute, FetchOnStart: true,
 			UpgradeConfirm: func(v string) bool { return true },
 			Exit:           func(err error) {},
 			Service:        s,
@@ -46,7 +46,7 @@ func (p *pbsService) Start(s service.Service) error {
 		})
 	} else {
 		_, _ = updater.New(updater.Config{
-			MinConstraint:  ">= 0.52.0",
+			MinConstraint:  updater.DefaultMinConstraint,
 			PollInterval:   0,
 			FetchOnStart:   false,
 			UpgradeConfirm: func(v string) bool { return true },
@@ -55,11 +55,23 @@ func (p *pbsService) Start(s service.Service) error {
 			Context:        p.ctx,
 		})
 	}
-	go p.run()
+	p.wg.Add(1)
+	go func() { defer p.wg.Done(); p.run() }()
 	return nil
 }
 
 func (p *pbsService) run() {
+	statusCtx, stopStatus := context.WithCancel(p.ctx)
+	statusErrors := agentstatus.Publish(statusCtx, Version)
+	statusDone := make(chan struct{})
+	go func() {
+		defer close(statusDone)
+		for err := range statusErrors {
+			log.Warn("desktop status unavailable", "error", err.Error())
+		}
+	}()
+	defer func() { stopStatus(); <-statusDone }()
+	agentstatus.Phase("waiting-for-enrollment")
 	_ = log.L.SetServiceLogger()
 	_ = windows.SetPriorityClass(windows.CurrentProcess(), 0x00000040)
 	if err := persistEnrollmentValue("ServerURL", conf.Env.InitServerURL); err != nil {
@@ -91,6 +103,7 @@ func (p *pbsService) run() {
 		return
 	}
 	log.Info("PBS-X enrollment complete; native backup service active")
+	agentstatus.Phase("ready")
 
 	if store, err := agent.NewBackupStore(); err == nil {
 		_ = store.ClearAll()
@@ -109,8 +122,14 @@ func (p *pbsService) run() {
 
 	innerWg.Go(func() {
 		for {
-			if err := lifecycle.UpdateDrives(); err != nil && innerCtx.Err() == nil {
-				log.Warn("PBS-X heartbeat failed", "error", err.Error())
+			if err := lifecycle.UpdateDrives(); err != nil {
+				agentstatus.Heartbeat(false)
+				if innerCtx.Err() == nil {
+					log.Warn("PBS-X heartbeat failed", "error", err.Error())
+				}
+			} else {
+				agentstatus.Heartbeat(true)
+				updater.MarkHealthy()
 			}
 			timer := time.NewTimer(agent.ComputeDelay())
 			select {
@@ -158,7 +177,6 @@ func (p *pbsService) Stop(s service.Service) error {
 }
 
 func main() {
-	pending := updater.CheckPendingOnBoot()
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -167,6 +185,14 @@ func main() {
 		}
 	}()
 	conf.Version = Version
+	if requested, err := setupCommand(os.Args[1:]); requested {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if requested, err := storageKeyCommand(os.Args[1:]); requested {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -185,21 +211,10 @@ func main() {
 		return
 	}
 
-	if pending {
-		go func() {
-			select {
-			case <-time.After(binswap.CommitGrace):
-				updater.CommitUpdate()
-			}
-		}()
-	}
-
 	cli.Entry()
 
-	svcConfig := &service.Config{
-		Name: "PBSXAgent", DisplayName: "PBS-X Agent",
-		Option: service.KeyValue{"OnFailure": "restart", "OnFailureDelayDuration": "5s"},
-	}
+	svcConfig := agentServiceConfig()
+
 	prg := &pbsService{}
 	prg.ctx, prg.cancel = context.WithCancel(context.Background())
 
@@ -213,9 +228,15 @@ func main() {
 			fmt.Print(Version)
 			return
 		}
-		_ = service.Control(s, os.Args[1])
+		if err := service.Control(s, os.Args[1]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 		return
 	}
+
+	// Only an actual agent boot counts toward update rollback attempts.
+	_ = updater.CheckPendingOnBoot()
 
 	if service.Interactive() {
 		prg.run()

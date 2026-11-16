@@ -11,6 +11,7 @@ import (
 
 	"github.com/pbs-x/pbsx-host-agent/internal/agent"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/workgate"
+	"github.com/pbs-x/pbsx-host-agent/internal/agentstatus"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
 
@@ -61,6 +62,7 @@ type progressReporter struct {
 }
 
 func (r *progressReporter) report(progress Progress) {
+	agentstatus.Progress(agentstatus.Operation{Kind: "backup", Stage: progress.Stage, Files: progress.Files, ProcessedBytes: progress.ProcessedBytes, UploadedBytes: progress.UploadedBytes})
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
@@ -125,6 +127,7 @@ func pollOnce(ctx context.Context) error {
 	}
 	log.Info("claimed native host backup", "run_id", run.RunID, "job", run.JobID, "requested_at", run.RequestedAt)
 
+	agentstatus.Progress(agentstatus.Operation{Kind: "backup", Stage: "preparing"})
 	reporter := &progressReporter{ctx: ctx, hostID: hostID, runID: run.RunID}
 	result, runErr := Run(ctx, Job{
 		ID:                  run.JobID,
@@ -163,6 +166,7 @@ func pollOnce(ctx context.Context) error {
 	for {
 		err := agent.PBSAPIRequest(ctx, http.MethodPost, "/pbsx/agent/finish", finish, nil)
 		if err == nil {
+			agentstatus.Finished(runErr == nil)
 			if runErr != nil {
 				log.Error(runErr, "native backup run completed with failure", "run_id", run.RunID, "job", run.JobID)
 			} else {

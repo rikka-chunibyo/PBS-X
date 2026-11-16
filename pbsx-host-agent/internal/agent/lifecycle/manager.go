@@ -356,7 +356,6 @@ func ConnectARPC(
 				log.Info("connected using TCP/mTLS fallback", "quic_error", quicErr.Error())
 			}
 
-			updater.MarkHealthy()
 			updater.CheckOnReconnect()
 
 			serveErr := session.Serve()

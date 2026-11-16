@@ -1,10 +1,13 @@
 #!/usr/bin/python3
 """APT transaction protection for the PBS-X server, installed by pbsx-repository."""
 import fcntl
+from contextlib import contextmanager
 import json
 import os
+import pwd
 from pathlib import Path
 import subprocess
+import stat
 import sys
 import tempfile
 import time
@@ -59,6 +62,30 @@ def check_idle():
             raise RuntimeError('PBS tasks are running; retry the update when idle')
 
 
+@contextmanager
+def host_dispatch_gate():
+    """Exclude native queue/claim mutations through the idle check and stop.
+
+    This is flock, matching pbs_config::open_backup_lockfile. STATE continues
+    to block dispatch across hook processes and package-triggered restarts.
+    """
+    descriptor = os.open(CONFIG/'.pbsx-maintenance.lck',
+                         os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK, 0o660)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise RuntimeError('Unsafe PBS-X maintenance lock')
+        user = pwd.getpwnam('backup')
+        os.fchown(descriptor, user.pw_uid, user.pw_gid)
+        os.fchmod(descriptor, 0o660)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('PBS-X host dispatch is busy; retry the update') from None
+        yield
+    finally:
+        os.close(descriptor)
+
+
 def read_state():
     data = json.loads(STATE.read_text())
     if data.get('version') != 1 or not set(data['units']).issubset(set(UNITS)):
@@ -93,6 +120,11 @@ def prepare(changed):
     pending = read_state() if STATE.exists() else None
     if not CONFIG.exists() and not any(active(unit) for unit in UNITS) and pending is None:
         return  # First server installation has no prior server state.
+    with host_dispatch_gate():
+        prepare_locked(changed, pending)
+
+
+def prepare_locked(changed, pending):
     check_idle()
     # Carry restart intent through a repair instead of trying to start possibly
     # broken binaries before dpkg gets a chance to repair them.

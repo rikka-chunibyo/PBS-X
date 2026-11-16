@@ -1,5 +1,9 @@
 import importlib.util
 import io
+import fcntl
+import os
+import pwd
+from types import SimpleNamespace
 import json
 from pathlib import Path
 import subprocess
@@ -13,6 +17,46 @@ spec.loader.exec_module(guard)
 
 
 class ProtectionTests(unittest.TestCase):
+    def test_shared_dispatch_lock_blocks_maintenance_and_is_never_unlinked(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lock = root/'.pbsx-maintenance.lck'
+            with lock.open('w+') as reader, patch.object(guard, 'CONFIG', root), \
+                    patch.object(guard.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())):
+                inode = lock.stat().st_ino
+                fcntl.flock(reader, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                with self.assertRaisesRegex(RuntimeError, 'dispatch is busy'):
+                    with guard.host_dispatch_gate():
+                        self.fail('maintenance overlapped a dispatch mutation')
+                fcntl.flock(reader, fcntl.LOCK_UN)
+                with guard.host_dispatch_gate():
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(reader, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                self.assertEqual(lock.stat().st_ino, inode)
+                fcntl.flock(reader, fcntl.LOCK_SH | fcntl.LOCK_NB)
+
+    def test_gate_releases_on_archive_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with patch.object(guard, 'CONFIG', root), \
+                    patch.object(guard.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())):
+                with self.assertRaisesRegex(RuntimeError, 'disk full'):
+                    with guard.host_dispatch_gate():
+                        raise RuntimeError('disk full')
+                with guard.host_dispatch_gate():
+                    pass
+
+    def test_gate_does_not_follow_symlinks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root/'unrelated'
+            target.write_text('unchanged')
+            (root/'.pbsx-maintenance.lck').symlink_to(target)
+            with patch.object(guard, 'CONFIG', root), self.assertRaises(OSError):
+                with guard.host_dispatch_gate():
+                    self.fail('followed symlink')
+            self.assertEqual(target.read_text(), 'unchanged')
+
     def test_action_protocol_and_removal(self):
         stream = io.StringIO('VERSION 2\nAPT::Something=value\n\n'
                              'unrelated 1 < 2 /tmp/unrelated.deb\n'
@@ -66,6 +110,7 @@ class ProtectionTests(unittest.TestCase):
             with patch.object(guard, 'STATE', state), patch.object(guard, 'CONFIG', root), \
                     patch.object(guard, 'RUNS', root/'runs'), patch.object(guard, 'BACKUPS', root), \
                     patch.object(guard, 'active', return_value=True), patch.object(guard, 'check_idle'), \
+                    patch.object(guard.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())), \
                     patch.object(guard, 'run', side_effect=run):
                 with self.assertRaisesRegex(RuntimeError, 'disk full'):
                     guard.prepare({'proxmox-backup-client': '/tmp/client.deb'})
@@ -80,6 +125,7 @@ class ProtectionTests(unittest.TestCase):
             with patch.object(guard, 'STATE', state), patch.object(guard, 'CONFIG', root), \
                     patch.object(guard, 'RUNS', root/'runs'), patch.object(guard, 'BACKUPS', root), \
                     patch.object(guard, 'active', return_value=False), patch.object(guard, 'check_idle'), \
+                    patch.object(guard.pwd, 'getpwnam', return_value=SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())), \
                     patch.object(guard, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as run:
                 guard.prepare({'proxmox-backup-client': '/tmp/client.deb'})
                 self.assertEqual(json.loads(state.read_text())['units'], list(guard.UNITS))

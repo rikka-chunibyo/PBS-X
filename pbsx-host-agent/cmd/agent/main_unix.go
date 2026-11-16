@@ -14,13 +14,13 @@ import (
 
 	"github.com/kardianos/service"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent"
-	"github.com/pbs-x/pbsx-host-agent/internal/agent/binswap"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/cli"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/lifecycle"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/migration"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativebackup"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/nativerestore"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/updater"
+	"github.com/pbs-x/pbsx-host-agent/internal/agentstatus"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
 	"github.com/pbs-x/pbsx-host-agent/internal/crypto"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
@@ -39,9 +39,10 @@ type pbsService struct {
 func (p *pbsService) Start(s service.Service) error {
 	if conf.Env.EnableAutoUpdate && !conf.Env.InsideContainer {
 		_, _ = updater.New(updater.Config{
-			MinConstraint:  ">= 0.52.0",
+			MinConstraint:  updater.DefaultMinConstraint,
 			PollInterval:   2 * time.Minute,
 			FetchOnStart:   true,
+			BootstrapReady: lifecycle.BootstrapReady(),
 			UpgradeConfirm: func(v string) bool { return true },
 			Exit: func(err error) {
 				if err != nil {
@@ -57,7 +58,7 @@ func (p *pbsService) Start(s service.Service) error {
 		// Register a singleton updater (no polling) so the server can still
 		// push updates on demand via aRPC.
 		_, _ = updater.New(updater.Config{
-			MinConstraint:  ">= 0.52.0",
+			MinConstraint:  updater.DefaultMinConstraint,
 			PollInterval:   0,
 			FetchOnStart:   false,
 			UpgradeConfirm: func(v string) bool { return true },
@@ -72,11 +73,23 @@ func (p *pbsService) Start(s service.Service) error {
 			Context: p.ctx,
 		})
 	}
-	go p.run()
+	p.wg.Add(1)
+	go func() { defer p.wg.Done(); p.run() }()
 	return nil
 }
 
 func (p *pbsService) run() {
+	statusCtx, stopStatus := context.WithCancel(p.ctx)
+	statusErrors := agentstatus.Publish(statusCtx, Version)
+	statusDone := make(chan struct{})
+	go func() {
+		defer close(statusDone)
+		for err := range statusErrors {
+			log.Warn("desktop status unavailable", "error", err.Error())
+		}
+	}()
+	defer func() { stopStatus(); <-statusDone }()
+	agentstatus.Phase("waiting-for-enrollment")
 	_ = log.L.SetServiceLogger()
 	if err := persistEnrollmentValue("ServerURL", conf.Env.InitServerURL); err != nil {
 		log.Error(err, "failed to save PBS-X server URL")
@@ -107,6 +120,7 @@ func (p *pbsService) run() {
 		return
 	}
 	log.Info("PBS-X enrollment complete; native backup service active")
+	agentstatus.Phase("ready")
 
 	if store, err := agent.NewBackupStore(); err == nil {
 		_ = store.ClearAll()
@@ -126,8 +140,14 @@ func (p *pbsService) run() {
 	innerWg.Go(func() {
 		// Publish inventory immediately, then at the normal adaptive heartbeat interval.
 		for {
-			if err := lifecycle.UpdateDrives(); err != nil && innerCtx.Err() == nil {
-				log.Warn("PBS-X heartbeat failed", "error", err.Error())
+			if err := lifecycle.UpdateDrives(); err != nil {
+				agentstatus.Heartbeat(false)
+				if innerCtx.Err() == nil {
+					log.Warn("PBS-X heartbeat failed", "error", err.Error())
+				}
+			} else {
+				agentstatus.Heartbeat(true)
+				updater.MarkHealthy()
 			}
 			timer := time.NewTimer(agent.ComputeDelay())
 			select {
@@ -175,7 +195,6 @@ func (p *pbsService) Stop(s service.Service) error {
 }
 
 func main() {
-	pending := updater.CheckPendingOnBoot()
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -184,6 +203,14 @@ func main() {
 		}
 	}()
 	conf.Version = Version
+	if requested, err := setupCommand(os.Args[1:]); requested {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if requested, err := storageKeyCommand(os.Args[1:]); requested {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -202,15 +229,6 @@ func main() {
 		return
 	}
 
-	if pending {
-		go func() {
-			select {
-			case <-time.After(binswap.CommitGrace):
-				updater.CommitUpdate()
-			}
-		}()
-	}
-
 	// This is best-effort; if it fails due to permissions, the agent will fall back
 	// to using the legacy paths automatically via initPaths() in conf package.
 	_ = migration.TryMigrate()
@@ -218,16 +236,8 @@ func main() {
 
 	cli.Entry()
 
-	svcConfig := &service.Config{
-		Name:        "pbsx-agent",
-		DisplayName: "PBS-X Agent",
-		Description: "PBS-X host backup agent",
-		UserName:    "root",
-		Option: service.KeyValue{
-			"SystemdScript": lifecycle.SYSTEMD_SCRIPT,
-			"OpenRCScript":  lifecycle.OPENRC_SCRIPT,
-		},
-	}
+	svcConfig := agentServiceConfig()
+
 	prg := &pbsService{}
 	prg.ctx, prg.cancel = context.WithCancel(context.Background())
 
@@ -250,6 +260,9 @@ func main() {
 		}
 		return
 	}
+
+	// Only an actual agent boot counts toward update rollback attempts.
+	_ = updater.CheckPendingOnBoot()
 
 	dockerEnv := os.Getenv("PBSX_AGENT_CONTAINER")
 

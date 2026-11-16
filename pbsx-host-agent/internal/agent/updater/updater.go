@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Masterminds/semver"
 	"github.com/kardianos/service"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/binswap"
+	"github.com/pbs-x/pbsx-host-agent/internal/agent/workgate"
 	"github.com/pbs-x/pbsx-host-agent/internal/conf"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
@@ -69,7 +69,7 @@ type VersionResp struct {
 
 func New(cfg Config) (*Updater, error) {
 	if cfg.MinConstraint == "" {
-		cfg.MinConstraint = ">= 0.52.0"
+		cfg.MinConstraint = DefaultMinConstraint
 	}
 	if cfg.UpgradeConfirm == nil {
 		cfg.UpgradeConfirm = func(string) bool { return true }
@@ -94,6 +94,9 @@ func New(cfg Config) (*Updater, error) {
 		mgr.Prune()
 	}
 
+	if cfg.Context == nil {
+		cfg.Context = context.Background()
+	}
 	ctx, cancel := context.WithCancel(cfg.Context)
 	up := &Updater{cfg: cfg, cancel: cancel}
 
@@ -106,7 +109,7 @@ func New(cfg Config) (*Updater, error) {
 			if cfg.BootstrapReady != nil {
 				select {
 				case <-cfg.BootstrapReady:
-				case <-cfg.Context.Done():
+				case <-ctx.Done():
 					return
 				}
 			}
@@ -124,6 +127,13 @@ func New(cfg Config) (*Updater, error) {
 }
 
 func (u *Updater) poll(ctx context.Context) {
+	if u.cfg.BootstrapReady != nil {
+		select {
+		case <-u.cfg.BootstrapReady:
+		case <-ctx.Done():
+			return
+		}
+	}
 	ticker := time.NewTicker(u.cfg.PollInterval)
 	defer ticker.Stop()
 	for {
@@ -175,7 +185,7 @@ func TriggerUpdate() error {
 	// one-shot updater that reuses the same check/apply logic without
 	// starting any background goroutines.
 	up = &Updater{cfg: Config{
-		MinConstraint:  ">= 0.52.0",
+		MinConstraint:  DefaultMinConstraint,
 		UpgradeConfirm: func(string) bool { return true },
 		Exit: func(err error) {
 			if err != nil {
@@ -198,6 +208,10 @@ func (u *Updater) CheckNow() error {
 }
 
 func (u *Updater) checkNow() error {
+	if !workgate.Mu.TryLock() {
+		return fmt.Errorf("agent backup/restore is active; retry the update when idle")
+	}
+	defer workgate.Mu.Unlock()
 	if mgr, err := binswap.NewFromExecutable(); err == nil {
 		if mgr.HasPending() {
 			return fmt.Errorf("updater: update to %s still pending health confirmation", mgr.PendingVersion())
@@ -209,25 +223,8 @@ func (u *Updater) checkNow() error {
 		return fmt.Errorf("updater: fetch latest version: %w", err)
 	}
 
-	if version == "" || version == conf.Version {
-		return fmt.Errorf("%w: server=%q current=%q", ErrAlreadyLatest, version, conf.Version)
-	}
-
-	constr, err := semver.NewConstraint(u.cfg.MinConstraint)
-	if err != nil {
-		return fmt.Errorf("updater: invalid semver constraint: %w", err)
-	}
-	vs, err := semver.NewVersion(version)
-	if err != nil {
-		return fmt.Errorf("updater: parse version %q: %w", version, err)
-	}
-	if !constr.Check(vs) {
-		return fmt.Errorf("updater: version %s does not meet constraint %s", version, u.cfg.MinConstraint)
-	}
-
-	currentVer, cverErr := semver.NewVersion(conf.Version)
-	if cverErr == nil && !vs.GreaterThan(currentVer) {
-		return fmt.Errorf("updater: version %s is not newer than current version %s", version, conf.Version)
+	if err := validateCandidate(conf.Version, version, u.cfg.MinConstraint); err != nil {
+		return fmt.Errorf("updater: %w", err)
 	}
 
 	if !u.cfg.UpgradeConfirm(version) {
@@ -240,7 +237,7 @@ func (u *Updater) checkNow() error {
 
 	return nil
 }
-func (u *Updater) applyUpdate(version string, embedded bool) error {
+func (u *Updater) applyUpdate(version string, _ bool) error {
 	params := fmt.Sprintf("os=%s&arch=%s", runtime.GOOS, runtime.GOARCH)
 
 	binary, err := u.fetchBinary(params)
@@ -252,44 +249,12 @@ func (u *Updater) applyUpdate(version string, embedded bool) error {
 		return fmt.Errorf("sanity check: %w", err)
 	}
 
-	verified := false
-
-	if embedded {
-		verified = true
-		log.Info("update verified via embedded server binary (no external signature required)")
-	}
-
-	if !verified {
-		ecdsaSig, ecdsaErr := u.fetchECDSASignature(params)
-		ed25519Sig, ed25519Err := u.fetchEd25519Signature(params)
-
-		if ecdsaSig != nil {
-			if err := verifyWithECDSA(binary, ecdsaSig); err != nil {
-				log.Error(err, "ECDSA P-256 signature verification failed")
-			} else {
-				verified = true
-				log.Info("update verified with ECDSA P-256 signature (FIPS-approved)")
-			}
-		}
-
-		if !verified && ed25519Sig != nil {
-			if err := verifyWithEd25519(binary, ed25519Sig); err != nil {
-				log.Error(err, "Ed25519 signature verification failed")
-			} else {
-				verified = true
-				log.Warn("update verified with Ed25519 signature (non-FIPS, legacy fallback; will be removed in future release)")
-			}
-		}
-
-		if !verified {
-			if ecdsaErr != nil {
-				log.Error(ecdsaErr, "failed to fetch ECDSA signature")
-			}
-			if ed25519Err != nil {
-				log.Error(ed25519Err, "failed to fetch Ed25519 signature")
-			}
-			return fmt.Errorf("no valid signature found for update")
-		}
+	// A remote 'embedded' flag is metadata, not proof of software provenance.
+	// Both embedded and external artifacts must verify against a trusted key.
+	ecdsaSig, _ := u.fetchECDSASignature(params)
+	ed25519Sig, _ := u.fetchEd25519Signature(params)
+	if err := verifyUpdatePayload(binary, ecdsaSig, ed25519Sig); err != nil {
+		return err
 	}
 
 	mgr, err := binswap.NewFromExecutable()
@@ -334,11 +299,11 @@ func (u *Updater) fetchLatestVersion() (string, bool, error) {
 		}
 	}()
 
-	data, err := io.ReadAll(io.LimitReader(resp, maxVersionSize))
+	data, err := io.ReadAll(io.LimitReader(resp, maxVersionSize+1))
 	if err != nil {
 		return "", false, err
 	}
-	if len(data) >= maxVersionSize {
+	if len(data) > maxVersionSize {
 		return "", false, fmt.Errorf("version response exceeds maximum size of %d bytes", maxVersionSize)
 	}
 
@@ -460,11 +425,29 @@ func parseECDSASignature(data []byte) (*ecdsaSig, error) {
 	}
 
 	var sig ecdsaSig
-	if _, err := asn1.Unmarshal(decoded, &sig); err != nil {
+	rest, err := asn1.Unmarshal(decoded, &sig)
+	if err != nil {
 		return nil, fmt.Errorf("ASN.1 unmarshal signature: %w", err)
+	}
+	if len(rest) != 0 || sig.R == nil || sig.S == nil || sig.R.Sign() <= 0 || sig.S.Sign() <= 0 {
+		return nil, fmt.Errorf("invalid or trailing ECDSA signature data")
 	}
 
 	return &sig, nil
+}
+
+func verifyUpdatePayload(binary, ecdsaSignature, ed25519Signature []byte) error {
+	if len(ecdsaSignature) != 0 && ECDSAPublicKeyB64 != "" {
+		if err := verifyWithECDSA(binary, ecdsaSignature); err == nil {
+			return nil
+		}
+	}
+	if len(ed25519Signature) != 0 && Ed25519PublicKeyB64 != "" {
+		if err := verifyWithEd25519(binary, ed25519Signature); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("update requires a valid signature from a configured trusted key")
 }
 
 func loadEd25519PublicKey() (ed25519.PublicKey, error) {

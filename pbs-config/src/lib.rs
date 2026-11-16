@@ -19,6 +19,7 @@ pub mod encryption_keys;
 pub mod host;
 pub mod host_backup;
 pub mod key_value;
+pub mod maintenance;
 pub mod media_pool;
 pub mod metrics;
 pub mod node;

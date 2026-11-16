@@ -1,0 +1,86 @@
+name: Host agent and desktop checks
+on:
+  push:
+    paths: ['pbsx-host-agent/**', 'packaging/host-app/**', 'tools/*host*', 'tests/host-*', 'www/host/**', 'packaging/pbsx-repository/**', '.github/workflows/host-app.yml']
+  pull_request:
+    paths: ['pbsx-host-agent/**', 'packaging/host-app/**', 'tools/*host*', 'tests/host-*', 'www/host/**', 'packaging/pbsx-repository/**', '.github/workflows/host-app.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: host-app-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: pbsx-host-agent/go.mod
+          cache-dependency-path: pbsx-host-agent/go.sum
+      - name: Install native window build and smoke-test dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libegl-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev libx11-xcb-dev xvfb xauth python3-pil
+      - name: Linux race tests
+        working-directory: pbsx-host-agent
+        run: go test -race -tags agent -timeout 10m ./...
+      - name: UI and installer refusal checks
+        run: |
+          node tests/host-ui-credentials.test.cjs
+          node tests/host-backup-browser.test.cjs
+          python3 tests/host-app-bundle.test.py
+          python3 packaging/pbsx-repository/test_apt_guard.py
+      - name: Build matched Linux preview bundle
+        run: python3 tools/build-host-app.py --os linux --version 0.7.0-preview --output artifacts/host-app-linux
+      - name: Verify bundle and headless CLI
+        run: |
+          python3 artifacts/host-app-linux/install.py --check
+          env -u DISPLAY artifacts/host-app-linux/pbsx-agentctl version
+          test -z "$(readelf -l artifacts/host-app-linux/pbsx-agentctl | sed -n '/INTERP/p')"
+          test -z "$(readelf -l artifacts/host-app-linux/pbsx-agent | sed -n '/INTERP/p')"
+      - name: Native window smoke test
+        run: xvfb-run -a -s '-screen 0 1200x800x24' env LIBGL_ALWAYS_SOFTWARE=1 python3 tools/smoke-host-desktop.py artifacts/host-app-linux/pbsx-desktop artifacts/desktop-linux.png
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: host-app-linux-preview
+          path: |
+            artifacts/host-app-linux
+            artifacts/desktop-linux.png
+          retention-days: 14
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: pbsx-host-agent/go.mod
+          cache-dependency-path: pbsx-host-agent/go.sum
+      - name: Verify native test prerequisites
+        shell: pwsh
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Vault ACL regression tests require an Administrator runner' }
+          Get-Command gcc.exe -ErrorAction Stop | Select-Object -ExpandProperty Source
+      - name: Native Windows unit tests
+        working-directory: pbsx-host-agent
+        run: go test -tags agent -timeout 10m ./...
+      - name: Build matched Windows preview bundle
+        run: python tools/build-host-app.py --os windows --version 0.7.0-preview --output artifacts/host-app-windows
+      - name: Check installer and headless CLI
+        shell: pwsh
+        run: |
+          & ./artifacts/host-app-windows/install.ps1 -Check
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle check failed' }
+          & ./artifacts/host-app-windows/pbsx-agentctl.exe version
+          if ($LASTEXITCODE -ne 0) { throw 'CLI failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: host-app-windows-preview
+          path: artifacts/host-app-windows
+          retention-days: 14

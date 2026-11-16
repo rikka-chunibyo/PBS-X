@@ -911,6 +911,7 @@ fn run_progress_path(host: &str, run_id: &str) -> PathBuf {
 
 /// Queue one configured host backup job for pickup by the enrolled agent.
 pub fn queue_host_backup(job: &HostBackupJobConfig) -> Result<HostBackupRunCommand, Error> {
+    let _maintenance = pbs_config::maintenance::lock_host_dispatch()?;
     let (host_config, _) = pbs_config::host::config()?;
     let host: HostConfig = host_config
         .lookup("host", &job.host)
@@ -1013,6 +1014,7 @@ fn first_json_file(path: &Path) -> Result<Option<PathBuf>, Error> {
 /// Atomically claim the next run for a host. An existing running command is returned again so an
 /// agent restart can recover a run whose HTTP response or process was lost.
 pub fn claim_host_backup(host: &str) -> Result<Option<HostBackupRunCommand>, Error> {
+    let _maintenance = pbs_config::maintenance::lock_host_dispatch()?;
     create_run_dirs(host)?;
     let _lock = host_run_lock(host)?;
     let base = run_host_dir(host);
@@ -1372,6 +1374,7 @@ pub fn queue_host_restore(
     destination: String,
     mode: HostRestoreMode,
 ) -> Result<HostRestoreRunCommand, Error> {
+    let _maintenance = pbs_config::maintenance::lock_host_dispatch()?;
     let (host_config, _) = pbs_config::host::config()?;
     let host_cfg: HostConfig = host_config
         .lookup("host", host)
@@ -1417,6 +1420,7 @@ pub fn queue_host_restore(
 
 /// Claim the next restore. Running work is returned again after an agent restart.
 pub fn claim_host_restore(host: &str) -> Result<Option<HostRestoreRunCommand>, Error> {
+    let _maintenance = pbs_config::maintenance::lock_host_dispatch()?;
     create_run_dirs(host)?;
     let _lock = host_run_lock(host)?;
     let base = run_host_dir(host);

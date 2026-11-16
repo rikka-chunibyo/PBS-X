@@ -11,6 +11,7 @@ import (
 
 	"github.com/pbs-x/pbsx-host-agent/internal/agent"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/workgate"
+	"github.com/pbs-x/pbsx-host-agent/internal/agentstatus"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
 )
 
@@ -43,6 +44,7 @@ type runProgress struct {
 }
 
 func postProgress(ctx context.Context, hostID, runID, stage string, files, processedBytes uint64) {
+	agentstatus.Progress(agentstatus.Operation{Kind: "restore", Stage: stage, Files: files, ProcessedBytes: processedBytes})
 	progress := runProgress{
 		HostID: hostID, RunID: runID, Stage: stage, Files: files, ProcessedBytes: processedBytes,
 	}
@@ -131,6 +133,7 @@ func pollOnce(ctx context.Context) error {
 	}
 	for {
 		if err := agent.PBSAPIRequest(ctx, http.MethodPost, "/pbsx/agent/restore-finish", finish, nil); err == nil {
+			agentstatus.Finished(runErr == nil)
 			if runErr != nil {
 				log.Error(runErr, "native restore completed with failure", "run_id", run.RunID)
 			} else {
