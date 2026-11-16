@@ -57,6 +57,14 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+          # PBS systemd unit names contain literal backslashes, which Windows
+          # cannot check out. This job only needs the host application sources.
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.gitignore
+            /pbsx-host-agent/
+            /packaging/host-app/
+            /tools/build-host-app.py
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: pbsx-host-agent/go.mod

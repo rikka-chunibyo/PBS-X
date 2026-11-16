@@ -30,7 +30,18 @@ python3 tools/build-host-app.py --os linux --version 0.7.0-preview --output arti
 python3 tools/build-host-app.py --os windows --version 0.7.0-preview --output artifacts/host-app-windows
 ```
 
-The Windows command runs natively on Windows with a C compiler on PATH. To build
+The full PBS repository contains Linux-only filenames (including a systemd
+unit name with a literal backslash), so Windows needs an agent-only sparse
+checkout, as configured in the workflow. For a new Windows checkout:
+
+```powershell
+git clone --no-checkout --filter=blob:none --branch pbsx-agent-desktop-readiness git@github.com:rikka-chunibyo/PBS-X.git
+cd PBS-X
+git sparse-checkout set --no-cone '/.gitignore' '/pbsx-host-agent/' '/packaging/host-app/' '/tools/build-host-app.py'
+git checkout pbsx-agent-desktop-readiness
+```
+
+The Windows build command runs natively with a C compiler on PATH. To build
 it on Linux, add `--cc x86_64-w64-mingw32-gcc`. Native desktop builds need the
 [Fyne platform dependencies](https://docs.fyne.io/started/). For the current
 Fyne version, Linux needs OpenGL, EGL, X11, Wayland and xkbcommon development
