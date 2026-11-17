@@ -12,6 +12,13 @@ android {
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
     buildFeatures { aidl true; buildConfig true }
+    buildTypes {
+        release {
+            // Preview upgrades must retain the established development certificate.
+            signingConfig signingConfigs.debug
+            debuggable false
+        }
+    }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
     packaging { jniLibs { useLegacyPackaging = false } }
     lint { abortOnError true }

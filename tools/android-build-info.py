@@ -26,9 +26,12 @@ def main():
     if values != [expected]:
         raise ValueError('APK signing certificate changed; retain the existing preview keystore')
     run(str(build_tools/'zipalign'), '-c', '-P', '16', '4', str(apk))
-    metadata = json.loads((app/'app/build/outputs/apk/debug/output-metadata.json').read_text())
+    badging = run(str(build_tools/'aapt'), 'dump', 'badging', str(apk))
+    if re.search(r'^application-debuggable', badging, re.M):
+        raise ValueError('downloadable APK must have debugging disabled')
+    metadata = json.loads((app/'app/build/outputs/apk/release/output-metadata.json').read_text())
     item, = metadata['elements']
-    if metadata['applicationId'] != 'com.pbsx.android' or item['filters']:
+    if metadata['applicationId'] != 'com.pbsx.android' or metadata['variantName'] != 'release' or item['filters']:
         raise ValueError('expected the universal PBS-X Android APK')
     with zipfile.ZipFile(apk) as archive:
         abis = sorted({name.split('/')[1] for name in archive.namelist() if name.startswith('lib/') and name.endswith('.so')})
@@ -37,12 +40,13 @@ def main():
     info = {
         'schema': 1, 'version': item['versionName'], 'version_code': item['versionCode'],
         'application_id': metadata['applicationId'], 'architectures': abis,
+        'variant': 'release', 'debuggable': False,
         'source_commit': run('git', 'rev-parse', 'HEAD').strip(),
         'source_tree': run('git', 'rev-parse', 'HEAD:pbsx-android').strip(),
         'dirty': bool(run('git', 'status', '--porcelain', '--', 'pbsx-android').strip()),
         'certificate_sha256': expected, 'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
         'size': apk.stat().st_size,
-        'checks': ['go-tests', 'android-unit-tests', 'lint', 'apk-signature', '16k-alignment'],
+        'checks': ['go-tests', 'android-unit-tests', 'lint', 'apk-signature', '16k-alignment', 'non-debuggable'],
     }
     (app/'artifacts/build-info.json').write_text(json.dumps(info, indent=2)+'\n')
     print('Verified Android preview:', info['version'], 'certificate:', expected)

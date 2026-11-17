@@ -144,9 +144,9 @@ def prepare(args, linux, windows, run_info):
     apk = ROOT/'pbsx-android/artifacts/pbsx-android-preview.apk'
     if info.get('dirty') is not False or info.get('source_tree') != run(['git', 'rev-parse', 'HEAD:pbsx-android'], cwd=ROOT).strip():
         raise ValueError('Android build is dirty or stale; run pbsx-android/build.sh')
-    required = {'go-tests', 'android-unit-tests', 'lint', 'apk-signature', '16k-alignment'}
+    required = {'go-tests', 'android-unit-tests', 'lint', 'apk-signature', '16k-alignment', 'non-debuggable'}
     certificate = (ROOT/'packaging/client-downloads/android-preview-certificate.sha256').read_text().strip()
-    if set(info.get('checks', [])) != required or info.get('certificate_sha256') != certificate or info.get('sha256') != digest(apk) or info.get('size') != apk.stat().st_size:
+    if info.get('variant') != 'release' or info.get('debuggable') is not False or set(info.get('checks', [])) != required or info.get('certificate_sha256') != certificate or info.get('sha256') != digest(apk) or info.get('size') != apk.stat().st_size:
         raise ValueError('Android build verification does not match the APK')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.pbsx-clients-', dir=args.output.parent) as name:

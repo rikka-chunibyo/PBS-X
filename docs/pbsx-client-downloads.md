@@ -13,7 +13,8 @@ configure desktop jobs in the PBS-X server UI. Linux retains its static
 `pbsx-agentctl` and background agent for systems without a desktop. Android
 manages jobs in its app. These are preview distributions: Windows executables
 are unsigned, and Android retains its established development signing
-certificate. This does not enable automatic client updates.
+certificate, with debugging disabled in the downloadable release-mode APK.
+This does not enable automatic client updates.
 
 ## Install
 
