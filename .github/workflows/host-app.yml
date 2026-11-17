@@ -5,6 +5,12 @@ on:
   pull_request:
     paths: ['pbsx-host-agent/**', 'packaging/host-app/**', 'tools/*host*', 'tests/host-*', 'www/host/**', 'packaging/pbsx-repository/**', '.github/workflows/host-app.yml']
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Client semantic version'
+        required: true
+        default: '0.7.0-preview'
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -54,7 +60,9 @@ jobs:
           python3 tests/host-app-bundle.test.py
           python3 packaging/pbsx-repository/test_apt_guard.py
       - name: Build matched Linux preview bundle
-        run: python3 tools/build-host-app.py --os linux --version 0.7.0-preview --output artifacts/host-app-linux
+        env:
+          PBSX_VERSION: ${{ inputs.version || '0.7.0-preview' }}
+        run: python3 tools/build-host-app.py --os linux --version "$PBSX_VERSION" --output artifacts/host-app-linux
       - name: Verify bundle and headless CLI
         run: |
           python3 artifacts/host-app-linux/install.py --check
@@ -99,7 +107,9 @@ jobs:
         working-directory: pbsx-host-agent
         run: go test -tags agent -timeout 10m ./...
       - name: Build matched Windows preview bundle
-        run: python tools/build-host-app.py --os windows --version 0.7.0-preview --output artifacts/host-app-windows
+        env:
+          PBSX_VERSION: ${{ inputs.version || '0.7.0-preview' }}
+        run: python tools/build-host-app.py --os windows --version "$env:PBSX_VERSION" --output artifacts/host-app-windows
       - name: Check installer and headless CLI
         shell: pwsh
         run: |

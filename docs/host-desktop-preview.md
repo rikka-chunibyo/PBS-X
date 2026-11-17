@@ -55,10 +55,11 @@ system graphics libraries. Its Windows desktop imports only Windows system DLLs.
 ## Install a trusted local bundle
 
 These preview manifests provide corruption checks, **not publisher authentication**.
-Use bundles obtained through a trusted development channel. No unsigned-download
-installer, public client feed or automatic client-update publication is enabled
-by this branch. Windows Authenticode and the production signed client-release
-channel remain release work.
+Manual preview downloads are available at [pbsx.rikka.ca/downloads](https://pbsx.rikka.ca/downloads/)
+and in private GitHub releases. These include the checked native binaries and
+installers. Windows Authenticode and a production signed automatic-update
+channel remain release work. Publication does not enable automatic updates.
+See [client publishing](pbsx-client-downloads.md) for the repeatable release command.
 
 On an amd64 systemd Linux system, run inside the Linux bundle:
 
@@ -123,7 +124,9 @@ into user preferences. Closing the window does not stop scheduled backups.
 `.github/workflows/host-app.yml` runs Linux race tests, native Windows unit tests,
 GUI builds, bundle checks, Host UI tests and a Linux virtual-display smoke test.
 It uploads preview artifacts only; it has read-only repository permissions and
-no signing/publishing credentials. Windows uses a portable source archive, and
+no signing/publishing credentials. The maintainer publishing script collects a
+successful run, verifies it and publishes matching GitHub and HTTPS downloads.
+Windows uses a portable source archive, and
 the Linux smoke test isolates its X11 display from any inherited Wayland session.
 The local smoke command is:
 
