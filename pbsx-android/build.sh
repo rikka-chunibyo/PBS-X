@@ -13,3 +13,4 @@ if [[ -x ./gradlew ]]; then gradle=./gradlew; else gradle="$tools/gradle-dist/gr
 "$gradle" --no-daemon --max-workers=2 --console=plain :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 cp app/build/outputs/apk/debug/app-debug.apk artifacts/pbsx-android-preview.apk
 sha256sum artifacts/pbsx-android-preview.apk > artifacts/pbsx-android-preview.apk.sha256
+python3 ../tools/android-build-info.py
