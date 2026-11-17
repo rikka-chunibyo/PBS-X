@@ -55,6 +55,38 @@ public class DocumentsTest {
   }
 
   @Test
+  public void largeSafRestoreUpdatesCacheAndProtectsFolders() throws Exception {
+    Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    String unique = "cached-" + System.nanoTime();
+    File base = new File(c.getCacheDir(), "document-fixture/" + unique);
+    assertTrue(base.mkdirs());
+    assertTrue(new File(base, "folder").mkdir());
+    Uri uri = DocumentsContract.buildTreeDocumentUri(FixtureProvider.AUTHORITY, "root:" + unique);
+    try (AndroidDocuments docs = new AndroidDocuments(new DocumentTree(c.getContentResolver(), uri))) {
+      int queries = FixtureProvider.childQueries();
+      for (int i = 0; i < 100; i++) {
+        String pending = ".pbsx-stage-" + i;
+        try (OutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(
+            ParcelFileDescriptor.adoptFd((int) docs.openWrite(pending)))) {
+          out.write(i);
+        }
+        docs.commitFile(pending, "file-" + i, false);
+      }
+      assertTrue("Restore repeatedly listed a growing directory",
+          FixtureProvider.childQueries() - queries <= 2);
+      String stage = ".pbsx-stage-folder-test";
+      try (OutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(
+          ParcelFileDescriptor.adoptFd((int) docs.openWrite(stage)))) { out.write(1); }
+      try {
+        docs.commitFile(stage, "folder", true);
+        fail("Restore replaced a directory");
+      } catch (Exception expected) { assertTrue(expected.getMessage().contains("safe restores")); }
+      docs.deleteFile(stage);
+      assertTrue(new File(base, "folder").isDirectory());
+    }
+  }
+
+  @Test
   public void streamsSafDocumentsAndCreatesSafeRestoreTree() throws Exception {
     Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
     String unique = "run-" + System.nanoTime();

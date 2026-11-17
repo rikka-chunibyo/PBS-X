@@ -108,7 +108,11 @@ final class DocumentTree {
   }
 
   JSONObject stat(String path) throws Exception {
-    try (Cursor c = resolver.query(document(resolve(path)), COLUMNS, null, null, null)) {
+    return statId(resolve(path));
+  }
+
+  private JSONObject statId(String id) throws Exception {
+    try (Cursor c = resolver.query(document(id), COLUMNS, null, null, null)) {
       if (c == null || !c.moveToFirst()) throw new FileNotFoundException("Document is unavailable");
       return row(c);
     }
@@ -144,7 +148,6 @@ final class DocumentTree {
       if (!parts[i].equals(stagedParts[i])) throw new Exception("Restore staging must be a sibling");
     if (!stagedParts[stagedParts.length - 1].startsWith(".pbsx-stage-"))
       throw new Exception("Invalid restore staging name");
-    index.clear();
     JSONObject stage = stat(temporary), existing = inspect(path);
     int required = DocumentsContract.Document.FLAG_SUPPORTS_RENAME
         | DocumentsContract.Document.FLAG_SUPPORTS_DELETE;
@@ -159,27 +162,39 @@ final class DocumentTree {
     final String parentId = resolve(parent);
     RestoreCommit.Files files = new RestoreCommit.Files() {
       public String find(String name) throws Exception {
-        index.clear(); // Detect destination changes made outside this restore.
         return DocumentTree.this.find(parentId, name);
       }
 
       public String rename(String id, String name) throws Exception {
-        Uri renamed = DocumentsContract.renameDocument(resolver, document(id), name);
-        if (renamed == null) throw new Exception("Provider refused restore rename");
-        index.clear();
-        try (Cursor c = resolver.query(renamed, COLUMNS, null, null, null)) {
-          if (c == null || !c.moveToFirst()) throw new Exception("Cannot verify renamed document");
-          JSONObject item = row(c);
+        try {
+          JSONObject before = statId(id);
+          if (before.getBoolean("directory")) throw new Exception("Cannot rename a restore folder");
+          Uri renamed = DocumentsContract.renameDocument(resolver, document(id), name);
+          if (renamed == null) throw new Exception("Provider refused restore rename");
+          JSONObject item = statId(DocumentsContract.getDocumentId(renamed));
+          Map<String, String> names = index.get(parentId);
+          if (names != null) {
+            names.remove(before.getString("name"), id);
+            names.put(item.getString("name"), item.getString("id"));
+          }
           if (!name.equals(item.getString("name")))
             throw new Exception("Provider changed the restore name; data retained as " + item.getString("name"));
           return item.getString("id");
+        } catch (Exception failure) {
+          // Refresh only on failure, so rollback sees external conflicts. Normal
+          // mutations maintain the cache instead of re-listing large folders.
+          index.clear();
+          throw failure;
         }
       }
 
       public void delete(String id) throws Exception {
+        JSONObject before = statId(id);
+        if (before.getBoolean("directory")) throw new Exception("Cannot delete a restore folder");
         if (!DocumentsContract.deleteDocument(resolver, document(id)))
           throw new Exception("Provider refused removing previous restore copy");
-        index.clear();
+        Map<String, String> names = index.get(parentId);
+        if (names != null) names.remove(before.getString("name"), id);
       }
     };
     RestoreCommit.commit(files, stage.getString("id"), parts[parts.length - 1],

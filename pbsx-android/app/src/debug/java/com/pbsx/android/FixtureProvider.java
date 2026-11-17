@@ -15,6 +15,10 @@ import java.util.List;
 /** A private, debug-only document-provider fixture backed by app cache. */
 public final class FixtureProvider extends ContentProvider {
   static final String AUTHORITY = "com.pbsx.android.fixture";
+  private static final java.util.concurrent.atomic.AtomicInteger CHILD_QUERIES =
+      new java.util.concurrent.atomic.AtomicInteger();
+
+  static int childQueries() { return CHILD_QUERIES.get(); }
   private static final String[] DEFAULT = {
     "document_id", "_display_name", "mime_type", "_size", "last_modified"
   };
@@ -80,6 +84,7 @@ public final class FixtureProvider extends ContentProvider {
       MatrixCursor result = new MatrixCursor(columns);
       List<String> segments = uri.getPathSegments();
       if (segments.get(segments.size() - 1).equals("children")) {
+        CHILD_QUERIES.incrementAndGet();
         File[] children = f.listFiles();
         if (children == null) throw new Exception("Fixture is not a directory");
         File base = new File(getContext().getCacheDir(), "document-fixture");
