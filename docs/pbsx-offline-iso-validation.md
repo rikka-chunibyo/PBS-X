@@ -60,8 +60,18 @@ Cloudflare separately returns a browser challenge to GitHub-hosted runners
 (`HTTP 403`, `cf-mitigated: challenge`). CI uses authenticated GitHub release
 mirrors of the same four verified packages, with committed size/hash/identity
 pins. The installed system's APT source is unchanged. A large local HTTP/2 ISO
-download through the proxy was interrupted; the GitHub release is an alternate
-download for users with repository access.
+download through the proxy was interrupted. The static ISO location now sends
+`Cache-Control: no-store, no-transform` and `X-Accel-Buffering: no`, without
+changing the shared proxy. Public HTTPS range checks returned 206 and matched
+the first and last 64 KiB against the verified local ISO. The GitHub release is
+an alternate download for users with repository access.
+
+The complete CI image build, checksum verification and artifact upload passed in
+[run 44003946462](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44003946462),
+using the pinned mirrored packages and signed Debian/Proxmox dependencies.
+Eleven ISO regression tests and eleven APT protection tests passed. The CI-built
+ISO has its own timestamp/provenance and checksum; the checksum at the top of
+this report identifies the separately published, VM-tested image.
 
 ## Limits
 

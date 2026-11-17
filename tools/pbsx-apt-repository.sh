@@ -49,6 +49,13 @@ server {
     index index.html;
     autoindex off;
     add_header Cache-Control "no-cache, no-transform" always;
+    location /iso/ {
+        # Large uncached images must stream, with origin byte-range support.
+        add_header Cache-Control "no-store, no-transform" always;
+        add_header X-Accel-Buffering "no" always;
+        send_timeout 3600s;
+        try_files $uri =404;
+    }
     location / { try_files $uri $uri/ =404; }
     location ~ /\. { deny all; }
 }

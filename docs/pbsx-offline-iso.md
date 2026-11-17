@@ -15,6 +15,8 @@ The GitHub repository is private, so its download requires repository access.
 
 Keep the ISO's original filename when checking its checksum. Remove installation
 media after installation completes so the machine boots from its installed disk.
+The public ISO location supports resumable downloads. If a download is
+interrupted, keep its partial file and retry with a client that supports resume.
 
 After installation, open `https://SERVER-IP:8007` and sign in as `root@pam` with
 the password you chose. Normal local backups do not require Internet access.
