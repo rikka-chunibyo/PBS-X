@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 import unittest
 import subprocess
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,10 +16,10 @@ clients = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(clients)
 
 
-def staged(parent, tag, content=b'app fixture'):
+def staged(parent, tag, content=b'app fixture', created_at='2026-11-17T00:00:00+00:00'):
     folder = parent/tag
     folder.mkdir()
-    data = {'schema':1, 'tag':tag, 'host_version':'0.7.0-preview', 'android_version':'0.5.3-preview', 'files':{}}
+    data = {'schema':1, 'tag':tag, 'created_at':created_at, 'host_version':'0.7.0-preview', 'android_version':'0.5.3-preview', 'files':{}}
     for name in sorted(clients.ASSETS):
         (folder/name).write_bytes(content)
         data['files'][name] = {'sha256':clients.digest(folder/name), 'size':len(content)}
@@ -81,6 +82,86 @@ class PublicationTests(unittest.TestCase):
         clients.activate(first, self.public, self.private)
         self.assertEqual(apk.stat().st_ino, inode)
         self.assertEqual((self.public/'index.html').read_text().count('href="/downloads/"'), 1)
+
+    def test_retrying_older_release_keeps_newer_latest(self):
+        first = staged(self.root, 'older-preview')
+        later = staged(self.root, 'newer-preview', created_at='2026-11-18T00:00:00+00:00')
+        clients.activate(first, self.public, self.private)
+        clients.activate(later, self.public, self.private)
+        clients.activate(first, self.public, self.private)
+        self.assertEqual((self.public/'downloads/latest').readlink(), Path('releases/newer-preview'))
+        self.assertTrue((self.public/'downloads/releases/older-preview').is_dir())
+
+    def test_explicit_rollback_can_promote_older_release(self):
+        first = staged(self.root, 'older-preview')
+        later = staged(self.root, 'newer-preview', created_at='2026-11-18T00:00:00+00:00')
+        clients.activate(first, self.public, self.private)
+        clients.activate(later, self.public, self.private)
+        clients.activate(first, self.public, self.private, allow_rollback=True)
+        self.assertEqual((self.public/'downloads/latest').readlink(), Path('releases/older-preview'))
+
+    def test_invalid_timestamp_cannot_change_latest(self):
+        clients.activate(staged(self.root, 'valid-preview'), self.public, self.private)
+        for stamp in ('not a date', '2026-11-18T00:00:00', None):
+            with self.subTest(stamp=stamp):
+                source = staged(self.root, 'invalid-'+str(len(str(stamp))), created_at=stamp)
+                with self.assertRaisesRegex(ValueError, 'creation timestamp'):
+                    clients.activate(source, self.public, self.private)
+                self.assertEqual((self.public/'downloads/latest').readlink(), Path('releases/valid-preview'))
+
+    def test_empty_draft_starter_upload_can_be_removed_for_retry(self):
+        path = self.root/'asset'; path.write_bytes(b'verified file')
+        release = {'draft':True, 'assets':[{'name':'asset', 'state':'starter', 'size':0, 'digest':None, 'id':123}]}
+        with patch.object(clients, 'release_info', return_value=release), patch.object(clients, 'run') as api:
+            self.assertFalse(clients.recover_draft_asset('example/project', 'preview', 'asset', path))
+        api.assert_called_once_with(['gh','api','--method','DELETE','repos/example/project/releases/assets/123'])
+
+    def test_recovery_preserves_published_or_nonempty_or_completed_assets(self):
+        path = self.root/'asset'; path.write_bytes(b'verified file')
+        for draft, state, size, fingerprint in (
+            (False, 'starter', 0, None),
+            (True, 'starter', 5, None),
+            (True, 'uploaded', 0, None),
+            (True, 'starter', 0, 'sha256:'+'0'*64),
+        ):
+            with self.subTest(draft=draft,state=state,size=size,fingerprint=fingerprint):
+                release = {'draft':draft, 'assets':[{'name':'asset','state':state,'size':size,'digest':fingerprint,'id':123}]}
+                with patch.object(clients, 'release_info', return_value=release), patch.object(clients, 'run') as api:
+                    with self.assertRaisesRegex(ValueError, 'asset differs'):
+                        clients.recover_draft_asset('example/project', 'preview', 'asset', path)
+                    api.assert_not_called()
+
+    def test_recovery_rechecks_an_upload_that_has_finished(self):
+        path = self.root/'asset'; path.write_bytes(b'verified file')
+        release = {'draft':False, 'assets':[{'name':'asset','state':'uploaded','size':path.stat().st_size,'digest':'sha256:'+clients.digest(path),'id':123}]}
+        with patch.object(clients, 'release_info', return_value=release), patch.object(clients, 'run') as api:
+            self.assertTrue(clients.recover_draft_asset('example/project', 'preview', 'asset', path))
+            api.assert_not_called()
+
+    def test_publication_retries_failed_asset_then_finishes_without_clobber(self):
+        source = staged(self.root, 'draft-preview')
+        data = json.loads((source/'release.json').read_text())
+        data.update(repository='example/project', publisher_commit='1'*40)
+        (source/'release.json').write_text(json.dumps(data))
+        (source/'SHA256SUMS').write_text(''.join(clients.digest(source/name)+'  '+name+'\n' for name in sorted(clients.ASSETS | {'release.json'})))
+        assets = [{'name':name,'id':index+1,'state':'uploaded','size':(source/name).stat().st_size,'digest':'sha256:'+clients.digest(source/name)} for index,name in enumerate(sorted(clients.PUBLIC_FILES))]
+        assets[0].update(state='starter',size=0,digest=None)
+        release = {'draft':True,'target_commitish':'1'*40,'assets':assets}
+        def execute(args, **kwargs):
+            if args[:3] == ['gh','repo','view']:
+                return 'example/project\n'
+            if args[:3] == ['gh','release','upload']:
+                file = Path(args[4])
+                next(item for item in assets if item['name'] == file.name).update(state='uploaded',size=file.stat().st_size,digest='sha256:'+clients.digest(file))
+            return ''
+        args = SimpleNamespace(output=source,host='root@fixture',identity=None,known_hosts=None,allow_rollback=False)
+        with patch.object(clients,'release_info',return_value=release),patch.object(clients,'run',side_effect=execute) as commands:
+            clients.publish(args)
+        uploads = [call.args[0] for call in commands.call_args_list if call.args[0][:3] == ['gh','release','upload']]
+        self.assertEqual(len(uploads), 1)
+        self.assertEqual(Path(uploads[0][4]).name, 'SHA256SUMS')
+        self.assertNotIn('--clobber', uploads[0])
+        self.assertTrue(any('--draft=false' in call.args[0] for call in commands.call_args_list))
 
     def test_symlinked_asset_cannot_expose_private_file(self):
         source = staged(self.root, 'preview-one')

@@ -1,9 +1,9 @@
 name: Client publication checks
 on:
   push:
-    paths: ['tools/publish-pbsx-clients.py', 'tools/android-build-info.py', 'packaging/client-downloads/**', 'tests/client-publication.test.py', 'pbsx-android/build.sh', '.github/workflows/client-publication.yml']
+    paths: ['tools/publish-pbsx-clients.py', 'tools/android-build-info.py', 'tools/android_source.py', 'packaging/client-downloads/**', 'tests/client-publication.test.py', 'tests/android-source.test.py', 'pbsx-android/core/go.*', 'pbsx-host-agent/third_party/**', 'pbsx-android/build.sh', '.github/workflows/client-publication.yml']
   pull_request:
-    paths: ['tools/publish-pbsx-clients.py', 'tools/android-build-info.py', 'packaging/client-downloads/**', 'tests/client-publication.test.py', 'pbsx-android/build.sh', '.github/workflows/client-publication.yml']
+    paths: ['tools/publish-pbsx-clients.py', 'tools/android-build-info.py', 'tools/android_source.py', 'packaging/client-downloads/**', 'tests/client-publication.test.py', 'tests/android-source.test.py', 'pbsx-android/core/go.*', 'pbsx-host-agent/third_party/**', 'pbsx-android/build.sh', '.github/workflows/client-publication.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -15,4 +15,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Publication corruption, immutable release and activation checks
-        run: python3 tests/client-publication.test.py
+        run: |
+          python3 tests/client-publication.test.py
+          python3 tests/android-source.test.py

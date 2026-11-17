@@ -61,6 +61,54 @@ class RepositoryDefaults(unittest.TestCase):
 
 
 class PackageChecks(unittest.TestCase):
+    def make_deb(self, root, name, version, content='fixture'):
+        source = root/(name+'-'+version+'-'+content)
+        (source/'DEBIAN').mkdir(parents=True)
+        (source/'DEBIAN/control').write_text(f'Package: {name}\nVersion: {version}\nArchitecture: all\nMaintainer: PBS-X <test@invalid>\nDescription: fixture\n')
+        (source/'payload').write_text(content)
+        output = root/(source.name+'.deb')
+        subprocess.run(['dpkg-deb','--root-owner-group','--build',str(source),str(output)],check=True,capture_output=True)
+        return output
+
+    def release_pool(self, root):
+        inputs = root/'inputs'; inputs.mkdir()
+        pool = root/'pool'; pool.mkdir()
+        for name in iso.RELEASE_PACKAGES:
+            version = '1.0.3' if name == 'pbsx-repository' else '4.2.9+pbsx1'
+            source = self.make_deb(inputs, name, version)
+            iso.overlay_packages(pool, [source])
+        return pool, iso.inventory(inputs)
+
+    def test_dependency_overlays_cannot_replace_any_release_package(self):
+        for name in (*iso.RELEASE_PACKAGES, 'pbsx-offline-installer'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                pool, selected = self.release_pool(root)
+                dependency = self.make_deb(root, 'ordinary-runtime', '1.0')
+                replacement = self.make_deb(root, name, '1.0')
+                with self.assertRaisesRegex(ValueError, 'must not replace'):
+                    iso.overlay_dependencies(pool, [dependency, replacement])
+                self.assertNotIn('ordinary-runtime', iso.inventory(pool))
+                iso.verify_release_packages(iso.inventory(pool), selected)
+
+    def test_runtime_dependencies_preserve_the_selected_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pool, selected = self.release_pool(root)
+            packages = iso.overlay_dependencies(pool, [self.make_deb(root, 'ordinary-runtime', '1.0')])
+            self.assertIn('ordinary-runtime', packages)
+            iso.verify_release_packages(packages, selected)
+
+    def test_final_release_check_catches_upstream_or_same_version_replacement(self):
+        for version in ('4.2.0', '4.2.9+pbsx1'):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                pool, selected = self.release_pool(root)
+                replacement = self.make_deb(root, iso.CORE[0], version, 'changed')
+                packages = iso.overlay_packages(pool, [replacement])
+                with self.assertRaisesRegex(ValueError, 'differs from selected input'):
+                    iso.verify_release_packages(packages, selected)
+
     def test_release_mirror_rejects_modified_payload(self):
         with tempfile.TemporaryDirectory() as name:
             path = Path(name)/'modified.deb'

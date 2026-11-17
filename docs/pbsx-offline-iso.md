@@ -68,6 +68,10 @@ python3 tools/build-pbsx-iso.py \
 The local PBS-X package directory must contain the matching three executable
 packages and `pbsx-repository`. Local input authenticity is the operator's
 responsibility. The official base checksum is checked in both modes.
+The dependency directory must contain only runtime dependencies, excluding the
+three PBS-X executable packages, `pbsx-repository` and installer defaults. These
+packages cannot override the selected release. The assembled pool is also
+checked against the exact identities and hashes of all four release inputs.
 
 Every build checks offline dependency closure for BIOS, UEFI and UEFI Secure Boot
 package selections, retains the upstream BIOS/UEFI boot equipment, then extracts

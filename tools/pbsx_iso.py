@@ -15,6 +15,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = json.loads((ROOT/'packaging/iso/base.json').read_text())
 CORE = ('proxmox-backup-server', 'proxmox-backup-client', 'proxmox-backup-file-restore')
+RELEASE_PACKAGES = (*CORE, 'pbsx-repository')
 
 
 def run(args, **kwargs):
@@ -85,6 +86,26 @@ def overlay_packages(directory, additions):
         shutil.copy2(source, destination)
         before[name] = (destination, fields)
     return before
+
+
+def overlay_dependencies(directory, additions):
+    additions = list(additions)
+    for source in additions:
+        name = package(source)['Package']
+        if name in (*RELEASE_PACKAGES, 'pbsx-offline-installer'):
+            raise ValueError('dependency packages must not replace PBS-X release packages: '+name)
+    return overlay_packages(directory, additions)
+
+
+def verify_release_packages(packages, selected):
+    """Keep the exact authenticated release inputs throughout pool assembly."""
+    for name in RELEASE_PACKAGES:
+        if name not in packages or name not in selected:
+            raise ValueError('missing final PBS-X release package: '+name)
+        path, fields = packages[name]
+        expected_path, expected_fields = selected[name]
+        if any(fields[key] != expected_fields[key] for key in ('Package', 'Version', 'Architecture')) or sha256(path) != sha256(expected_path):
+            raise ValueError('final PBS-X release package differs from selected input: '+name)
 
 
 def download(url, path, limit=2 << 30):

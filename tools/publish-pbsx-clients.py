@@ -115,6 +115,7 @@ def validate_publication(path):
     for key in ('host_version', 'android_version'):
         if not re.fullmatch(SEMVER, data.get(key, '')):
             raise ValueError('invalid client version')
+    release_time(data)
     for name, expected in data['files'].items():
         file = path/name
         regular(file)
@@ -127,6 +128,28 @@ def validate_publication(path):
     if (path/'SHA256SUMS').read_text() != expected:
         raise ValueError('release checksum index mismatch')
     return data
+
+
+def release_time(data):
+    try:
+        timestamp = datetime.datetime.fromisoformat(data['created_at'])
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError('release timestamp must include a timezone')
+        return timestamp
+    except (KeyError, TypeError, ValueError):
+        raise ValueError('invalid release creation timestamp') from None
+
+
+def validate_android_build(info, apk):
+    # Kept local to the prepare path: the remote activator is standalone.
+    from android_source import source_snapshot
+    current = source_snapshot(ROOT)
+    if info.get('schema') != 2 or info.get('dirty') is not False or current['dirty'] or info.get('source_inputs') != current['source_inputs']:
+        raise ValueError('Android build is dirty or stale; run pbsx-android/build.sh')
+    required = {'go-tests', 'android-unit-tests', 'lint', 'apk-signature', '16k-alignment', 'non-debuggable'}
+    certificate = (ROOT/'packaging/client-downloads/android-preview-certificate.sha256').read_text().strip()
+    if info.get('variant') != 'release' or info.get('debuggable') is not False or set(info.get('checks', [])) != required or info.get('certificate_sha256') != certificate or info.get('sha256') != digest(apk) or info.get('size') != apk.stat().st_size:
+        raise ValueError('Android build verification does not match the APK')
 
 
 def prepare(args, linux, windows, run_info):
@@ -142,12 +165,8 @@ def prepare(args, linux, windows, run_info):
     run(['git', 'diff', '--exit-code', run_info['head_sha'], 'HEAD', '--', 'pbsx-host-agent', 'packaging/host-app', 'tools/build-host-app.py'], cwd=ROOT)
     info = json.loads((ROOT/'pbsx-android/artifacts/build-info.json').read_text())
     apk = ROOT/'pbsx-android/artifacts/pbsx-android-preview.apk'
-    if info.get('dirty') is not False or info.get('source_tree') != run(['git', 'rev-parse', 'HEAD:pbsx-android'], cwd=ROOT).strip():
-        raise ValueError('Android build is dirty or stale; run pbsx-android/build.sh')
-    required = {'go-tests', 'android-unit-tests', 'lint', 'apk-signature', '16k-alignment', 'non-debuggable'}
-    certificate = (ROOT/'packaging/client-downloads/android-preview-certificate.sha256').read_text().strip()
-    if info.get('variant') != 'release' or info.get('debuggable') is not False or set(info.get('checks', [])) != required or info.get('certificate_sha256') != certificate or info.get('sha256') != digest(apk) or info.get('size') != apk.stat().st_size:
-        raise ValueError('Android build verification does not match the APK')
+    validate_android_build(info, apk)
+    certificate = info['certificate_sha256']
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.pbsx-clients-', dir=args.output.parent) as name:
         work = Path(name)
@@ -161,6 +180,7 @@ def prepare(args, linux, windows, run_info):
             'host_version':linux['version'], 'host_source_commit':linux['source_commit'],
             'android_version':info['version'], 'android_version_code':info['version_code'],
             'android_source_commit':info['source_commit'], 'android_certificate_sha256':certificate,
+            'android_source_inputs':info['source_inputs'],
             'ci_run_id':run_info['id'], 'ci_run_url':run_info['html_url'],
             'files':{name:{'sha256':digest(work/name),'size':(work/name).stat().st_size} for name in sorted(ASSETS)},
         }
@@ -200,7 +220,7 @@ def atomic_text(path, text, mode=0o644):
         Path(name).unlink(missing_ok=True)
 
 
-def activate(staging, public, private):
+def activate(staging, public, private, allow_rollback=False):
     data = validate_publication(staging)
     private.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (private/'client-publish.lock').open('a') as lock:
@@ -212,6 +232,16 @@ def activate(staging, public, private):
         releases.mkdir(parents=True, exist_ok=True, mode=0o755)
         downloads.chmod(0o755)
         releases.chmod(0o755)
+        latest = downloads/'latest'
+        promote = True
+        if os.path.lexists(latest):
+            if not latest.is_symlink():
+                raise ValueError('latest is not a managed symlink')
+            target = latest.readlink()
+            if len(target.parts) != 2 or target.parts[0] != 'releases' or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', target.parts[1]) or (downloads/target).is_symlink():
+                raise ValueError('latest points outside a managed release')
+            current = validate_publication(latest)
+            promote = current['tag'] != data['tag'] and (allow_rollback or release_time(data) > release_time(current))
         destination = releases/data['tag']
         if destination.exists() or destination.is_symlink():
             if destination.is_symlink() or (destination/'release.json').read_bytes() != (staging/'release.json').read_bytes():
@@ -228,15 +258,13 @@ def activate(staging, public, private):
                 (work/'index.html').chmod(0o644)
                 work.chmod(0o755)
                 os.rename(work, destination)
-        latest = downloads/'latest'
-        if os.path.lexists(latest) and not latest.is_symlink():
-            raise ValueError('latest is not a managed symlink')
-        link = downloads/('.latest-'+uuid.uuid4().hex)
-        try:
-            link.symlink_to('releases/'+data['tag'])
-            os.replace(link, latest)
-        finally:
-            link.unlink(missing_ok=True)
+        if promote:
+            link = downloads/('.latest-'+uuid.uuid4().hex)
+            try:
+                link.symlink_to('releases/'+data['tag'])
+                os.replace(link, latest)
+            finally:
+                link.unlink(missing_ok=True)
         atomic_text(downloads/'index.html', '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=latest/"><title>PBS-X apps</title><a href="latest/">PBS-X app downloads</a>\n')
         index = public/'index.html'
         if index.exists():
@@ -267,6 +295,31 @@ def release_info(repository, tag):
     return json.loads(run(['gh', 'api', 'repos/'+repository+'/releases/'+identifier]))
 
 
+def asset_matches(asset, path):
+    return asset.get('state') == 'uploaded' and asset.get('size') == path.stat().st_size and asset.get('digest') == 'sha256:'+digest(path)
+
+
+def recover_draft_asset(repository, tag, name, path):
+    """Recheck state before deleting only a failed, empty draft upload."""
+    release = release_info(repository, tag)
+    if release is None:
+        raise ValueError('GitHub release disappeared while retrying the upload')
+    asset = next((item for item in release['assets'] if item['name'] == name), None)
+    if asset is None:
+        return False
+    if asset_matches(asset, path):
+        return True
+    empty_digests = (None, '', 'sha256:'+hashlib.sha256(b'').hexdigest())
+    if not release['draft'] or asset.get('state') != 'starter' or asset.get('size') != 0 or asset.get('digest') not in empty_digests:
+        raise ValueError('existing GitHub asset differs: '+name)
+    identifier = asset.get('id')
+    if type(identifier) is not int or identifier <= 0:
+        raise ValueError('invalid incomplete GitHub asset identifier')
+    run(['gh', 'api', '--method', 'DELETE', 'repos/'+repository+'/releases/assets/'+str(identifier)])
+    print('Removed incomplete draft upload:', name, flush=True)
+    return False
+
+
 def publish(args):
     data = validate_publication(args.output)
     if not re.fullmatch(r'[A-Za-z0-9_.@-]+', args.host) or args.host.startswith('-'):
@@ -290,10 +343,11 @@ def publish(args):
         file = args.output/name
         if name in assets:
             asset = assets[name]
-            if asset.get('state') != 'uploaded' or asset['size'] != file.stat().st_size or asset.get('digest') != 'sha256:'+digest(file):
-                raise ValueError('existing GitHub asset differs: '+name)
-        else:
-            run(['gh', 'release', 'upload', data['tag'], file, '--repo', repository])
+            if asset_matches(asset, file):
+                continue
+            if recover_draft_asset(repository, data['tag'], name, file):
+                continue
+        run(['gh', 'release', 'upload', data['tag'], file, '--repo', repository])
     assets = {asset['name']:asset for asset in release_info(repository, data['tag'])['assets']}
     for name in PUBLIC_FILES:
         if assets[name].get('digest') != 'sha256:'+digest(args.output/name):
@@ -307,7 +361,10 @@ def publish(args):
     print('Staging verified public downloads...', flush=True)
     run(['ssh', *options, args.host, shlex.join(['install', '-d', '-m', '0700', staging])])
     run(['scp', *options, *[str(args.output/name) for name in sorted(PUBLIC_FILES)], __file__, args.host+':'+staging+'/'])
-    print(run(['ssh', *options, args.host, shlex.join(['python3', staging+'/'+Path(__file__).name, 'activate', '--staging', staging])]).strip())
+    activation = ['python3', staging+'/'+Path(__file__).name, 'activate', '--staging', staging]
+    if args.allow_rollback:
+        activation.append('--allow-rollback')
+    print(run(['ssh', *options, args.host, shlex.join(activation)]).strip())
     run(['gh', 'release', 'edit', data['tag'], '--repo', repository, '--draft=false'])
     print('Published:', 'https://pbsx.rikka.ca/downloads/')
     print('GitHub:', 'https://github.com/'+repository+'/releases/tag/'+data['tag'])
@@ -355,16 +412,19 @@ if __name__ == '__main__':
             sub.add_argument('--host', required=True)
             sub.add_argument('--identity', type=Path)
             sub.add_argument('--known-hosts', type=Path)
+            sub.add_argument('--allow-rollback', action='store_true', help='explicitly promote an older public release')
     sub = commands.add_parser('activate')
     sub.add_argument('--staging', type=Path, required=True)
+    sub.add_argument('--allow-rollback', action='store_true')
     args = parser.parse_args()
     try:
         if args.command == 'activate':
             allowed = Path('/srv/pbs-x-apt/incoming/clients')
             if os.geteuid() != 0 or socket.gethostname() != 'pbs-x-apt' or args.staging.resolve().parent != allowed:
                 raise ValueError('activation requires a private PBS-X repository-host staging directory')
-            data = activate(args.staging.resolve(), Path('/srv/pbs-x-apt/public'), Path('/var/lib/pbs-x-apt/release'))
-            print('Activated public client release:', data['tag'])
+            public = Path('/srv/pbs-x-apt/public')
+            data = activate(args.staging.resolve(), public, Path('/var/lib/pbs-x-apt/release'), args.allow_rollback)
+            print('Published public client release:', data['tag'], '; current latest:', (public/'downloads/latest').readlink().name)
         elif args.command == 'publish':
             publish(args)
         else:

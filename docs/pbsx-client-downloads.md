@@ -69,7 +69,12 @@ manifests, executable architectures, shared version and source commit, and
 refuses stale application source. It builds Android using the normal Go/Gradle
 checks, then verifies its signature, pinned certificate, universal ABIs and
 16 KB alignment. An already verified current Android build can be reused by
-omitting `--build-android`.
+omitting `--build-android`. Reuse verifies the Android tree and every local Go
+replacement module, including the shared PXAR implementation. Older build-info
+records without these input hashes require one rebuild. The builder captures
+source inputs before compilation and rejects input changes detected afterward;
+workspace overrides are disabled so resolution follows the core module's
+committed `go.mod`.
 
 Only allowlisted binaries, installers, manifests and generated instructions enter
 the desktop archives. Android settings, credentials, local keystores and device
@@ -87,12 +92,21 @@ For separate review and publication, use `prepare` with the run/tag/output
 arguments first, then `publish --output DIRECTORY --host HOST` with the SSH
 options. Retry a failed publication using `publish` against the same directory.
 Matching uploaded assets can be reused; conflicting assets or a changed existing
-release tag are rejected. Keep old releases for rollback. To rebuild different
-bytes, choose a new tag; published release directories are never overwritten.
+release tag are rejected. A failed zero-byte `starter` upload in a draft is
+rechecked and removed before retrying; completed assets and non-draft releases
+are preserved.
+
+Activation compares timezone-aware release creation times while holding the
+publication lock. Retrying an older release keeps a newer `latest` link in
+place, while retaining the older immutable files and finishing its GitHub
+publication. For a deliberate rollback, pass `--allow-rollback` to `publish`
+with the existing release directory. To rebuild different bytes, choose a new
+tag; published release directories are never overwritten.
 
 `.github/workflows/client-publication.yml` checks corruption rejection, safe
 activation, immutable releases, retry behavior, private-file exclusion, traversal
-and symlink rejection, and Linux archive permissions. It has read-only repository
+and symlink rejection, Linux archive permissions, and Android source freshness.
+It has read-only repository
 permissions; publication itself remains an explicit maintainer command.
 
 See [the first client release validation](client-release-validation.md) for the

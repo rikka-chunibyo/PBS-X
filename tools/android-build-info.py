@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Verify the preview APK and record build provenance without exporting its key."""
 import hashlib
+import argparse
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import zipfile
+
+from android_source import source_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,8 +18,15 @@ def run(*args):
     return subprocess.check_output(args, cwd=ROOT, text=True, stderr=subprocess.PIPE)
 
 
-def main():
+def main(args):
     app = ROOT/'pbsx-android'
+    if args.capture_source:
+        args.capture_source.write_text(json.dumps(source_snapshot(ROOT), indent=2)+'\n')
+        return
+    before = json.loads(args.source_record.read_text())
+    after = source_snapshot(ROOT)
+    if before['source_inputs'] != after['source_inputs'] or before['dirty'] != after['dirty']:
+        raise ValueError('Android source inputs changed during the build; rebuild before publishing')
     apk = app/'artifacts/pbsx-android-preview.apk'
     sdk = Path(os.environ.get('ANDROID_HOME', app/'.tools/sdk'))
     build_tools = sdk/'build-tools/36.0.0'
@@ -38,12 +48,12 @@ def main():
     if abis != ['arm64-v8a', 'x86_64']:
         raise ValueError('unexpected APK architectures')
     info = {
-        'schema': 1, 'version': item['versionName'], 'version_code': item['versionCode'],
+        'schema': 2, 'version': item['versionName'], 'version_code': item['versionCode'],
         'application_id': metadata['applicationId'], 'architectures': abis,
         'variant': 'release', 'debuggable': False,
-        'source_commit': run('git', 'rev-parse', 'HEAD').strip(),
-        'source_tree': run('git', 'rev-parse', 'HEAD:pbsx-android').strip(),
-        'dirty': bool(run('git', 'status', '--porcelain', '--', 'pbsx-android').strip()),
+        'source_commit': before['source_commit'],
+        'source_tree': before['source_inputs']['pbsx-android'],
+        'source_inputs': before['source_inputs'], 'dirty': before['dirty'],
         'certificate_sha256': expected, 'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
         'size': apk.stat().st_size,
         'checks': ['go-tests', 'android-unit-tests', 'lint', 'apk-signature', '16k-alignment', 'non-debuggable'],
@@ -53,4 +63,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--capture-source', type=Path)
+    parser.add_argument('--source-record', type=Path, default=ROOT/'pbsx-android/artifacts/build-source.json')
+    main(parser.parse_args())

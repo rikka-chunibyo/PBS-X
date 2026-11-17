@@ -67,7 +67,8 @@ def build(args):
             additions = [item[0] for item in iso.inventory(dependencies).values()]
         else:
             additions = iso.resolve_dependencies(base_status, packages, dependencies)
-        packages = iso.overlay_packages(pool, additions)
+        packages = iso.overlay_dependencies(pool, additions)
+        iso.verify_release_packages(packages, selected)
         iso.check_closure(base_status, packages)
         source = iso.run(['git', 'rev-parse', 'HEAD'], cwd=iso.ROOT).stdout.strip() if (iso.ROOT/'.git').exists() else None
         dirty = bool(iso.run(['git', 'status', '--porcelain'], cwd=iso.ROOT).stdout) if source else None
@@ -85,6 +86,7 @@ def build(args):
         }
         defaults = iso.build_defaults_package(work/'defaults', manifest)
         packages = iso.overlay_packages(pool, [defaults])
+        iso.verify_release_packages(packages, selected)
         iso.check_closure(base_status, packages)
         manifest['packages'].append({'name': 'pbsx-offline-installer', 'version': '1.0.0', 'filename': defaults.name,
                                      'sha256': iso.sha256(defaults), 'size': defaults.stat().st_size})
