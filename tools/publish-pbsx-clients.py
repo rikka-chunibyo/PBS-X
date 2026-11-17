@@ -253,6 +253,20 @@ def activate(staging, public, private):
     return data
 
 
+def release_info(repository, tag):
+    # Unpublished draft tags do not resolve through GET /releases/tags/TAG.
+    # gh handles draft discovery; use its numeric release ID for asset queries.
+    view = subprocess.run(['gh', 'release', 'view', tag, '--repo', repository, '--json', 'apiUrl'], text=True, capture_output=True)
+    if view.returncode:
+        if 'not found' in view.stderr.lower():
+            return None
+        raise ValueError('cannot read release: '+view.stderr)
+    identifier = json.loads(view.stdout)['apiUrl'].rsplit('/', 1)[-1]
+    if not identifier.isdecimal():
+        raise ValueError('invalid GitHub release identifier')
+    return json.loads(run(['gh', 'api', 'repos/'+repository+'/releases/'+identifier]))
+
+
 def publish(args):
     data = validate_publication(args.output)
     if not re.fullmatch(r'[A-Za-z0-9_.@-]+', args.host) or args.host.startswith('-'):
@@ -260,15 +274,16 @@ def publish(args):
     repository = run(['gh', 'repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], cwd=ROOT).strip()
     if data['repository'] != repository:
         raise ValueError('release belongs to a different repository')
-    api = ['gh', 'api', 'repos/'+repository+'/releases/tags/'+data['tag']]
-    existing = subprocess.run(api, text=True, capture_output=True)
-    if existing.returncode:
-        if '404' not in existing.stderr:
-            raise ValueError('cannot read release: '+existing.stderr)
+    release = release_info(repository, data['tag'])
+    if release is None:
         notes = args.output.parent/(data['tag']+'.notes.md')
         notes.write_text('PBS-X client previews: Windows/Linux '+data['host_version']+', Android '+data['android_version']+'.\n\nDesktop bundles include the background agent, native window, CLI, manifest and installer. Android retains its established preview signing certificate. Installation instructions and public downloads: https://pbsx.rikka.ca/downloads/ .\n\nVerified native build: '+data['ci_run_url']+'\n\nSHA256SUMS and release.json record file integrity and source provenance. These previews do not enable automatic client updates.\n')
         run(['gh', 'release', 'create', data['tag'], '--repo', repository, '--target', data['publisher_commit'], '--draft', '--prerelease', '--title', 'PBS-X client previews — '+data['host_version'], '--notes-file', notes])
-    release = json.loads(run(api))
+        release = release_info(repository, data['tag'])
+    if release['draft'] and release['target_commitish'] != data['publisher_commit']:
+        if release['assets']:
+            raise ValueError('draft already contains assets from another source; retry the original publication')
+        run(['gh', 'release', 'edit', data['tag'], '--repo', repository, '--target', data['publisher_commit']])
     assets = {asset['name']:asset for asset in release['assets']}
     print('Uploading and verifying GitHub release assets...', flush=True)
     for name in sorted(PUBLIC_FILES):
@@ -279,7 +294,7 @@ def publish(args):
                 raise ValueError('existing GitHub asset differs: '+name)
         else:
             run(['gh', 'release', 'upload', data['tag'], file, '--repo', repository])
-    assets = {asset['name']:asset for asset in json.loads(run(api))['assets']}
+    assets = {asset['name']:asset for asset in release_info(repository, data['tag'])['assets']}
     for name in PUBLIC_FILES:
         if assets[name].get('digest') != 'sha256:'+digest(args.output/name):
             raise ValueError('GitHub upload digest mismatch: '+name)

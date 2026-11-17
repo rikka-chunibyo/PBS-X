@@ -6,6 +6,8 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import subprocess
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('clients', ROOT/'tools/publish-pbsx-clients.py')
@@ -45,6 +47,13 @@ class PublicationTests(unittest.TestCase):
         self.assertIn('/downloads/', (self.public/'index.html').read_text())
         self.assertEqual((destination/'pbsx-android.apk').stat().st_mode & 0o777, 0o644)
         self.assertEqual(destination.stat().st_mode & 0o777, 0o755)
+
+    def test_draft_lookup_uses_release_id_before_a_tag_exists(self):
+        view = subprocess.CompletedProcess([], 0, json.dumps({'apiUrl':'https://api.github.com/repos/example/project/releases/123'}), '')
+        with patch.object(clients.subprocess, 'run', return_value=view), patch.object(clients, 'run', return_value='{"draft":true,"assets":[]}') as api:
+            result = clients.release_info('example/project', 'unpublished-preview')
+        self.assertTrue(result['draft'])
+        api.assert_called_once_with(['gh','api','repos/example/project/releases/123'])
 
     def test_corrupt_release_does_not_change_latest(self):
         clients.activate(staged(self.root, 'preview-one'), self.public, self.private)
