@@ -46,6 +46,23 @@ jobs:
           persist-credentials: false
       - name: Install image tools
         run: sudo apt-get update && sudo apt-get install -y xorriso squashfs-tools debian-archive-keyring gnupg curl
+      - name: Check public feed connectivity
+        run: |
+          if ! curl --fail-with-body --silent --show-error --max-time 30 \
+            --dump-header "$RUNNER_TEMP/feed.headers" --output "$RUNNER_TEMP/feed.response" \
+            https://pbsx.rikka.ca/apt/dists/trixie/InRelease; then
+            python3 - <<'PYCODE'
+          import os, pathlib, re
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          for line in (root/'feed.headers').read_text().splitlines():
+              if line.lower().startswith(('http/', 'server:', 'cf-mitigated:', 'cf-cache-status:', 'x-served-by:')):
+                  print(line)
+          title = re.search(r'<title>(.*?)</title>', (root/'feed.response').read_text(), re.I | re.S)
+          if title:
+              print('Public endpoint response:', title.group(1).strip()[:160])
+          PYCODE
+            exit 1
+          fi
       - name: Build from verified upstream media and signed package repositories
         env:
           PBSX_VERSION: ${{ inputs.version }}
