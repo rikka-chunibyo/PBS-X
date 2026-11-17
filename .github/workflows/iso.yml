@@ -64,6 +64,8 @@ jobs:
         env:
           PBSX_VERSION: ${{ inputs.version }}
         run: |
+          # The checkout is owned by the runner UID; this build container is root.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           args=()
           if [ -n "$PBSX_VERSION" ]; then args+=(--version "$PBSX_VERSION"); fi
           python3 tools/build-pbsx-iso.py --packages-dir artifacts/iso/inputs --output artifacts/iso/pbsx-offline-amd64.iso "${args[@]}"
