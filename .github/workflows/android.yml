@@ -77,17 +77,24 @@ jobs:
       # an NDK download competing with its system image for disk space.
       - name: Exercise SAF restores on a disposable Android 13 emulator
         run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-33;google_apis;x86_64'
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-33;aosp_atd;x86_64'
           export ANDROID_USER_HOME="$RUNNER_TEMP/android-user"
           export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
           mkdir -p "$ANDROID_AVD_HOME"
-          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd --force --name pbsx-ci --path "$ANDROID_AVD_HOME/pbsx-ci.avd" --package 'system-images;android-33;google_apis;x86_64'
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd --force --name pbsx-ci --path "$ANDROID_AVD_HOME/pbsx-ci.avd" --package 'system-images;android-33;aosp_atd;x86_64'
           test -s "$ANDROID_AVD_HOME/pbsx-ci.ini"
+          python3 - "$ANDROID_AVD_HOME/pbsx-ci.avd/config.ini" <<'PY'
+          import pathlib, sys
+          config = pathlib.Path(sys.argv[1])
+          sizes = {'disk.dataPartition.size': '1536M', 'disk.cachePartition.size': '64M', 'hw.sdCard': 'no'}
+          lines = [line for line in config.read_text().splitlines() if line.split('=', 1)[0].strip() not in sizes]
+          config.write_text('\n'.join(lines + [key+'='+value for key,value in sizes.items()])+'\n')
+          PY
           "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx pbsx-ci
           sudo chown "$USER" /dev/kvm
           adb="$ANDROID_HOME/platform-tools/adb"
           export ANDROID_SERIAL=emulator-5554
-          "$ANDROID_HOME/emulator/emulator" -avd pbsx-ci -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -accel on -memory 2048 -cores 2 > "$RUNNER_TEMP/pbsx-emulator.log" 2>&1 &
+          "$ANDROID_HOME/emulator/emulator" -avd pbsx-ci -port 5554 -no-metrics -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -accel on -memory 2048 -cores 2 > "$RUNNER_TEMP/pbsx-emulator.log" 2>&1 &
           emulator_pid=$!
           trap '"$adb" -s emulator-5554 emu kill >/dev/null 2>&1 || true' EXIT
           device=
