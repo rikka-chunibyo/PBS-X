@@ -137,6 +137,18 @@ class BundleChecks(unittest.TestCase):
             libc.assert_not_called()
             load.assert_not_called()
 
+    def test_incompatible_desktop_fails_before_installation_paths_or_service_changes(self):
+        desktop = self.root/'pbsx-desktop'
+        desktop.write_bytes(self.files['pbsx-agent'])
+        self.manifest['files']['pbsx-desktop'] = {'size': desktop.stat().st_size, 'sha256': hashlib.sha256(desktop.read_bytes()).hexdigest()}
+        self.manifest['desktop_runtime'] = self.desktop()['desktop_runtime']
+        self.write_manifest()
+        with patch.object(installer.os, 'geteuid', return_value=0), patch.object(installer.os, 'umask'), patch.object(installer.platform, 'system', return_value='Linux'), patch.object(installer.platform, 'machine', return_value='x86_64'), patch.object(installer.shutil, 'which', return_value='/fixture/systemctl'), patch.object(installer.os, 'confstr', return_value='glibc 2.36'), patch.object(installer, 'root_directory') as directories, patch.object(installer, 'command') as commands:
+            with self.assertRaisesRegex(ValueError, 'requires glibc'):
+                installer.install(self.root, headless=False)
+            directories.assert_not_called()
+            commands.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

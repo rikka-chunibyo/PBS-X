@@ -47,6 +47,34 @@ jobs:
           "$(go env GOPATH)/bin/gomobile" bind -target=android/arm64,android/amd64 -androidapi 26 -javapkg com.pbsx.core -o ../app/libs/mobilecore.aar ./mobilecore
       - name: Compile both app variants, run Java tests and lint
         run: bash ./gradlew --no-daemon --max-workers=2 --console=plain :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:lintRelease
+      # These two debug-signed APKs are short-lived instrumentation fixtures,
+      # never preview downloads. The pinned maintainer signer stays out of CI.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: android-provider-test-apks
+          path: |
+            pbsx-android/app/build/outputs/apk/debug/app-debug.apk
+            pbsx-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: android-check-reports
+          path: |
+            pbsx-android/app/build/reports
+            pbsx-android/app/build/test-results
+          retention-days: 14
+  provider:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: android-provider-test-apks
+          path: fixtures
+      # The emulator uses a clean runner, without native compilation caches or
+      # an NDK download competing with its system image for disk space.
       - name: Exercise SAF restores on a disposable Android 13 emulator
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-33;google_apis;x86_64'
@@ -65,15 +93,21 @@ jobs:
           done
           test "$booted" = 1
           "$adb" -s emulator-5554 shell input keyevent 82
-          bash ./gradlew --no-daemon --max-workers=2 --console=plain :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.pbsx.android.DocumentsTest
-      # CI uses its own disposable debug certificate. Only test reports leave
-      # this runner; installable previews retain the maintainer's pinned signer.
+          "$adb" -s emulator-5554 install -r -t fixtures/debug/app-debug.apk
+          "$adb" -s emulator-5554 install -r -t fixtures/androidTest/debug/app-debug-androidTest.apk
+          "$adb" -s emulator-5554 shell am instrument -w -r -e class com.pbsx.android.DocumentsTest com.pbsx.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/pbsx-instrumentation.log"
+          python3 - "$RUNNER_TEMP/pbsx-instrumentation.log" <<'PY'
+          import pathlib, re, sys
+          output = pathlib.Path(sys.argv[1]).read_text()
+          match = re.search(r'OK \((\d+) tests?\)', output)
+          if not match or int(match[1]) < 2 or 'FAILURES!!!' in output or 'INSTRUMENTATION_FAILED' in output:
+              sys.exit('SAF instrumentation did not report successful completion of both tests')
+          PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
-          name: android-check-reports
+          name: android-provider-reports
           path: |
-            pbsx-android/app/build/reports
-            pbsx-android/app/build/test-results
             ${{ runner.temp }}/pbsx-emulator.log
+            ${{ runner.temp }}/pbsx-instrumentation.log
           retention-days: 14
