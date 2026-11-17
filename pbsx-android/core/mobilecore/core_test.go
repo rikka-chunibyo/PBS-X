@@ -99,9 +99,21 @@ func (d *fsDocuments) InspectJSON(p string) (string, error) {
 	out, err := json.Marshal(e)
 	return string(out), err
 }
-func (d *fsDocuments) OpenReplace(p string) (int64, error) {
-	fd, err := syscall.Open(d.full(p), syscall.O_WRONLY|syscall.O_TRUNC, 0600)
-	return int64(fd), err
+func (d *fsDocuments) CommitFile(temporary, p string, replace bool) error {
+	if replace {
+		return os.Rename(d.full(temporary), d.full(p))
+	}
+	if err := os.Link(d.full(temporary), d.full(p)); err != nil {
+		return err
+	}
+	return os.Remove(d.full(temporary))
+}
+func (d *fsDocuments) DeleteFile(p string) error {
+	err := os.Remove(d.full(p))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 func (d *fsDocuments) MakeDirectory(p string) error { return os.Mkdir(d.full(p), 0700) }
 

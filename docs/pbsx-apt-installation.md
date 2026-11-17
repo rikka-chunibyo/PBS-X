@@ -77,7 +77,13 @@ schedule updates while clients and scheduled tasks are idle.
 
 On LXC116, `/usr/local/sbin/pbsx-apt-repository` signs/publishes packages using
 private state under `/var/lib/pbs-x-apt/release` (mode `0700`), outside the web root.
-It permits only the expected package names. The `pbsx-apt-refresh.timer` runs daily
+It permits only the expected package names. Publishing any core executable
+requires exactly one each of server, client and file-restore at the same PBS-X
+version. Repository-support-only updates remain allowed. Run
+`bash tools/pbsx-apt-repository.sh --check-release BUNDLE_DIRECTORY` on the build
+machine for the same read-only checks before publication; publication repeats
+them before changing repository state.
+The `pbsx-apt-refresh.timer` runs daily
 to refresh the signed metadata's 14-day validity. Monitor that service and disk
 space. Unreferenced package payloads are retained for clients with cached indexes;
 retention cleanup must preserve supported rollback artifacts.

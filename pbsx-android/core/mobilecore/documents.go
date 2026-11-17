@@ -31,7 +31,11 @@ type Documents interface {
 	// InspectJSON reports {exists:false} for a missing destination. Permission
 	// and provider failures must return errors, never masquerade as absence.
 	InspectJSON(relative string) (string, error)
-	OpenReplace(relative string) (int64, error)
+	// CommitFile promotes a completed sibling temporary file. Replacement must
+	// preserve the old file on failure; new files must not overwrite a conflict.
+	CommitFile(temporary, relative string, replace bool) error
+	// DeleteFile removes only a regular file, and succeeds if already absent.
+	DeleteFile(relative string) error
 }
 
 type Progress interface {

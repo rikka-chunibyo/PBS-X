@@ -1,9 +1,9 @@
 name: Client publication checks
 on:
   push:
-    paths: ['tools/publish-pbsx-clients.py', 'tools/android-build-info.py', 'tools/android_source.py', 'packaging/client-downloads/**', 'tests/client-publication.test.py', 'tests/android-source.test.py', 'pbsx-android/core/go.*', 'pbsx-host-agent/third_party/**', 'pbsx-android/build.sh', '.github/workflows/client-publication.yml']
+    paths: ['tools/publish-pbsx-clients.py', 'tools/android-build-info.py', 'tools/android_source.py', 'tools/pbsx-apt-repository.sh', 'packaging/client-downloads/**', 'tests/client-publication.test.py', 'tests/android-source.test.py', 'tests/apt-publication.test.py', 'pbsx-android/core/**', 'pbsx-android/app/src/main/java/com/pbsx/android/RestoreCommit.java', 'pbsx-android/app/src/test/java/com/pbsx/android/RestoreCommitTest.java', 'pbsx-host-agent/third_party/**', 'pbsx-android/build.sh', '.github/workflows/client-publication.yml']
   pull_request:
-    paths: ['tools/publish-pbsx-clients.py', 'tools/android-build-info.py', 'tools/android_source.py', 'packaging/client-downloads/**', 'tests/client-publication.test.py', 'tests/android-source.test.py', 'pbsx-android/core/go.*', 'pbsx-host-agent/third_party/**', 'pbsx-android/build.sh', '.github/workflows/client-publication.yml']
+    paths: ['tools/publish-pbsx-clients.py', 'tools/android-build-info.py', 'tools/android_source.py', 'tools/pbsx-apt-repository.sh', 'packaging/client-downloads/**', 'tests/client-publication.test.py', 'tests/android-source.test.py', 'tests/apt-publication.test.py', 'pbsx-android/core/**', 'pbsx-android/app/src/main/java/com/pbsx/android/RestoreCommit.java', 'pbsx-android/app/src/test/java/com/pbsx/android/RestoreCommitTest.java', 'pbsx-host-agent/third_party/**', 'pbsx-android/build.sh', '.github/workflows/client-publication.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -18,3 +18,20 @@ jobs:
         run: |
           python3 tests/client-publication.test.py
           python3 tests/android-source.test.py
+          python3 tests/apt-publication.test.py
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: pbsx-android/core/go.mod
+          cache-dependency-path: pbsx-android/core/go.sum
+      - name: Android streaming restore and core regression tests
+        working-directory: pbsx-android/core
+        env:
+          GOWORK: 'off'
+        run: go test -race -timeout 5m ./...
+      - name: SAF promotion and rollback regression tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y junit4
+          mkdir -p "$RUNNER_TEMP/restore-tests"
+          javac --release 17 -d "$RUNNER_TEMP/restore-tests" -cp '/usr/share/java/*' pbsx-android/app/src/main/java/com/pbsx/android/RestoreCommit.java pbsx-android/app/src/test/java/com/pbsx/android/RestoreCommitTest.java
+          java -cp "$RUNNER_TEMP/restore-tests:/usr/share/java/*" org.junit.runner.JUnitCore com.pbsx.android.RestoreCommitTest

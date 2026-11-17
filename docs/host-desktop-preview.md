@@ -49,8 +49,14 @@ and `pbsx-agentctl` are always built with CGO disabled. All executables in a bun
 receive the same version; its manifest records file hashes, lengths, source
 commit, dirty-tree state and Go version. Build on the oldest supported Linux
 userspace for desktop distribution; the service and CLI are static executables.
-The local Linux desktop build requires glibc 2.38 or newer and the corresponding
-system graphics libraries. Its Windows desktop imports only Windows system DLLs.
+The builder reads the Linux desktop's actual versioned glibc symbols and shared
+library dependencies with `readelf`, recording them as `desktop_runtime` in its
+manifest. Both installer check mode and installation verify this requirement
+against the current system before touching services or installed files. The
+current preview requires glibc 2.38 or newer and its graphics libraries; future
+builds report their own minimum. Legacy desktop bundles without runtime metadata
+need rebuilding. `--headless` bypasses desktop requirements for the static CLI
+and service. The Windows desktop imports only Windows system DLLs.
 
 ## Install a trusted local bundle
 

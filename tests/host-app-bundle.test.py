@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('pbsx_installer', Path(__file__).resolve().parents[1]/'packaging/host-app/install.py')
 installer = importlib.util.module_from_spec(spec)
@@ -98,6 +99,43 @@ class BundleChecks(unittest.TestCase):
         installer.atomic_copy(self.root/'pbsx-agent', target)
         self.assertFalse(target.is_symlink())
         self.assertEqual(outside.read_bytes(), b'leave alone')
+
+    def desktop(self):
+        return {'files': {'pbsx-desktop': {}}, 'desktop_runtime': {
+            'libc': 'glibc', 'glibc_min': '2.38', 'libraries': ['libX11.so.6', 'libc.so.6']}}
+
+    def test_builder_records_actual_symbol_and_library_requirements(self):
+        output = ['Name: GLIBC_2.9\nName: GLIBC_2.38\nName: GLIBC_2.34\n',
+                  '(NEEDED) Shared library: [libX11.so.6]\n(NEEDED) Shared library: [libc.so.6]\n']
+        with patch.object(builder.subprocess, 'check_output', side_effect=output):
+            self.assertEqual(builder.linux_runtime(self.root/'desktop'), self.desktop()['desktop_runtime'])
+
+    def test_desktop_rejects_old_or_unknown_libc_before_loading_libraries(self):
+        for libc in ('glibc 2.36', 'musl 1.2.5', None):
+            with self.subTest(libc=libc), patch.object(installer.os, 'confstr', return_value=libc), patch.object(installer.ctypes, 'CDLL') as load:
+                with self.assertRaisesRegex(ValueError, 'requires glibc 2.38'):
+                    installer.check_runtime(self.desktop())
+                load.assert_not_called()
+
+    def test_desktop_checks_system_libraries_and_accepts_compatible_runtime(self):
+        with patch.object(installer.os, 'confstr', return_value='glibc 2.39'), patch.object(installer.ctypes, 'CDLL') as load:
+            installer.check_runtime(self.desktop())
+            self.assertEqual([call.args[0] for call in load.call_args_list], ['libX11.so.6', 'libc.so.6'])
+        with patch.object(installer.os, 'confstr', return_value='glibc 2.39'), patch.object(installer.ctypes, 'CDLL', side_effect=OSError('missing dependency')):
+            with self.assertRaisesRegex(ValueError, 'desktop library unavailable'):
+                installer.check_runtime(self.desktop())
+
+    def test_missing_or_unsafe_runtime_metadata_is_rejected(self):
+        for runtime in ({}, {**self.desktop()['desktop_runtime'], 'libraries':['../../libc.so.6']}, {**self.desktop()['desktop_runtime'], 'libraries':'libc.so.6'}):
+            with self.subTest(runtime=runtime), self.assertRaisesRegex(ValueError, 'requirements are missing or invalid'):
+                installer.check_runtime({'files':{'pbsx-desktop':{}}, 'desktop_runtime':runtime})
+
+    def test_headless_does_not_require_glibc_or_graphics_runtime(self):
+        with patch.object(installer.os, 'confstr') as libc, patch.object(installer.ctypes, 'CDLL') as load:
+            installer.check_runtime(self.desktop(), headless=True)
+            installer.check_runtime({'files':{'pbsx-agent':{}}})
+            libc.assert_not_called()
+            load.assert_not_called()
 
 
 if __name__ == '__main__':

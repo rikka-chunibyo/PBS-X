@@ -21,6 +21,40 @@ import org.junit.runner.RunWith;
 @RunWith(AndroidJUnit4.class)
 public class DocumentsTest {
   @Test
+  public void stagedSafRestorePreservesOriginalUntilCommitAndRefusesNewConflicts() throws Exception {
+    Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    String unique = "staged-" + System.nanoTime();
+    File base = new File(c.getCacheDir(), "document-fixture/" + unique);
+    assertTrue(base.mkdirs());
+    File target = new File(base, "target.txt");
+    Files.write(target.toPath(), "original".getBytes(StandardCharsets.UTF_8));
+    Uri uri = DocumentsContract.buildTreeDocumentUri(FixtureProvider.AUTHORITY, "root:" + unique);
+    try (AndroidDocuments docs = new AndroidDocuments(new DocumentTree(c.getContentResolver(), uri))) {
+      String stage = ".pbsx-stage-test";
+      try (OutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(
+          ParcelFileDescriptor.adoptFd((int) docs.openWrite(stage)))) {
+        out.write("complete restore".getBytes(StandardCharsets.UTF_8));
+      }
+      assertEquals("original", new String(Files.readAllBytes(target.toPath()), StandardCharsets.UTF_8));
+      docs.commitFile(stage, "target.txt", true);
+      assertEquals("complete restore", new String(Files.readAllBytes(target.toPath()), StandardCharsets.UTF_8));
+      assertArrayEquals(new String[] {"target.txt"}, base.list());
+      try (OutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(
+          ParcelFileDescriptor.adoptFd((int) docs.openWrite(stage)))) {
+        out.write("incomplete".getBytes(StandardCharsets.UTF_8));
+      }
+      try {
+        docs.commitFile(stage, "target.txt", false);
+        fail("New-file commit overwrote an existing file");
+      } catch (Exception expected) { assertTrue(expected.getMessage().contains("appeared")); }
+      docs.deleteFile(stage);
+      docs.deleteFile(stage); // Cleanup after a successful rename is idempotent too.
+      assertEquals("complete restore", new String(Files.readAllBytes(target.toPath()), StandardCharsets.UTF_8));
+      assertArrayEquals(new String[] {"target.txt"}, base.list());
+    }
+  }
+
+  @Test
   public void streamsSafDocumentsAndCreatesSafeRestoreTree() throws Exception {
     Context c = InstrumentationRegistry.getInstrumentation().getTargetContext();
     String unique = "run-" + System.nanoTime();

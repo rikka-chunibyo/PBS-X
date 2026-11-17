@@ -61,6 +61,11 @@ public final class FixtureProvider extends ContentProvider {
         case "last_modified":
           row[i] = file.lastModified();
           break;
+        case "flags":
+          row[i] = DocumentsContract.Document.FLAG_SUPPORTS_RENAME
+              | DocumentsContract.Document.FLAG_SUPPORTS_DELETE
+              | DocumentsContract.Document.FLAG_SUPPORTS_WRITE;
+          break;
       }
     cursor.addRow(row);
   }
@@ -88,14 +93,27 @@ public final class FixtureProvider extends ContentProvider {
 
   @Override
   public Bundle call(String method, String arg, Bundle extras) {
-    if (!"android:createDocument".equals(method))
-      throw new IllegalArgumentException("Unsupported fixture operation");
     try {
       Uri parent = extras.getParcelable("uri");
+      File base = new File(getContext().getCacheDir(), "document-fixture");
+      if ("android:deleteDocument".equals(method)) {
+        if (!file(DocumentsContract.getDocumentId(parent)).delete())
+          throw new Exception("Fixture deletion failed");
+        return new Bundle();
+      }
       String name = extras.getString("_display_name");
       if (Paths.parts(name).length != 1) throw new Exception("Invalid name");
-      File base = new File(getContext().getCacheDir(), "document-fixture"),
-          f = new File(file(DocumentsContract.getDocumentId(parent)), name);
+      if ("android:renameDocument".equals(method)) {
+        File original = file(DocumentsContract.getDocumentId(parent));
+        File renamed = new File(original.getParentFile(), name);
+        if (renamed.exists() || !original.renameTo(renamed)) throw new Exception("Fixture rename failed");
+        Bundle result = new Bundle();
+        result.putParcelable("uri", DocumentsContract.buildDocumentUriUsingTree(parent, id(renamed, base)));
+        return result;
+      }
+      if (!"android:createDocument".equals(method))
+        throw new IllegalArgumentException("Unsupported fixture operation");
+      File f = new File(file(DocumentsContract.getDocumentId(parent)), name);
       if (f.exists()) throw new Exception("Already exists");
       boolean ok =
           DocumentsContract.Document.MIME_TYPE_DIR.equals(extras.getString("mime_type"))

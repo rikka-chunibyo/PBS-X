@@ -92,9 +92,21 @@ Restore modes reuse existing folders and keep unrelated destination files:
 
 There is no separate Merge option. File/folder type conflicts are skipped in
 Skip mode, renamed in Rename mode, or fail clearly in Replace mode; Replace
-does not delete a destination directory. Provider errors and interrupted
-transfers stop the run visibly and may leave partially restored files. Replace
-uses the provider's truncate/write operation rather than an atomic file swap.
+does not delete a destination directory. Each file is downloaded into a sibling
+`.pbsx-stage-*` document, checked for complete size and closed before promotion.
+Failed or cancelled downloads remove that temporary document, preserving the
+original destination. This needs room for one additional incoming file and a
+provider that supports file rename and deletion.
+
+SAF has no universal atomic replacement API. Replace first renames the old file
+to a unique `.pbsx-previous-*` recovery name, promotes the completed incoming
+file, then deletes the previous copy. A failed promotion attempts to restore the
+original name without overwriting another file. If rollback or cleanup fails,
+the error identifies the retained recovery copy. A process kill or power loss
+during those final provider calls can leave staging/recovery documents; their
+bytes are preserved and may need manual recovery. The app never truncates an
+existing destination in place. Completed earlier files remain after a later
+file fails; retrying Skip adds files still missing.
 
 An existing PBS API token can be used instead of enrollment. Enter its full
 `user@realm!token` auth ID, secret, HTTPS server origin and SHA-256 **server leaf

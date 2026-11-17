@@ -2,6 +2,7 @@ package mobilecore
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -326,36 +327,59 @@ func (r *selectionRestore) walk(p string, depth int) error {
 		return err
 	}
 	defer content.Close()
-	var fd int64
-	if replace {
-		fd, err = r.docs.OpenReplace(target)
-	} else {
-		fd, err = r.docs.OpenWrite(target)
-	}
+	temporary := path.Join(path.Dir(target), ".pbsx-stage-"+rand.Text())
+	fd, err := r.docs.OpenWrite(temporary)
 	if err != nil {
 		return err
 	}
-	out, err := documentFile(fd, target)
+	if err := r.writeFile(content, fd, temporary, target, p, e.RawSize, replace); err != nil {
+		return err
+	}
+	r.stats.Files++
+	r.report.fileDone()
+	r.stats.Bytes += int64(e.RawSize)
+	if r.progress != nil {
+		r.progress.Update("Restoring", r.stats.Files, r.stats.Bytes)
+	}
+	return nil
+}
+
+func (r *selectionRestore) writeFile(content io.Reader, fd int64, temporary, target, source string, size uint64, replace bool) (err error) {
+	committed := false
+	defer func() {
+		if !committed {
+			err = errors.Join(err, r.docs.DeleteFile(temporary))
+		}
+	}()
+	out, err := documentFile(fd, temporary)
 	if err != nil {
 		return err
 	}
 	stop := context.AfterFunc(r.ctx, func() { out.Close() })
-	r.report.phase("Restoring", p, int64(e.RawSize))
+	r.report.phase("Restoring", source, int64(size))
 	n, copyErr := io.Copy(&restoreProgressWriter{writer: out, report: r.report}, &cancelReader{ctx: r.ctx, reader: content})
+	if copyErr == nil {
+		if info, statErr := out.Stat(); statErr != nil {
+			copyErr = statErr
+		} else if info.Mode().IsRegular() {
+			copyErr = out.Sync()
+		}
+	}
 	stop()
 	closeErr := out.Close()
-	if copyErr == nil && uint64(n) != e.RawSize {
+	if copyErr == nil && uint64(n) != size {
 		copyErr = errors.New("restored file size does not match archive metadata")
 	}
 	if err := errors.Join(copyErr, closeErr); err != nil {
 		return fmt.Errorf("restore %s: %w", target, err)
 	}
-	r.stats.Files++
-	r.report.fileDone()
-	r.stats.Bytes += n
-	if r.progress != nil {
-		r.progress.Update("Restoring", r.stats.Files, r.stats.Bytes)
+	if err := r.ctx.Err(); err != nil {
+		return err
 	}
+	if err := r.docs.CommitFile(temporary, target, replace); err != nil {
+		return fmt.Errorf("commit restore %s: %w", target, err)
+	}
+	committed = true
 	return nil
 }
 func (r *selectionRestore) identical(source, target string, e *pxar.FileInfo, existing destinationEntry) (bool, error) {

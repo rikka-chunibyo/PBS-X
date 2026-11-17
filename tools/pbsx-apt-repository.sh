@@ -1,6 +1,49 @@
 #!/bin/bash
 # Admin commands for the PBS-X repository container. TLS terminates at NPM.
 set -euo pipefail
+
+validate_release() {
+    local directory file name version architecture core_version= core_count=0
+    local -A seen=()
+    directory=$(realpath "$1")
+    (cd "$directory"; sha256sum --check --strict SHA256SUMS)
+    packages=()
+    shopt -s nullglob
+    for file in "$directory/"*.deb; do
+        name=$(dpkg-deb -f "$file" Package)
+        version=$(dpkg-deb -f "$file" Version)
+        architecture=$(dpkg-deb -f "$file" Architecture)
+        [[ ! ${seen[$name]+present} ]] || { echo "Duplicate release package: $name" >&2; return 1; }
+        seen[$name]=1
+        case $name in
+            proxmox-backup-server|proxmox-backup-client|proxmox-backup-file-restore)
+                [[ $version == *+pbsx* && $architecture == amd64 ]] || { echo "Invalid PBS-X executable package: $name" >&2; return 1; }
+                if [[ -z $core_version ]]; then core_version=$version; fi
+                [[ $version == "$core_version" ]] || { echo 'PBS-X core package versions must match' >&2; return 1; }
+                core_count=$((core_count+1)) ;;
+            pbsx-repository)
+                [[ $architecture == all ]] || { echo 'Repository support package must use Architecture: all' >&2; return 1; } ;;
+            *) echo "Not an allowed PBS-X release package: $name" >&2; return 1 ;;
+        esac
+        (cd "$directory"; grep -Fxq -- "$(sha256sum -- "$(basename "$file")")" SHA256SUMS) || {
+            echo "Release package is not covered by SHA256SUMS: $file" >&2; return 1;
+        }
+        packages+=("$file")
+    done
+    ((${#packages[@]})) || { echo 'Release contains no packages' >&2; return 1; }
+    [[ $core_count == 0 || $core_count == 3 ]] || {
+        echo 'Publish all three matching PBS-X core packages together' >&2; return 1;
+    }
+}
+
+# Read-only validation is also usable on the build machine, without repository
+# signing access or privileges. Publication repeats it before touching reprepro.
+if [[ ${1:-} == --check-release ]]; then
+    [[ $# == 2 ]] || exit 2
+    validate_release "$2"
+    echo 'Verified PBS-X release package set'
+    exit 0
+fi
 [[ $EUID == 0 && $(hostname) == pbs-x-apt ]] || exit 1
 state=/var/lib/pbs-x-apt/release
 public=/srv/pbs-x-apt/public/apt
@@ -67,23 +110,7 @@ EOF
     publish)
         [[ $# == 3 && ( $2 == trixie || $2 == trixie-testing ) ]]
         channel=$2
-        directory=$(realpath "$3")
-        (cd "$directory"; sha256sum --check --strict SHA256SUMS)
-        packages=()
-        shopt -s nullglob
-        for file in "$directory/"*.deb; do
-            name=$(dpkg-deb -f "$file" Package)
-            version=$(dpkg-deb -f "$file" Version)
-            case $name in
-                proxmox-backup-server|proxmox-backup-client|proxmox-backup-file-restore)
-                    [[ $version == *+pbsx* && $(dpkg-deb -f "$file" Architecture) == amd64 ]] ;;
-                pbsx-repository) [[ $(dpkg-deb -f "$file" Architecture) == all ]] ;;
-                *) echo "Not an allowed PBS-X release package: $name" >&2; exit 1 ;;
-            esac
-            (cd "$directory"; grep -Fxq -- "$(sha256sum -- "$(basename "$file")")" SHA256SUMS)
-            packages+=("$file")
-        done
-        ((${#packages[@]}))
+        validate_release "$3"
         repo --export=never includedeb "$channel" "${packages[@]}"
         repo export "$channel"
         repo check "$channel"

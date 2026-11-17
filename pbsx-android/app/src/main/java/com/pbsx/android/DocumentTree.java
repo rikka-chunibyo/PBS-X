@@ -29,7 +29,8 @@ final class DocumentTree {
     DocumentsContract.Document.COLUMN_DISPLAY_NAME,
     DocumentsContract.Document.COLUMN_MIME_TYPE,
     DocumentsContract.Document.COLUMN_SIZE,
-    DocumentsContract.Document.COLUMN_LAST_MODIFIED
+    DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+    DocumentsContract.Document.COLUMN_FLAGS
   };
 
   DocumentTree(ContentResolver resolver, Uri tree) {
@@ -55,7 +56,8 @@ final class DocumentTree {
         .put("name", name)
         .put("directory", dir)
         .put("size", dir ? 0 : c.isNull(3) ? -1 : c.getLong(3))
-        .put("modified", c.isNull(4) ? 0 : c.getLong(4));
+        .put("modified", c.isNull(4) ? 0 : c.getLong(4))
+        .put("flags", c.isNull(5) ? 0 : c.getInt(5));
   }
 
   private JSONArray children(String id) throws Exception {
@@ -124,13 +126,64 @@ final class DocumentTree {
     }
   }
 
-  long replace(String path) throws Exception {
-    JSONObject existing = stat(path);
-    if (existing.getBoolean("directory"))
-      throw new Exception("Cannot overwrite a destination folder");
-    ParcelFileDescriptor fd = resolver.openFileDescriptor(document(resolve(path)), "wt");
-    if (fd == null) throw new Exception("Provider refused replacing this file");
-    return fd.detachFd();
+  void deleteFile(String path) throws Exception {
+    index.clear();
+    JSONObject item = inspect(path);
+    if (!item.getBoolean("exists")) return;
+    if (item.getBoolean("directory")) throw new Exception("Cannot remove a restore folder");
+    if (!DocumentsContract.deleteDocument(resolver, document(item.getString("id"))))
+      throw new Exception("Provider refused removing temporary restore file: " + path);
+    index.clear();
+  }
+
+  void commitFile(String temporary, String path, boolean replace) throws Exception {
+    String[] parts = Paths.parts(path), stagedParts = Paths.parts(temporary);
+    if (parts.length == 0 || stagedParts.length != parts.length)
+      throw new Exception("Invalid restore staging path");
+    for (int i = 0; i < parts.length - 1; i++)
+      if (!parts[i].equals(stagedParts[i])) throw new Exception("Restore staging must be a sibling");
+    if (!stagedParts[stagedParts.length - 1].startsWith(".pbsx-stage-"))
+      throw new Exception("Invalid restore staging name");
+    index.clear();
+    JSONObject stage = stat(temporary), existing = inspect(path);
+    int required = DocumentsContract.Document.FLAG_SUPPORTS_RENAME
+        | DocumentsContract.Document.FLAG_SUPPORTS_DELETE;
+    for (JSONObject item : new JSONObject[] {stage, existing}) {
+      if (item == existing && !existing.getBoolean("exists")) continue;
+      if (item.getBoolean("directory") || (item.getInt("flags") & required) != required)
+        throw new Exception("Provider must support file rename and deletion for safe restores");
+    }
+    String parent = ".";
+    for (int i = 0; i < parts.length - 1; i++)
+      parent = parent.equals(".") ? parts[i] : parent + "/" + parts[i];
+    final String parentId = resolve(parent);
+    RestoreCommit.Files files = new RestoreCommit.Files() {
+      public String find(String name) throws Exception {
+        index.clear(); // Detect destination changes made outside this restore.
+        return DocumentTree.this.find(parentId, name);
+      }
+
+      public String rename(String id, String name) throws Exception {
+        Uri renamed = DocumentsContract.renameDocument(resolver, document(id), name);
+        if (renamed == null) throw new Exception("Provider refused restore rename");
+        index.clear();
+        try (Cursor c = resolver.query(renamed, COLUMNS, null, null, null)) {
+          if (c == null || !c.moveToFirst()) throw new Exception("Cannot verify renamed document");
+          JSONObject item = row(c);
+          if (!name.equals(item.getString("name")))
+            throw new Exception("Provider changed the restore name; data retained as " + item.getString("name"));
+          return item.getString("id");
+        }
+      }
+
+      public void delete(String id) throws Exception {
+        if (!DocumentsContract.deleteDocument(resolver, document(id)))
+          throw new Exception("Provider refused removing previous restore copy");
+        index.clear();
+      }
+    };
+    RestoreCommit.commit(files, stage.getString("id"), parts[parts.length - 1],
+        ".pbsx-previous-" + java.util.UUID.randomUUID(), replace);
   }
 
   JSONArray list(String path) throws Exception {
@@ -149,9 +202,18 @@ final class DocumentTree {
 
   long write(String path) throws Exception {
     Uri uri = create(path, "application/octet-stream");
-    ParcelFileDescriptor fd = resolver.openFileDescriptor(uri, "w");
-    if (fd == null) throw new Exception("Could not create output document");
-    return fd.detachFd();
+    try {
+      ParcelFileDescriptor fd = resolver.openFileDescriptor(uri, "w");
+      if (fd == null) throw new Exception("Could not create output document");
+      return fd.detachFd();
+    } catch (Exception failure) {
+      try {
+        if (!DocumentsContract.deleteDocument(resolver, uri))
+          throw new Exception("Provider refused removing failed output document");
+        index.clear();
+      } catch (Exception cleanup) { failure.addSuppressed(cleanup); }
+      throw failure;
+    }
   }
 
   private Uri create(String path, String mime) throws Exception {

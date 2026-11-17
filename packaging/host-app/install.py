@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Install a trusted PBS-X Linux preview bundle. Checksums are not signatures."""
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -60,6 +61,34 @@ def command(*args, check=True):
     return subprocess.run(args, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
+def check_runtime(data, headless=False):
+    if headless or 'pbsx-desktop' not in data['files']:
+        return
+    runtime = data.get('desktop_runtime', {})
+    if not isinstance(runtime, dict):
+        raise ValueError('desktop runtime requirements are missing or invalid; rebuild this bundle or use --headless')
+    version = runtime.get('glibc_min', '')
+    libraries = runtime.get('libraries', [])
+    if (runtime.get('libc') != 'glibc' or not isinstance(version, str)
+            or not re.fullmatch(r'[0-9]+(?:\.[0-9]+)+', version)
+            or not isinstance(libraries, list) or not libraries or len(libraries) > 100
+            or 'libc.so.6' not in libraries
+            or any(not isinstance(name, str) or not re.fullmatch(r'lib[A-Za-z0-9_+.-]+\.so(?:\.[0-9]+)*', name) for name in libraries)):
+        raise ValueError('desktop runtime requirements are missing or invalid; rebuild this bundle or use --headless')
+    try:
+        current = os.confstr('CS_GNU_LIBC_VERSION') or ''
+    except (OSError, ValueError):
+        current = ''
+    match = re.fullmatch(r'glibc ([0-9]+(?:\.[0-9]+)+)', current)
+    if not match or tuple(map(int, match[1].split('.'))) < tuple(map(int, version.split('.'))):
+        raise ValueError(f'desktop requires glibc {version} or newer (found {current or "unknown libc"}); use --headless for the static service and CLI')
+    for library in libraries:
+        try:
+            ctypes.CDLL(library)
+        except OSError as error:
+            raise ValueError(f'desktop library unavailable: {library}: {error}; install the system graphics runtime or use --headless') from None
+
+
 def atomic_copy(source, destination, mode=0o755):
     descriptor, name = tempfile.mkstemp(prefix='.pbsx-', dir=destination.parent)
     try:
@@ -91,6 +120,7 @@ def install(bundle, headless):
         data = validate(staging)
         if not headless and 'pbsx-desktop' not in data['files']:
             raise ValueError('headless bundle: pass --headless')
+        check_runtime(data, headless)
         root_directory(TARGET)
         root_directory(Path('/usr/local/bin'))
         root_directory(Path('/usr/local/share/applications'))
@@ -175,7 +205,9 @@ if __name__ == '__main__':
     try:
         bundle = Path(__file__).resolve().parent
         if args.check:
-            print('Verified Linux bundle', validate(bundle)['version'])
+            data = validate(bundle)
+            check_runtime(data, args.headless)
+            print('Verified Linux bundle', data['version'])
         else:
             install(bundle, args.headless)
     except Exception as error:

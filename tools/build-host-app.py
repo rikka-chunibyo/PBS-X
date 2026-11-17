@@ -13,6 +13,16 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def linux_runtime(binary):
+    versions = subprocess.check_output(['readelf', '--version-info', '--wide', str(binary)], text=True)
+    versions = [tuple(map(int, value.split('.'))) for value in re.findall(r'Name: GLIBC_([0-9]+(?:\.[0-9]+)+)\b', versions)]
+    dynamic = subprocess.check_output(['readelf', '--dynamic', '--wide', str(binary)], text=True)
+    libraries = sorted(set(re.findall(r'\(NEEDED\).*?\[([^\]]+)\]', dynamic)))
+    if not versions or 'libc.so.6' not in libraries:
+        raise ValueError('cannot determine the Linux desktop glibc requirements')
+    return {'libc': 'glibc', 'glibc_min': '.'.join(map(str, max(versions))), 'libraries': libraries}
+
+
 def source_info(root):
     if (root/'.git').exists():
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
@@ -71,6 +81,8 @@ def build(args):
             'files': {name: {'sha256': hashlib.sha256((staging/name).read_bytes()).hexdigest(),
                              'size': (staging/name).stat().st_size} for name in names},
         }
+        if args.os == 'linux' and not args.headless:
+            manifest['desktop_runtime'] = linux_runtime(staging/'pbsx-desktop')
         (staging/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
         # One directory rename publishes a complete local bundle to the output.
         os.rename(staging, output)

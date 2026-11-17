@@ -24,7 +24,10 @@ This does not enable automatic client updates.
 - Linux amd64 with systemd: extract the archive and run
   `python3 install.py --check`, then `sudo python3 install.py`. Add `--headless`
   when installing only the agent and CLI. The desktop needs a graphical session
-  and its system graphics libraries.
+  and its system graphics libraries. Its manifest records the minimum glibc
+  version and required shared libraries; both check mode and installation verify
+  these before changing the service. Use `--check --headless` to check only the
+  static service/CLI on a system without those desktop dependencies.
 - Android 8+ on ARM64 or x86-64: open the APK and permit installation from that
   browser/file manager. Updates retain the existing signing certificate; do not
   uninstall an existing app just to update it.

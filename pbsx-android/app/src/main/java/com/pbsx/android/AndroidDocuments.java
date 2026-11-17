@@ -236,10 +236,17 @@ final class AndroidDocuments implements Documents, AutoCloseable {
     return output.inspect(path).toString();
   }
 
-  public long openReplace(String path) throws Exception {
+  public void commitFile(String temporary, String path, boolean replace) throws Exception {
+    Paths.parts(temporary);
     Paths.parts(path);
     if (output == null) throw new Exception("Backup sources are read-only");
-    return output.replace(path);
+    output.commitFile(temporary, path, replace);
+  }
+
+  public void deleteFile(String path) throws Exception {
+    Paths.parts(path);
+    if (output == null) throw new Exception("Backup sources are read-only");
+    output.deleteFile(path);
   }
 
   public void close() {
