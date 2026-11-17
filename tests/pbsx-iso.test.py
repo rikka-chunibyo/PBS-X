@@ -12,6 +12,9 @@ import pbsx_iso as iso
 spec = importlib.util.spec_from_file_location('configure_target', ROOT/'packaging/iso/configure-target.py')
 configure_target = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(configure_target)
+release_spec = importlib.util.spec_from_file_location('iso_release', ROOT/'tools/fetch-pbsx-iso-release.py')
+iso_release = importlib.util.module_from_spec(release_spec)
+release_spec.loader.exec_module(iso_release)
 
 
 class RepositoryDefaults(unittest.TestCase):
@@ -58,6 +61,25 @@ class RepositoryDefaults(unittest.TestCase):
 
 
 class PackageChecks(unittest.TestCase):
+    def test_release_mirror_rejects_modified_payload(self):
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name)/'modified.deb'
+            path.write_bytes(b'changed')
+            expected = {'name':'pbsx-fixture','version':'1.0','size':7,'sha256':'0'*64}
+            with self.assertRaisesRegex(ValueError, 'hash/size mismatch'):
+                iso_release.validate(path, expected)
+
+    def test_release_mirror_rejects_wrong_identity_with_valid_hash(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            (root/'package/DEBIAN').mkdir(parents=True)
+            (root/'package/DEBIAN/control').write_text('Package: wrong-fixture\nVersion: 1.0\nArchitecture: all\nMaintainer: PBS-X <test@invalid>\nDescription: fixture\n')
+            path = root/'fixture.deb'
+            subprocess.run(['dpkg-deb','--root-owner-group','--build',str(root/'package'),str(path)],check=True,capture_output=True)
+            expected = {'name':'pbsx-fixture','version':'1.0','size':path.stat().st_size,'sha256':iso.sha256(path)}
+            with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+                iso_release.validate(path, expected)
+
     def test_deb822_round_trip_preserves_dependency_and_description_continuations(self):
         data='Package: example\nVersion: 1.0\nDepends: libone,\n libtwo\nDescription: example\n long description\n .\n another paragraph\n\n'
         fields=iso.records(data)[0]

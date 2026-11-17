@@ -1,0 +1,35 @@
+{
+  "repository": "rikka-chunibyo/PBS-X",
+  "tag": "pbsx-4.2.9-pbsx1-iso-preview",
+  "version": "4.2.9-1+pbsx1",
+  "packages": [
+    {
+      "name": "pbsx-repository",
+      "version": "1.0.3",
+      "filename": "pbsx-repository_1.0.3_all.deb",
+      "size": 5890,
+      "sha256": "6f63173799c31b217c86639db9536f4be9f0ad98338f39dfa610055a102b2772"
+    },
+    {
+      "name": "proxmox-backup-client",
+      "version": "4.2.9-1+pbsx1",
+      "filename": "proxmox-backup-client_4.2.9-1+pbsx1_amd64.deb",
+      "size": 3478904,
+      "sha256": "c77693fbcec5cc7477ad208dd50087448b97d6ad264e377a5753e0bd22b4ed1f"
+    },
+    {
+      "name": "proxmox-backup-file-restore",
+      "version": "4.2.9-1+pbsx1",
+      "filename": "proxmox-backup-file-restore_4.2.9-1+pbsx1_amd64.deb",
+      "size": 3162180,
+      "sha256": "69ffc5381b907e083b04fce4387046da2dfe900e3a6376080ceacbba8673ac4a"
+    },
+    {
+      "name": "proxmox-backup-server",
+      "version": "4.2.9-1+pbsx1",
+      "filename": "proxmox-backup-server_4.2.9-1+pbsx1_amd64.deb",
+      "size": 38728540,
+      "sha256": "49f93ad4dee61f3a22f376ddf670da557732257fa7b07895f1485e9db0ca375b"
+    }
+  ]
+}

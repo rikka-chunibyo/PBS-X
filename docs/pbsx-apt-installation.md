@@ -2,11 +2,14 @@
 
 The public repository is `https://pbsx.rikka.ca/apt`, suite `trixie`, component
 `main`, for Debian 13 amd64. It currently serves the tested
-`4.2.9-1+pbsx1` server/client/file-restore build and `pbsx-repository` 1.0.2.
+`4.2.9-1+pbsx1` server/client/file-restore build and `pbsx-repository` 1.0.3.
 The Ubuntu repository container is an HTTP backend at `10.0.1.37:80`;
 Nginx Proxy Manager terminates public HTTPS. There is no container TLS listener.
 
 ## Install
+
+The [offline PBS-X ISO](pbsx-offline-iso.md) already includes PBS-X and this
+repository configuration. The following bootstrap is for an upstream PBS base.
 
 1. Install the official PBS 4 ISO onto the chosen OS disks. Configure its network
    and appropriate official repositories (enterprise with a subscription, or
@@ -78,6 +81,12 @@ It permits only the expected package names. The `pbsx-apt-refresh.timer` runs da
 to refresh the signed metadata's 14-day validity. Monitor that service and disk
 space. Unreferenced package payloads are retained for clients with cached indexes;
 retention cleanup must preserve supported rollback artifacts.
+
+The publisher explicitly makes archive files web-readable, including after a
+refresh invoked under `umask 077`. Private administration/signing directories
+remain mode `0700`, outside the public tree. Support package 1.0.3 enables its
+recovery timer during ISO/chroot installation without trying to contact a
+running systemd; normal installations start it immediately.
 
 The current primary key expires after two years, with a signing subkey expiring
 after one year. Rotate before expiry; distribute overlapping trusted public keys

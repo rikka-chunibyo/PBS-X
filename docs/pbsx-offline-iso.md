@@ -5,6 +5,17 @@ and repository configuration from the media. Installation requires no Internet
 connection. The installer still asks for the target disks, hostname, network
 settings and administrator password. Selected disks are erased.
 
+The initial preview uses PBS-X `4.2.9-1+pbsx1` and `pbsx-repository` 1.0.3:
+
+- [Download ISO](https://pbsx.rikka.ca/iso/pbsx_4.2.9-1+pbsx1-offline-amd64.iso)
+- [SHA256 checksum](https://pbsx.rikka.ca/iso/pbsx_4.2.9-1+pbsx1-offline-amd64.iso.sha256)
+- [GitHub preview release and alternate download](https://github.com/rikka-chunibyo/PBS-X/releases/tag/pbsx-4.2.9-pbsx1-iso-preview)
+
+The GitHub repository is private, so its download requires repository access.
+
+Keep the ISO's original filename when checking its checksum. Remove installation
+media after installation completes so the machine boots from its installed disk.
+
 After installation, open `https://SERVER-IP:8007` and sign in as `root@pam` with
 the password you chose. Normal local backups do not require Internet access.
 When Internet access becomes available, run:
@@ -66,6 +77,15 @@ with the upstream installer.
 
 The GitHub **PBS-X offline ISO** workflow runs regression checks on relevant
 pushes/PRs. Dispatch it manually to build and retain an ISO artifact for 14 days.
+It uses a Debian 13 container with current Debian archive trust roots. CI fetches
+the four mirrored release inputs using its read-only GitHub token and verifies
+their sizes, SHA256 hashes and package identities against the committed
+`packaging/iso/release-inputs.json`. These hashes were verified against the signed
+APT feed before mirroring. This avoids Cloudflare's browser challenge for GitHub
+runners without weakening package verification or changing the installed APT
+source. New CI input versions require updating the pinned manifest after release
+verification; arbitrary `--version` values are rejected.
+
 It uses published packages and does not build or publish a new server release.
 It does not publish to the APT server or include unattended answers, passwords,
 enrollment tokens, personal SSH keys or repository signing secrets.
@@ -87,3 +107,6 @@ A checksum detects corruption; it does not authenticate an untrusted download.
 The base ISO checksum and repository signatures authenticate build inputs, not
 the final image itself. Hardware USB boot, storage-controller compatibility and
 recovery on your actual server still require validation.
+
+See the [offline install validation report](pbsx-offline-iso-validation.md) for
+the BIOS/Secure Boot and later APT reconnection tests and their limits.
