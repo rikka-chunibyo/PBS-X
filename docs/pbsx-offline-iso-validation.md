@@ -65,6 +65,8 @@ download through the proxy was interrupted. The static ISO location now sends
 changing the shared proxy. Public HTTPS range checks returned 206 and matched
 the first and last 64 KiB against the verified local ISO. The GitHub release is
 an alternate download for users with repository access.
+Its completed ISO asset is 1,992,949,760 bytes; GitHub's server-computed SHA256
+matches the VM-tested image checksum above.
 
 The complete CI image build, checksum verification and artifact upload passed in
 [run 44003946462](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44003946462),
