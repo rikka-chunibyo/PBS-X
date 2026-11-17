@@ -94,3 +94,6 @@ bytes, choose a new tag; published release directories are never overwritten.
 activation, immutable releases, retry behavior, private-file exclusion, traversal
 and symlink rejection, and Linux archive permissions. It has read-only repository
 permissions; publication itself remains an explicit maintainer command.
+
+See [the first client release validation](client-release-validation.md) for the
+published versions, source provenance, CI checks and public download verification.
