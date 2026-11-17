@@ -94,3 +94,43 @@ The private publisher helper on `pbs-x-apt` was backed up and updated to the
 fix commit. A live same-tag activation retry preserved both the latest symlink
 inode and the hashes of all three applications, `release.json` and `SHA256SUMS`.
 The published application and ISO artifacts retain their existing release bytes.
+
+## Second client preview — 2026-11-17
+
+Release: [`pbsx-clients-2026.11.17-preview.2`](https://github.com/rikka-chunibyo/PBS-X/releases/tag/pbsx-clients-2026.11.17-preview.2).
+Public entry: https://pbsx.rikka.ca/downloads/ . Both client platforms were built
+from `ae711fa0bc461bdc6cf4453b73fcfc34dd0cb740`, merged and pushed to `pbs-x`.
+Every remote PBS-X feature branch is an ancestor of that merged main branch.
+
+- Windows/Linux desktop, agent and CLI: `0.7.1-preview`.
+- Android universal release APK: `0.5.4-preview`, version code 13. The existing
+  certificate remains
+  `d6f35fc4fc34b6acd83b2b2e3fd26f928339df400d1b9e256fab0181e5b3cab7`.
+- [Native checks 44152411374](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44152411374)
+  passed Linux races, native Windows tests, both desktop bundles, installers,
+  CLI checks and the Linux window smoke test.
+- [Android checks 44152411369](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44152411369)
+  passed universal bindings, debug/release builds, Java tests, lint and all
+  three Android 13 SAF instrumentation cases.
+- [Publication checks 44152411386](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44152411386)
+  passed publication regressions, Go core races and SAF promotion/rollback tests.
+  The local signed Android build additionally verified certificate continuity,
+  both ABIs, 16 KB alignment and non-debuggable release packaging.
+
+This release contains the [desktop data-safety fixes](desktop-data-safety-audit.md)
+and the previously unpublished Android restore/cache and Linux installer fixes.
+The publisher checked all five GitHub server-computed asset digests before
+private staging and atomic repository activation. The GitHub release is a
+visible prerelease, and `downloads/latest` selects preview.2. Preview.1 remains
+available for rollback.
+
+All three apps, `release.json` and `SHA256SUMS` were downloaded through public
+HTTPS with the normal curl client and matched the prepared files byte for byte.
+The entry page's HTML redirect and `/downloads/latest/` version listing were
+also verified. The first page assertion expected the listing directly at the
+entry URL; checking its intended redirect resolved that test assumption without
+changing the website.
+
+No signing key was copied to CI or public storage. No phone, server VM or
+hypervisor was modified. Existing APT packages and server ISO payloads remain
+unchanged; this publication updates the client downloads.

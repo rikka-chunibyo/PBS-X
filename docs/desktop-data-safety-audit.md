@@ -48,7 +48,9 @@ The complete Linux host-agent suite passed with `go test -race -tags agent
 -timeout 5m ./...`. The shared PXAR transfer/datastore race suites passed, as did
 the additional decoded-source regression and the Android Go core race suite.
 Windows agent/CLI binaries and test binaries for the changed packages were
-cross-compiled. Native Windows execution remains a follow-up CI check.
+cross-compiled locally. The complete native Windows suite subsequently passed
+in [host checks 44152411374](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44152411374),
+along with both desktop builds, installer checks and the Linux window smoke test.
 
 Tests used one build worker, `GOMAXPROCS=1`, and the Go soft memory limit
 `GOMEMLIMIT=256MiB`. Loopback mock servers required execution outside the
@@ -69,5 +71,9 @@ A hardlink restore whose filesystem cannot create links and whose archive entry
 has no independent payload reports an error while retaining the destination.
 It does not silently claim a successful restore or delete the original.
 
-These are source changes; published client downloads and server images require
-a subsequent release to include them.
+The changes are merged into `pbs-x` and published in
+[client preview.2](https://github.com/rikka-chunibyo/PBS-X/releases/tag/pbsx-clients-2026.11.17-preview.2):
+Windows/Linux `0.7.1-preview` and Android `0.5.4-preview` (version code 13).
+All five public release files were downloaded over HTTPS and matched the
+prepared hashes. Server ISO and APT package payloads were not changed by this
+client release. See [publication validation](client-release-validation.md).
