@@ -64,3 +64,33 @@ publication resumed without rebuilding the already verified APK.
 No signing keystore or SSH private key was copied to CI or public downloads.
 The existing local GitHub/SSH access performs explicit maintainer publication.
 See [the publishing guide](pbsx-client-downloads.md) for repeatable commands.
+
+## Publication audit follow-up
+
+Fix commit: `d62f82be54ece679ad01b017b5598c909a3e3ec3`.
+
+- ISO dependency overlays cannot replace the three PBS-X core packages, the
+  repository package or the generated installer defaults. Final package hashes
+  must still match the selected release inputs.
+- Android build records include shared local Go module replacements, including
+  PXAR. Capture before compilation and verification afterward prevent stamping
+  changed sources onto an older APK. Legacy records require a fresh build.
+- Retrying an older client publication preserves a newer `downloads/latest`.
+  Rollback requires an explicit flag; same-tag retries leave the symlink intact.
+- Interrupted GitHub uploads recover only empty draft `starter` assets after
+  refreshing their state. Completed assets with matching hashes are reused.
+
+All 58 lightweight regression tests passed: 16 publication, seven Android
+source-record, 14 ISO, ten host-bundle and 11 APT guard tests. Source capture
+also resolved the real Android Go module graph with workspace overrides disabled.
+Publication checks passed in
+[run 44016327613](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44016327613).
+The full ISO build, checksum verification and artifact upload passed in
+[run 44016442643](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44016442643).
+The full image build ran on GitHub's runner after the dev VM suffered another
+OOM restart. A fresh Android APK build was not performed for these tooling fixes.
+
+The private publisher helper on `pbs-x-apt` was backed up and updated to the
+fix commit. A live same-tag activation retry preserved both the latest symlink
+inode and the hashes of all three applications, `release.json` and `SHA256SUMS`.
+The published application and ISO artifacts retain their existing release bytes.
