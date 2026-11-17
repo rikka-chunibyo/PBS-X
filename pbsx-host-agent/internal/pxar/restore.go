@@ -410,12 +410,14 @@ func resolveDeferredHardlinks(ctx context.Context, st *restoreState) error {
 		if target, ok := st.hl.tryResolveNow(job); ok {
 			if err := st.linkFile(target, job.dest); err != nil {
 				if ferr := restoreFileContent(ctx, st, job); ferr != nil {
-					errs = append(errs, fmt.Errorf("hardlink %q: %w", job.dest, ferr))
+					errs = append(errs, fmt.Errorf("hardlink %q: link failed (%v) and fallback failed: %w", job.dest, err, ferr))
+					continue
 				}
 			}
 		} else {
 			if err := restoreFileContent(ctx, st, job); err != nil {
 				errs = append(errs, fmt.Errorf("hardlink %q (target %q not in scope): %w", job.dest, job.info.LinkTarget, err))
+				continue
 			}
 		}
 		st.hl.register(job.srcPath, job.dest)

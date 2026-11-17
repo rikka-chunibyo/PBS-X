@@ -21,6 +21,7 @@ import (
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/snapshots"
 	"github.com/pbs-x/pbsx-host-agent/internal/agent/winpath"
 	"github.com/pbs-x/pbsx-host-agent/internal/log"
+	"github.com/pbs-x/pbsx-host-agent/internal/pbsverify"
 )
 
 // Job is the agent-side form of a PBS-X host backup job. HostID is the PBS
@@ -101,11 +102,12 @@ func Run(ctx context.Context, job Job) (*Result, error) {
 	// completed snapshot instead of creating a duplicate recovery point.
 	times, listErr := listSnapshotTimes(ctx, pbsURL, job, authToken, tlsConfig)
 	if listErr == nil {
-		for _, existing := range times {
-			if existing == backupTime {
-				log.Info("native PBS host backup already committed; recovering completion", "job", job.ID, "backup_time", backupTime)
-				return &Result{BackupTime: backupTime}, nil
-			}
+		result, err := recoverCompletedBackup(ctx, backupproxy.PBSConfig{
+			BaseURL: pbsURL, Datastore: job.Datastore, Namespace: job.Namespace,
+			AuthToken: authToken, TLSConfig: tlsConfig,
+		}, job, times, backupTime)
+		if err != nil || result != nil {
+			return result, err
 		}
 	}
 
@@ -448,7 +450,13 @@ func pbsAPIBase(server string) (string, error) {
 
 type snapshotsResponse struct {
 	Data []struct {
-		BackupTime int64 `json:"backup-time"`
+		BackupType string  `json:"backup-type"`
+		BackupID   string  `json:"backup-id"`
+		BackupTime int64   `json:"backup-time"`
+		Size       *uint64 `json:"size"`
+		Files      []struct {
+			Filename string `json:"filename"`
+		} `json:"files"`
 	} `json:"data"`
 }
 
@@ -489,9 +497,41 @@ func listSnapshotTimes(ctx context.Context, baseURL string, job Job, authToken s
 	}
 	times := make([]int64, 0, len(payload.Data))
 	for _, item := range payload.Data {
-		times = append(times, item.BackupTime)
+		// PBS lists unfinished snapshots and falls back to size:null if its
+		// manifest is missing or unreadable. Neither is a usable recovery point.
+		if item.BackupType != "host" || item.BackupID != job.HostID || item.BackupTime <= 0 || item.Size == nil {
+			continue
+		}
+		for _, file := range item.Files {
+			if file.Filename == "index.json.blob" {
+				times = append(times, item.BackupTime)
+				break
+			}
+		}
 	}
 	return times, nil
+}
+
+func recoverCompletedBackup(ctx context.Context, config backupproxy.PBSConfig, job Job, times []int64, stamp int64) (*Result, error) {
+	for _, existing := range times {
+		if existing != stamp {
+			continue
+		}
+		// A timestamp/directory match alone does not prove a backup committed.
+		// Read the completed manifest and validate its identity and root indexes
+		// before acknowledging the durable server command as successful.
+		reader := backupproxy.NewPBSReader(config, "host", job.HostID, stamp)
+		if err := reader.Connect(ctx); err != nil {
+			return nil, fmt.Errorf("verify recovered backup: %w", err)
+		}
+		defer reader.Close()
+		if _, err := pbsverify.LoadRootIndexes(reader, "host", job.HostID, stamp); err != nil {
+			return nil, fmt.Errorf("verify recovered backup: %w", err)
+		}
+		log.Info("native PBS host backup already committed; recovering completion", "job", job.ID, "backup_time", stamp)
+		return &Result{BackupTime: stamp}, nil
+	}
+	return nil, nil
 }
 
 func findPreviousFromTimes(job Job, times []int64, listErr error, before int64) (*backupproxy.PreviousBackupRef, error) {

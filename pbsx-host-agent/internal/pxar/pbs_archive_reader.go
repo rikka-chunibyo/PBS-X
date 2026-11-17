@@ -9,6 +9,7 @@ import (
 	"github.com/pbs-plus/pxar/backupproxy"
 	"github.com/pbs-plus/pxar/transfer"
 	"github.com/pbs-plus/pxar/vfs"
+	"github.com/pbs-x/pbsx-host-agent/internal/pbsverify"
 )
 
 // PBSArchiveReader exposes one PBS snapshot's root PXAR directly through the
@@ -29,24 +30,20 @@ func NewPBSArchiveReader(ctx context.Context, cfg backupproxy.PBSConfig, hostID 
 		return nil, err
 	}
 
-	meta, metaErr := reader.DownloadFile("root.mpxar.didx")
-	if metaErr == nil {
-		payload, err := reader.DownloadFile("root.ppxar.didx")
-		if err != nil {
-			return closeOnErr(fmt.Errorf("download PXAR payload index: %w", err))
-		}
-		archive, err := transfer.NewSplitReader(meta, payload, reader.AsChunkSource())
+	indexes, err := pbsverify.LoadRootIndexes(reader, "host", hostID, backupTime)
+	if err != nil {
+		return closeOnErr(err)
+	}
+	source := &pbsverify.ChunkSource{Inner: reader.AsChunkSource()}
+	if indexes.Metadata != nil {
+		archive, err := transfer.NewSplitReader(indexes.Metadata, indexes.Payload, source)
 		if err != nil {
 			return closeOnErr(fmt.Errorf("open split PXAR: %w", err))
 		}
 		return &PBSArchiveReader{reader: reader, fs: vfs.NewLocalFS(archive).SetMaxCache(4096)}, nil
 	}
 
-	legacy, err := reader.DownloadFile("root.pxar.didx")
-	if err != nil {
-		return closeOnErr(fmt.Errorf("snapshot has no readable root PXAR (split: %v; legacy: %w)", metaErr, err))
-	}
-	archive, err := transfer.NewChunkedReader(legacy, reader.AsChunkSource())
+	archive, err := transfer.NewChunkedReader(indexes.Legacy, source)
 	if err != nil {
 		return closeOnErr(fmt.Errorf("open legacy PXAR: %w", err))
 	}

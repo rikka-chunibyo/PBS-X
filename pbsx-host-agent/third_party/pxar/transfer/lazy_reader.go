@@ -193,12 +193,21 @@ func (r *ReadSeeker) loadChunk(chunkIdx int) ([]byte, error) {
 
 	// Slow path: fetch and decode.
 	digest := r.idx.Entry(chunkIdx).Digest
-	raw, err := r.source.GetChunk(digest)
-	if err != nil {
-		return nil, err
+	var decoded []byte
+	var err error
+	if source, ok := r.source.(interface {
+		GetDecodedChunk([32]byte) ([]byte, error)
+	}); ok {
+		// A verifying source can return already decoded bytes. Keep decoding
+		// ownership with that source to avoid a second decompression/copy.
+		decoded, err = source.GetDecodedChunk(digest)
+	} else {
+		var raw []byte
+		raw, err = r.source.GetChunk(digest)
+		if err == nil {
+			decoded, err = datastore.DecodeBlob(nil, raw)
+		}
 	}
-
-	decoded, err := datastore.DecodeBlob(nil, raw)
 	if err != nil {
 		return nil, fmt.Errorf("decode chunk: %w", err)
 	}

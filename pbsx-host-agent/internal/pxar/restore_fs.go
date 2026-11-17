@@ -97,18 +97,45 @@ func (f *restoreFS) link(old, new string) error {
 	if err != nil {
 		return err
 	}
-	if err = f.root.Remove(b); err != nil && !os.IsNotExist(err) {
-		return err
+	// Prepare the hardlink beside its destination before replacing anything.
+	// EXDEV, an unsupported filesystem, or a missing source must leave an
+	// existing destination intact, including when no archived fallback exists.
+	for i := 0; i < 100; i++ {
+		tmp, err := temporaryRestorePath(filepath.Dir(new))
+		if err != nil {
+			return err
+		}
+		rel, err := f.relative(tmp)
+		if err != nil {
+			return err
+		}
+		if err := f.root.Link(a, rel); os.IsExist(err) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		// Rename can succeed without consuming tmp if dest already refers to
+		// this inode. Always clean up our extra link in that case as well.
+		defer f.root.Remove(rel)
+		return f.swap(tmp, new)
 	}
-	return f.root.Link(a, b)
+	return fmt.Errorf("could not allocate restore temporary hardlink for %s", b)
 }
+
+func temporaryRestorePath(parent string) (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, ".pxar-restore-"+hex.EncodeToString(nonce[:])), nil
+}
+
 func (f *restoreFS) temporary(parent string) (*os.File, error) {
 	for i := 0; i < 100; i++ {
-		var nonce [16]byte
-		if _, err := rand.Read(nonce[:]); err != nil {
+		p, err := temporaryRestorePath(parent)
+		if err != nil {
 			return nil, err
 		}
-		p := filepath.Join(parent, ".pxar-restore-"+hex.EncodeToString(nonce[:]))
 		file, err := f.open(p, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
 		if !os.IsExist(err) {
 			return file, err
