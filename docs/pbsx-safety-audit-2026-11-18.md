@@ -20,8 +20,10 @@ creation. Initial empty and partial repositories remain supported. Maintainers
 must increment a changed package's version; equivalent version spellings are
 not an escape from package immutability.
 
-Five added Python regressions cover same-version rebuilds, adoption of an
-existing stable repository, Debian-equivalent versions and partial bootstrap.
+Six added Python regressions cover same-version rebuilds, adoption of an
+existing stable repository, Debian-equivalent versions, partial bootstrap and
+version-comparison errors. A follow-up damaged-index probe showed that dpkg's
+error exit was being treated as a false comparison; it now stops preparation.
 The three original failing cases were reproduced before the fix.
 
 ## Android restore integrity

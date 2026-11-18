@@ -285,10 +285,16 @@ def prepare(bundle, public, inspector=inspect_image):
 def check_package_upgrade(expected, previous):
     for name in expected.keys() & previous.keys():
         new, old = expected[name], previous[name]
-        if subprocess.run(['dpkg', '--compare-versions', new['version'], 'lt', old['version']]).returncode == 0:
-            raise ValueError('refusing an older ISO package version: '+name)
-        if subprocess.run(['dpkg', '--compare-versions', new['version'], 'eq', old['version']]).returncode == 0 and new != old:
-            raise ValueError('same package version has different bytes or identity; increase its version: '+name)
+        for relation in ('lt', 'eq'):
+            result = subprocess.run(['dpkg', '--compare-versions', new['version'], relation, old['version']], capture_output=True)
+            if result.returncode not in (0, 1):
+                raise ValueError('cannot compare published package versions: '+name)
+            if result.returncode == 0:
+                if relation == 'lt':
+                    raise ValueError('refusing an older ISO package version: '+name)
+                if new != old:
+                    raise ValueError('same package version has different bytes or identity; increase its version: '+name)
+                break
 
 
 def stable_packages(public, complete=True):

@@ -220,6 +220,15 @@ class IsoPublicationTests(unittest.TestCase):
             pub.prepare(rebuilt, self.public, self.inspect)
         self.assertFalse((self.public/'iso').exists())
 
+    def test_invalid_published_version_cannot_bypass_upgrade_checks(self):
+        installed = self.bundle('installed');self.stable(installed)
+        index = self.public/'apt/dists/trixie/main/binary-amd64/Packages.gz'
+        damaged = gzip.decompress(index.read_bytes()).decode().replace('Version: 1.0.3\n', 'Version: invalid version\n')
+        index.write_bytes(gzip.compress(damaged.encode()))
+        with self.assertRaisesRegex(ValueError, 'compare published package versions'):
+            pub.prepare(installed, self.public, self.inspect)
+        self.assertFalse((self.public/'iso').exists())
+
     def test_first_full_release_accepts_a_partial_stable_repository(self):
         bundle = self.bundle();self.stable(bundle)
         index = self.public/'apt/dists/trixie/main/binary-amd64/Packages.gz'
