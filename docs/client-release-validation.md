@@ -134,3 +134,51 @@ changing the website.
 No signing key was copied to CI or public storage. No phone, server VM or
 hypervisor was modified. Existing APT packages and server ISO payloads remain
 unchanged; this publication updates the client downloads.
+
+## Third client preview — 2026-11-17
+
+Release: [`pbsx-clients-2026.11.17-preview.3`](https://github.com/rikka-chunibyo/PBS-X/releases/tag/pbsx-clients-2026.11.17-preview.3).
+Public entry: https://pbsx.rikka.ca/downloads/ .
+
+- Windows/Linux desktop, agent and CLI: `0.7.2-preview`, built from
+  `0e78f4830277c91772f3b5229029d83cbd0d3036`.
+- Android universal release APK: `0.5.5-preview`, version code 14, built from
+  `8cab2b1b9d0bb52b5dd479ce6ea7c70cd9273497`. Its captured Android and shared
+  PXAR input trees still match the publishing source. The established signing
+  certificate is unchanged.
+- [Native checks 44206546363](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44206546363)
+  passed Linux races, actual Windows tests, both desktop bundles, installer/CLI
+  checks and the Linux window smoke test.
+- [Android checks 44205851527](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44205851527)
+  passed universal bindings, both app variants, Java tests/lint and Android 13
+  SAF provider instrumentation. The local release APK also passed certificate,
+  alignment, source provenance and non-debuggable checks.
+- [Publication checks 44206546427](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44206546427)
+  passed the locked Rust completion tests, publication regressions, Go core races
+  and SAF promotion/rollback tests.
+
+The release includes the [sparse and incremental fixes](sparse-incremental-safety-fixes.md)
+and client portions of the [completion and native read fixes](completion-source-read-safety-fixes.md).
+The first runtime validation exposed Windows' deferred change timestamps;
+native reads now exclude writers and deletion for the lifetime of each file
+handle, with tests for existing writers, new writers and releasing protection.
+The first isolated Rust CI run also exposed its dependence on an untracked root
+lockfile; it now uses its own committed, locked dependency fixture. The Linux
+virtual display startup failure did not recur in the successful validation run.
+
+GitHub's asset digests and the repository activation validator verified all
+five public files. Normal public HTTPS downloads using curl matched the staged
+hashes for the three applications, `release.json` and `SHA256SUMS`; the
+`downloads/latest` metadata and version listing select preview.3. The public
+edge rejected Python urllib with HTTP 403; the normal curl client worked with
+standard TLS verification. Previous immutable previews remain available.
+
+Completion acknowledgement fixes require the corresponding server package
+update; installing only these clients does not update server behavior.
+
+The published Linux agent was additionally installed on disposable VM115,
+retaining its lab credentials/service and saving the previous executable for
+rollback. With the original `4.2.9-1+pbsx1` server, a real service ZFS-snapshot
+backup and queued restore passed. Restored hashes, special modes, owners/groups,
+ACLs, capabilities, symlink target, hardlink identity and sparse allocation
+matched the source. The test job was disabled again afterward.

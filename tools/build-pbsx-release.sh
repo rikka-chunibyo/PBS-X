@@ -21,9 +21,13 @@ output=${1:-"$project/artifacts/releases/pbsx-$version-$arch"}
 work=$(mktemp -d "${TMPDIR:-/tmp}/pbsx-release.XXXXXX")
 echo "Build directory and logs: $work"
 mkdir "$work/source"
-# Read the working files, including materialized Git LFS content. git archive
-# alone would export pointer files from this repository's older LFS commits.
-git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$work/source"
+# Export committed types as well as bytes: some checkouts materialize symlinks
+# as ordinary files. Then overlay only the verified materialized LFS inputs,
+# since git archive alone exports their pointer files.
+git archive HEAD | tar -xf - -C "$work/source"
+git lfs ls-files --json |
+    python3 -c 'import json, os, sys; sys.stdout.buffer.write(b"".join(os.fsencode(item["name"]) + b"\0" for item in json.load(sys.stdin)["files"]))' |
+    tar --null -T - -cf - | tar -xf - -C "$work/source"
 git rev-parse HEAD > "$work/source/.repoid"
 rm -f "$work/source/.cargo/config.toml"
 (
