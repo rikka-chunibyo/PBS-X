@@ -7,6 +7,8 @@ import tarfile
 import tempfile
 import unittest
 import subprocess
+import os
+import stat
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -82,6 +84,34 @@ class PublicationTests(unittest.TestCase):
         clients.activate(first, self.public, self.private)
         self.assertEqual(apk.stat().st_ino, inode)
         self.assertEqual((self.public/'index.html').read_text().count('href="/downloads/"'), 1)
+
+    def test_file_sync_failure_preserves_previous_latest_and_removes_partial_stage(self):
+        clients.activate(staged(self.root, 'old'), self.public, self.private)
+        incoming = staged(self.root, 'incoming', created_at='2026-11-18T00:00:00+00:00')
+        fsync = os.fsync
+        def fail_file(fd):
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                raise OSError('injected file durability failure')
+            return fsync(fd)
+        with patch.object(clients.os, 'fsync', side_effect=fail_file):
+            with self.assertRaisesRegex(OSError, 'durability failure'):
+                clients.activate(incoming, self.public, self.private)
+        self.assertEqual((self.public/'downloads/latest').readlink(), Path('releases/old'))
+        self.assertFalse((self.public/'downloads/releases/incoming').exists())
+        self.assertEqual(list((self.public/'downloads/releases').glob('.stage-*')), [])
+
+    def test_release_directory_sync_failure_preserves_latest_and_allows_retry(self):
+        clients.activate(staged(self.root, 'old'), self.public, self.private)
+        incoming = staged(self.root, 'incoming', created_at='2026-11-18T00:00:00+00:00')
+        def fail_releases(path):
+            if Path(path) == self.public/'downloads/releases':
+                raise OSError('injected directory durability failure')
+        with patch.object(clients, 'sync_directory', side_effect=fail_releases, create=True):
+            with self.assertRaisesRegex(OSError, 'directory durability failure'):
+                clients.activate(incoming, self.public, self.private)
+        self.assertEqual((self.public/'downloads/latest').readlink(), Path('releases/old'))
+        clients.activate(incoming, self.public, self.private)
+        self.assertEqual((self.public/'downloads/latest').readlink(), Path('releases/incoming'))
 
     def test_retrying_older_release_keeps_newer_latest(self):
         first = staged(self.root, 'older-preview')
@@ -162,6 +192,9 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(Path(uploads[0][4]).name, 'SHA256SUMS')
         self.assertNotIn('--clobber', uploads[0])
         self.assertTrue(any('--draft=false' in call.args[0] for call in commands.call_args_list))
+        connections = [call.args[0] for call in commands.call_args_list if call.args[0][0] in ('ssh', 'scp')]
+        self.assertTrue(connections)
+        self.assertTrue(all('StrictHostKeyChecking=yes' in command for command in connections))
 
     def test_symlinked_asset_cannot_expose_private_file(self):
         source = staged(self.root, 'preview-one')

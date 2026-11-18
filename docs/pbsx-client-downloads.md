@@ -90,6 +90,11 @@ checked. Files then go to private staging on the repository container, where
 checksums are rechecked before a versioned directory is activated. Finally the
 GitHub prerelease is made visible. Publication uses the existing SSH connection;
 it requires no public SSH port or new CI deployment/signing secrets.
+Activation flushes the copied files and directory entries before switching
+`latest`, then flushes that pointer change too. File or directory flush failures
+before the switch preserve the previous latest release and can be retried.
+SSH and SCP explicitly require strict host-key checking even if local SSH
+defaults permit automatically accepting new host keys.
 
 For separate review and publication, use `prepare` with the run/tag/output
 arguments first, then `publish --output DIRECTORY --host HOST` with the SSH

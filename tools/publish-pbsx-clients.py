@@ -216,8 +216,17 @@ def atomic_text(path, text, mode=0o644):
             os.fchmod(stream.fileno(), mode)
             os.fsync(stream.fileno())
         os.replace(name, path)
+        sync_directory(path.parent)
     finally:
         Path(name).unlink(missing_ok=True)
+
+
+def sync_directory(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def activate(staging, public, private, allow_rollback=False):
@@ -257,7 +266,18 @@ def activate(staging, public, private, allow_rollback=False):
                 (work/'index.html').write_text(page(data))
                 (work/'index.html').chmod(0o644)
                 work.chmod(0o755)
+                # A successful activation must not expose copied bytes that
+                # still exist only in the page cache when power is lost.
+                for filename in PUBLIC_FILES | {'index.html'}:
+                    with (work/filename).open('rb') as stream:
+                        os.fsync(stream.fileno())
+                sync_directory(work)
                 os.rename(work, destination)
+        # Repeat these barriers on retries, including a previous failure after
+        # the immutable directory rename but before the latest pointer switch.
+        sync_directory(releases)
+        sync_directory(downloads)
+        sync_directory(public)
         if promote:
             link = downloads/('.latest-'+uuid.uuid4().hex)
             try:
@@ -265,6 +285,7 @@ def activate(staging, public, private, allow_rollback=False):
                 os.replace(link, latest)
             finally:
                 link.unlink(missing_ok=True)
+        sync_directory(downloads)
         atomic_text(downloads/'index.html', '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=latest/"><title>PBS-X apps</title><a href="latest/">PBS-X app downloads</a>\n')
         index = public/'index.html'
         if index.exists():
@@ -352,7 +373,7 @@ def publish(args):
     for name in PUBLIC_FILES:
         if assets[name].get('digest') != 'sha256:'+digest(args.output/name):
             raise ValueError('GitHub upload digest mismatch: '+name)
-    options = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15']
+    options = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'StrictHostKeyChecking=yes']
     if args.identity:
         options += ['-o', 'IdentitiesOnly=yes', '-i', str(args.identity.resolve())]
     if args.known_hosts:
