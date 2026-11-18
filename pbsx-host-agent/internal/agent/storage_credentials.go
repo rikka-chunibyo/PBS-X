@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -51,7 +52,10 @@ func storageAuthToken() (string, error) {
 }
 
 func storageAuthTokenFrom(get func(string, string, bool) (*registry.RegistryEntry, error)) (string, error) {
-	mode, _ := get(registry.CONFIG, "StorageCredentialMode", false)
+	mode, err := get(registry.CONFIG, "StorageCredentialMode", false)
+	if err != nil && !errors.Is(err, registry.ErrNotFound) {
+		return "", fmt.Errorf("read storage credential mode: %w", err)
+	}
 	if mode != nil && mode.Value != "auto" && mode.Value != "" {
 		if mode.Value != "custom" {
 			return "", fmt.Errorf("unknown storage credential mode")

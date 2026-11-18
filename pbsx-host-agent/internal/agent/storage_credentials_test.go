@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -25,7 +26,7 @@ func TestStorageCredentialSelection(t *testing.T) {
 				values := map[string]string{"StorageCredentialMode": test.mode, "StorageCredentials": test.override, "BackupAuthID": "device@pbs!auto", "BackupSecret": "auto-secret"}
 				value := values[key]
 				if value == "" {
-					return nil, fmt.Errorf("missing")
+					return nil, fmt.Errorf("missing: %w", registry.ErrNotFound)
 				}
 				if key == "StorageCredentials" && !secret {
 					t.Fatal("custom credential read without decryption")
@@ -37,6 +38,23 @@ func TestStorageCredentialSelection(t *testing.T) {
 				t.Fatalf("selection got token-match=%t error=%v", got == test.want, err)
 			}
 		})
+	}
+}
+
+func TestStorageCredentialModeReadFailureNeverUsesAutomaticKey(t *testing.T) {
+	for _, failure := range []error{errors.New("configuration unreadable"), errors.New("permission denied")} {
+		reads := 0
+		get := func(path, key string, secret bool) (*registry.RegistryEntry, error) {
+			reads++
+			if path != registry.CONFIG || key != "StorageCredentialMode" {
+				t.Fatal("credential read after mode lookup failed")
+			}
+			return nil, failure
+		}
+		value, err := storageAuthTokenFrom(get)
+		if value != "" || !errors.Is(err, failure) || reads != 1 {
+			t.Fatalf("unreadable credential policy did not fail closed: %v", err)
+		}
 	}
 }
 
