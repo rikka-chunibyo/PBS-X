@@ -3,6 +3,7 @@ package datastore
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -44,6 +45,9 @@ func TestBackupDirPath(t *testing.T) {
 }
 
 func TestBackupGroupRoundTrip(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PBS datastore snapshot directories require POSIX filenames containing RFC3339 colons")
+	}
 	dir := t.TempDir()
 
 	bg := BackupGroup{Type: BackupVM, ID: "100", Base: dir}
@@ -77,17 +81,25 @@ func TestBackupGroupRoundTrip(t *testing.T) {
 }
 
 func TestBackupInfoFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PBS datastore snapshot directories require POSIX filenames containing RFC3339 colons")
+	}
 	dir := t.TempDir()
 	bd := BackupDir{
 		Group:     BackupGroup{Type: BackupCT, ID: "200", Base: dir},
 		Timestamp: time.Unix(1700000000, 0),
 	}
 	snapDir := filepath.Join(dir, bd.Path())
-	_ = os.MkdirAll(snapDir, 0o755)
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	// Create some files
-	_ = os.WriteFile(filepath.Join(snapDir, "root.pxar.didx"), []byte{}, 0o644)
-	_ = os.WriteFile(filepath.Join(snapDir, "config.blob"), []byte{}, 0o644)
+	for _, name := range []string{"root.pxar.didx", "config.blob"} {
+		if err := os.WriteFile(filepath.Join(snapDir, name), []byte{}, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	info, err := bd.Info()
 	if err != nil {
@@ -102,7 +114,9 @@ func TestBackupGroupDestroy(t *testing.T) {
 	dir := t.TempDir()
 	bg := BackupGroup{Type: BackupVM, ID: "100", Base: dir}
 	groupPath := filepath.Join(dir, bg.Path())
-	_ = os.MkdirAll(groupPath, 0o755)
+	if err := os.MkdirAll(groupPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := bg.Destroy(); err != nil {
 		t.Fatal(err)

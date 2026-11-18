@@ -28,7 +28,9 @@ func TestDatastoreStoreDoesNotCountExistingRawChunkAsUploaded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snapshotDir := filepath.Join(root, "host", "target", "2026-08-28T16:00:00Z")
+	// This API takes an explicit path; its fixture need not use PBS's POSIX-only
+	// timestamp directory name. Keep the session checks runnable on Windows.
+	snapshotDir := filepath.Join(root, "host", "target", "snapshot-fixture")
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +85,7 @@ func TestDatastoreStorePublishesManifestLastWithoutLoadingReusedChunks(t *testin
 		t.Fatal(err)
 	}
 
-	snapshotDir := filepath.Join(root, "host", "target", "2026-08-28T17:00:00Z")
+	snapshotDir := filepath.Join(root, "host", "target", "snapshot-fixture")
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +191,7 @@ func TestDatastoreStoreRejectsMissingReusedChunk(t *testing.T) {
 	if _, err := datastore.NewChunkStore(root); err != nil {
 		t.Fatal(err)
 	}
-	snapshotDir := filepath.Join(root, "host", "target", "2026-08-28T17:00:00Z")
+	snapshotDir := filepath.Join(root, "host", "target", "snapshot-fixture")
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

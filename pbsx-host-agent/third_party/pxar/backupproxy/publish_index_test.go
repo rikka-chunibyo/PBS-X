@@ -41,7 +41,7 @@ func TestDatastoreStorePublishesExistingDynamicIndex(t *testing.T) {
 	if err := os.WriteFile(sourcePath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotDir := filepath.Join(root, "host", "target", "2026-08-28T17:00:00Z")
+	snapshotDir := filepath.Join(root, "host", "target", "snapshot-fixture")
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestDatastoreStoreRejectsPublishedIndexWithMissingChunk(t *testing.T) {
 	if err := os.WriteFile(sourcePath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotDir := filepath.Join(root, "host", "target", "2026-08-28T17:00:00Z")
+	snapshotDir := filepath.Join(root, "host", "target", "snapshot-fixture")
 	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

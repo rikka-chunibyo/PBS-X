@@ -68,6 +68,15 @@ tests in the nested shared PXAR module. Linux and native Windows CI now run its
 datastore, transfer and backup-proxy suites explicitly. ISO workflow path filters
 also include the APT publisher and its tests, and ISO checks run those tests.
 
+The expanded native Windows run exposed seven tests using colon-containing PBS
+timestamp directory names. Five session/index tests now use portable fixture
+paths because their explicit-path APIs do not depend on PBS timestamp names.
+The two actual on-disk PBS snapshot-layout tests (`TestBackupGroupRoundTrip` and
+`TestBackupInfoFiles`) explicitly skip on Windows, with the POSIX filename
+requirement as their reason. They continue to run on Linux. Setup operations
+in those tests now check errors instead of silently ignoring failed writes.
+The Windows app's remote PBS, archive, credential and restore tests remain enabled.
+
 ## Validation and limits
 
 Local validation covers the complete Linux host-agent race suite, Android Go
