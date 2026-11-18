@@ -34,7 +34,7 @@ class IsoPublicationTests(unittest.TestCase):
         self.public.mkdir()
         (self.public/'index.html').write_text('<h1>Existing repo</h1><a href="/iso/old.iso">ISO</a>')
 
-    def bundle(self, identity='release', version='4.2.9-1+pbsx2', repository_version='1.0.3', created='2000-01-01T00:00:00+00:00'):
+    def bundle(self, identity='release', version='4.2.9-1+pbsx2', repository_version='1.0.3', created='2000-01-01T00:00:00+00:00', payload='fixture'):
         bundle = self.root/identity
         bundle.mkdir()
         for name in pub.PACKAGES:
@@ -43,7 +43,7 @@ class IsoPublicationTests(unittest.TestCase):
             source = bundle/(name+'-source')
             (source/'DEBIAN').mkdir(parents=True)
             (source/'DEBIAN/control').write_text(f'Package: {name}\nVersion: {ver}\nArchitecture: {arch}\nMaintainer: Test <test@invalid>\nDescription: fixture\n')
-            (source/'payload').write_text('fixture')
+            (source/'payload').write_text(payload)
             subprocess.run(['dpkg-deb', '--root-owner-group', '--threads-max=1', '--build', source,
                             bundle/(name+'_'+ver+'_'+arch+'.deb')], check=True, capture_output=True,
                            env={**os.environ, 'SOURCE_DATE_EPOCH': '1700000000'})
@@ -190,6 +190,44 @@ class IsoPublicationTests(unittest.TestCase):
         self.assertEqual(pub.package_set(pub.read_json(current/'iso-inputs.json')['packages']), pub.package_set(pub.read_json(earlier/'iso-inputs.json')['packages']))
         with self.assertRaisesRegex(ValueError, 'older ISO build'):
             pub.prepare(earlier, self.public, self.inspect)
+
+    def test_same_version_rebuild_is_rejected_before_public_staging(self):
+        current = self.bundle('current');self.active(current)
+        rebuilt = self.bundle('rebuilt', payload='changed executable bytes')
+        with self.assertRaisesRegex(ValueError, 'same package version'):
+            pub.prepare(rebuilt, self.public, self.inspect)
+        self.assertEqual((self.public/'iso/latest').readlink(), Path('releases/current'))
+        self.assertFalse((self.public/'iso/releases/rebuilt').exists())
+
+    def test_initial_iso_cannot_downgrade_existing_stable_apt(self):
+        installed = self.bundle('installed', version='4.2.9-1+pbsx3');self.stable(installed)
+        older = self.bundle('older')
+        with self.assertRaisesRegex(ValueError, 'older ISO package'):
+            pub.prepare(older, self.public, self.inspect)
+        self.assertFalse((self.public/'iso').exists())
+
+    def test_initial_iso_cannot_replace_same_version_apt_bytes(self):
+        installed = self.bundle('installed');self.stable(installed)
+        rebuilt = self.bundle('rebuilt', payload='changed bytes')
+        with self.assertRaisesRegex(ValueError, 'same package version'):
+            pub.prepare(rebuilt, self.public, self.inspect)
+        self.assertFalse((self.public/'iso').exists())
+
+    def test_equivalent_debian_version_spellings_cannot_replace_package_bytes(self):
+        installed = self.bundle('installed');self.stable(installed)
+        rebuilt = self.bundle('rebuilt', repository_version='1.0.3-0')
+        with self.assertRaisesRegex(ValueError, 'same package version'):
+            pub.prepare(rebuilt, self.public, self.inspect)
+        self.assertFalse((self.public/'iso').exists())
+
+    def test_first_full_release_accepts_a_partial_stable_repository(self):
+        bundle = self.bundle();self.stable(bundle)
+        index = self.public/'apt/dists/trixie/main/binary-amd64/Packages.gz'
+        partial = [block for block in gzip.decompress(index.read_bytes()).decode().split('\n\n')
+                   if block.startswith('Package: pbsx-repository\n')]
+        index.write_bytes(gzip.compress(('\n\n'.join(partial)+'\n\n').encode()))
+        self.active(bundle)
+        self.assertEqual((self.public/'iso/latest').readlink(), Path('releases/release'))
 
     def test_symlink_escape_and_path_traversal_are_rejected(self):
         bundle = self.bundle()

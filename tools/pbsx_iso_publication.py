@@ -243,14 +243,16 @@ def navigation_pages(public):
 def prepare(bundle, public, inspector=inspect_image):
     data, expected = check_bundle(bundle, inspector)
     navigation_pages(public)
+    # reprepro does not replace an existing version with rebuilt bytes. Reject
+    # that conflict (and downgrades) before recording a pending transaction or
+    # changing APT, including the first ISO added to an existing repository.
+    check_package_upgrade(expected, stable_packages(public, complete=False))
     directory = public_dirs(public)
     current = current_release(directory)
     if current:
         previous_inputs = read_json(directory/'latest/iso-inputs.json')
         previous = package_set(previous_inputs['packages'])
-        for name in PACKAGES:
-            if subprocess.run(['dpkg', '--compare-versions', expected[name]['version'], 'lt', previous[name]['version']]).returncode == 0:
-                raise ValueError('refusing an older ISO package version')
+        check_package_upgrade(expected, previous)
         if expected == previous and timestamp(data['created_at']) < timestamp(current['created_at']):
             raise ValueError('refusing an older ISO build for the same packages')
     destination = directory/'releases'/data['release_id']
@@ -280,8 +282,19 @@ def prepare(bundle, public, inspector=inspect_image):
     return data
 
 
-def stable_packages(public):
+def check_package_upgrade(expected, previous):
+    for name in expected.keys() & previous.keys():
+        new, old = expected[name], previous[name]
+        if subprocess.run(['dpkg', '--compare-versions', new['version'], 'lt', old['version']]).returncode == 0:
+            raise ValueError('refusing an older ISO package version: '+name)
+        if subprocess.run(['dpkg', '--compare-versions', new['version'], 'eq', old['version']]).returncode == 0 and new != old:
+            raise ValueError('same package version has different bytes or identity; increase its version: '+name)
+
+
+def stable_packages(public, complete=True):
     index = public/'apt/dists/trixie/main/binary-amd64/Packages.gz'
+    if not complete and not os.path.lexists(index):
+        return {}
     regular(index)
     selected = {}
     for item in records(gzip.decompress(index.read_bytes()).decode()):
@@ -291,7 +304,7 @@ def stable_packages(public):
                 raise ValueError('multiple stable versions of an ISO input package')
             selected[name] = {'name': name, 'version': item['Version'], 'architecture': item['Architecture'],
                               'filename': Path(item['Filename']).name, 'size': int(item['Size']), 'sha256': item['SHA256']}
-    return package_set(list(selected.values()))
+    return package_set(list(selected.values())) if complete else selected
 
 
 def activate(bundle, public):

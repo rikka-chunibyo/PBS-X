@@ -9,6 +9,8 @@ on:
       - 'tools/fetch-pbsx-iso-release.py'
       - 'tools/pbsx_iso_publication.py'
       - 'tools/publish-pbsx-server.py'
+      - 'tools/pbsx-apt-repository.sh'
+      - 'tests/apt-publication.test.py'
       - 'tests/iso-publication.test.py'
       - 'tests/pbsx-iso.test.py'
       - 'tools/build-pbsx-repository-package.sh'
@@ -21,6 +23,8 @@ on:
       - 'tools/fetch-pbsx-iso-release.py'
       - 'tools/pbsx_iso_publication.py'
       - 'tools/publish-pbsx-server.py'
+      - 'tools/pbsx-apt-repository.sh'
+      - 'tests/apt-publication.test.py'
       - 'tests/iso-publication.test.py'
       - 'tests/pbsx-iso.test.py'
       - 'tools/build-pbsx-repository-package.sh'
@@ -52,6 +56,7 @@ jobs:
         run: |
           python3 tests/pbsx-iso.test.py
           python3 tests/iso-publication.test.py
+          python3 tests/apt-publication.test.py
           python3 packaging/pbsx-repository/test_apt_guard.py
   build:
     if: github.event_name == 'workflow_dispatch'

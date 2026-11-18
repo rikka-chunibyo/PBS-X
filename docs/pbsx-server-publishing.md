@@ -30,6 +30,10 @@ a `pbsx-repository` update, or both. The publisher verifies the bundle and
 downloads the current stable four-package set through the signed feed. It
 overlays the candidate packages to form the exact next installer inputs.
 Repository-support-only changes therefore rebuild the ISO too.
+Published package versions are immutable: any change to package bytes requires
+a newer Debian version. Preparation rejects rebuilt bytes under the same or an
+equivalent version and rejects downgrades against stable APT, even before the
+first ISO has been published for that repository.
 
 The publisher mirrors those four verified packages and `iso-inputs.json` into
 a GitHub prerelease, then dispatches `.github/workflows/iso.yml` with its exact
