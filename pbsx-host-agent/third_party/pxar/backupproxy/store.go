@@ -114,6 +114,13 @@ type PreviousSnapshotSource interface {
 	Close() error
 }
 
+// Adapt the previous-snapshot reader to the verifier used by desktop restores.
+type previousFileSource struct{ PreviousSnapshotSource }
+
+func (source previousFileSource) DownloadFile(name string) ([]byte, error) {
+	return source.ReadArchive(name)
+}
+
 // RemoteStore abstracts the backup storage backend.
 type RemoteStore interface {
 	RemoteStoreBase
@@ -772,7 +779,16 @@ type localSnapshotSource struct {
 }
 
 func (ls *localSnapshotSource) ReadArchive(filename string) ([]byte, error) {
-	return os.ReadFile(filepath.Join(ls.dir, filename))
+	data, err := os.ReadFile(filepath.Join(ls.dir, filename))
+	if filename == "index.json.blob" && os.IsNotExist(err) {
+		// Standalone local stores use a plain JSON manifest. Present it through
+		// the same blob interface, without hiding an existing damaged blob.
+		data, err = os.ReadFile(filepath.Join(ls.dir, "index.json"))
+		if err == nil {
+			return datastore.EncodeBlob(nil, data)
+		}
+	}
+	return data, err
 }
 
 func (ls *localSnapshotSource) ChunkSource() datastore.ChunkSource {

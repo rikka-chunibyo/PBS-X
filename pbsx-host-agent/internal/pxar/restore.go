@@ -529,6 +529,10 @@ func streamToTemp(ctx context.Context, st *restoreState, job restoreJob) (tmpPat
 	if e.RawSize > 0 && len(e.ContentRange) != 2 {
 		return tmpPath, fmt.Errorf("missing file content range")
 	}
+	writer, err := restoreContentWriter(ctx, st, f, job)
+	if err != nil {
+		return tmpPath, err
+	}
 	if e.RawSize > 0 {
 		rc, rerr := st.client.ReadFileContentReader(ctx, e.ContentRange[0], e.ContentRange[1], e.RawSize)
 		if rerr != nil {
@@ -536,7 +540,7 @@ func streamToTemp(ctx context.Context, st *restoreState, job restoreJob) (tmpPat
 		}
 		const bufSize = 256 * 1024
 		buf := make([]byte, bufSize)
-		n, werr := io.CopyBuffer(f, rc, buf)
+		n, werr := io.CopyBuffer(writer, rc, buf)
 		if werr == nil && uint64(n) != e.RawSize {
 			werr = fmt.Errorf("restored content size mismatch: got %d, want %d", n, e.RawSize)
 		}
@@ -548,6 +552,11 @@ func streamToTemp(ctx context.Context, st *restoreState, job restoreJob) (tmpPat
 		}
 	}
 
+	// Seeking over trailing zeros does not extend EOF. Set the verified logical
+	// size while the staged file is still private, before sync and promotion.
+	if err = f.Truncate(int64(e.RawSize)); err != nil {
+		return tmpPath, fmt.Errorf("set restored size for %q: %w", job.dest, err)
+	}
 	if err = f.Sync(); err != nil {
 		return tmpPath, fmt.Errorf("sync temp %q: %w", job.dest, err)
 	}

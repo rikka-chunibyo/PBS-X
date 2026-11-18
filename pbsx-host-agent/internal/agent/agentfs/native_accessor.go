@@ -120,7 +120,12 @@ func (a *NativeAccessor) OpenFile(path string) (io.ReadCloser, uint64, error) {
 		_ = fh.file.Close()
 		return nil, 0, fmt.Errorf("%q has negative file size", path)
 	}
-	return fh.file, uint64(fh.fileSize), nil
+	reader, err := newCheckedNativeFile(fh.file)
+	if err != nil {
+		_ = fh.file.Close()
+		return nil, 0, err
+	}
+	return reader, uint64(reader.before.Size()), nil
 }
 
 func (a *NativeAccessor) ReadLink(path string) (string, error) {
@@ -259,14 +264,16 @@ func nativeFormatStat(abs string, info, xinfo fswire.AgentFileInfo) format.Stat 
 	}
 
 	var mtime time.Time
-	if runtime.GOOS != "windows" {
+	if info.NativeModTime != nil {
+		mtime = *info.NativeModTime
+	} else if runtime.GOOS != "windows" {
 		// Unix platformStat already supplies nanoseconds. Its legacy metadata
 		// xattrs use seconds and must not erase subsecond change detection.
 		mtime = time.Unix(0, info.ModTime)
-	} else if xinfo.LastWriteTime != 0 {
-		mtime = time.Unix(xinfo.LastWriteTime, 0)
 	} else if stat, err := os.Lstat(abs); err == nil {
 		mtime = stat.ModTime()
+	} else if xinfo.LastWriteTime != 0 {
+		mtime = time.Unix(xinfo.LastWriteTime, 0)
 	} else if info.ModTime != 0 {
 		// Unix platformStat reports nanoseconds, while older Windows code
 		// reports seconds. The os.Lstat path above handles the common case;
@@ -397,4 +404,12 @@ func posixACLToPXAR(entries []fswire.PosixACL) pxarlib.ACL {
 func MarshalNativeMetadataJSON(info fswire.AgentFileInfo) []byte {
 	data, _ := json.Marshal(info)
 	return data
+}
+
+// Native conversion splits seconds/nanoseconds before constructing time.Time;
+// UnixNano overflows for legitimate NTFS timestamps outside 1678-2262.
+func nativeWindowsModTime(ticks int64) time.Time {
+	const ticksPerSecond = 10_000_000
+	const unixEpochOffset = 11_644_473_600
+	return time.Unix(ticks/ticksPerSecond-unixEpochOffset, ticks%ticksPerSecond*100)
 }

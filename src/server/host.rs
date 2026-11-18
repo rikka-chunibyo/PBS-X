@@ -21,6 +21,9 @@ use pbsx_api_types::{
     HostRestoreRunProgress, HostRestoreRunResult, HostRestoreRunState,
 };
 
+#[path = "host_run_completion.rs"]
+mod run_completion;
+
 pub const HOST_STATUS_BASEDIR: &str = concat!(PROXMOX_BACKUP_STATE_DIR_M!(), "/host-status");
 pub const HOST_ENROLLMENT_BASEDIR: &str =
     concat!(PROXMOX_BACKUP_STATE_DIR_M!(), "/pbsx-enrollment");
@@ -1018,8 +1021,28 @@ pub fn claim_host_backup(host: &str) -> Result<Option<HostBackupRunCommand>, Err
     create_run_dirs(host)?;
     let _lock = host_run_lock(host)?;
     let base = run_host_dir(host);
-    if let Some(path) = first_json_file(&base.join("running"))? {
+    while let Some(path) = first_json_file(&base.join("running"))? {
         let command = read_run_command(&path)?;
+        let history = base
+            .join("history")
+            .join(format!("{}.json", command.run_id));
+        if run_completion::retire_completed::<HostBackupRunCommand, HostBackupRunHistory>(
+            &path,
+            &history,
+            |record| {
+                if record.command.host_id != host
+                    || record.result.host_id != host
+                    || record.command.run_id != record.result.run_id
+                {
+                    bail!("completed host backup identity mismatch");
+                }
+                Ok(())
+            },
+            |record| &record.command,
+        )? {
+            let _ = std::fs::remove_file(run_progress_path(host, &command.run_id));
+            continue;
+        }
         ensure_initial_run_progress(&command)?;
         return Ok(Some(command));
     }
@@ -1109,24 +1132,35 @@ pub fn finish_host_backup(result: &HostBackupRunResult) -> Result<(), Error> {
     let _lock = host_run_lock(&result.host_id)?;
     let base = run_host_dir(&result.host_id);
     let running = base.join("running").join(format!("{}.json", result.run_id));
-    let command = read_run_command(&running)
-        .map_err(|_| format_err!("host run '{}' is not currently claimed", result.run_id))?;
-    if command.host_id != result.host_id {
-        bail!("host run identity mismatch");
-    }
     let progress_path = run_progress_path(&result.host_id, &result.run_id);
-    let progress = read_run_progress(&progress_path).ok();
-    let record = HostBackupRunHistory {
-        command,
-        result: result.clone(),
-        progress,
-        finished_at: proxmox_time::epoch_i64(),
-    };
     let history = base.join("history").join(format!("{}.json", result.run_id));
-    write_run_json(&history, &record)?;
-    std::fs::remove_file(running)?;
+    run_completion::finish(
+        &running,
+        &history,
+        |command: HostBackupRunCommand| {
+            Ok(HostBackupRunHistory {
+                command,
+                result: result.clone(),
+                progress: read_run_progress(&progress_path).ok(),
+                finished_at: proxmox_time::epoch_i64(),
+            })
+        },
+        |record: &HostBackupRunHistory| {
+            if record.command.host_id != result.host_id || record.command.run_id != result.run_id {
+                bail!("host backup completion identity mismatch");
+            }
+            if record.result != *result {
+                bail!("conflicting host backup completion result");
+            }
+            Ok(())
+        },
+        |record| &record.command,
+        write_run_json,
+    )?;
     let _ = std::fs::remove_file(progress_path);
-    prune_host_run_history(&base.join("history"), 200)?;
+    if let Err(err) = prune_host_run_history(&base.join("history"), 200) {
+        eprintln!("unable to prune PBS-X host backup history: {err}");
+    }
     Ok(())
 }
 
@@ -1424,8 +1458,28 @@ pub fn claim_host_restore(host: &str) -> Result<Option<HostRestoreRunCommand>, E
     create_run_dirs(host)?;
     let _lock = host_run_lock(host)?;
     let base = run_host_dir(host);
-    if let Some(path) = first_json_file(&base.join("restore-running"))? {
+    while let Some(path) = first_json_file(&base.join("restore-running"))? {
         let command = read_restore_command(&path)?;
+        let history = base
+            .join("restore-history")
+            .join(format!("{}.json", command.run_id));
+        if run_completion::retire_completed::<HostRestoreRunCommand, HostRestoreRunHistory>(
+            &path,
+            &history,
+            |record| {
+                if record.command.host_id != host
+                    || record.result.host_id != host
+                    || record.command.run_id != record.result.run_id
+                {
+                    bail!("completed host restore identity mismatch");
+                }
+                Ok(())
+            },
+            |record| &record.command,
+        )? {
+            let _ = std::fs::remove_file(restore_progress_path(host, &command.run_id));
+            continue;
+        }
         ensure_initial_restore_progress(&command)?;
         return Ok(Some(command));
     }
@@ -1450,26 +1504,33 @@ pub fn finish_host_restore(result: &HostRestoreRunResult) -> Result<(), Error> {
     let running = base
         .join("restore-running")
         .join(format!("{}.json", result.run_id));
-    let command = read_restore_command(&running)
-        .map_err(|_| format_err!("restore run '{}' is not currently claimed", result.run_id))?;
-    if command.host_id != result.host_id || command.run_id != result.run_id {
-        bail!("host restore completion identity mismatch");
-    }
     let progress_path = restore_progress_path(&result.host_id, &result.run_id);
-    let progress = read_restore_progress(&progress_path).ok();
-    let history = HostRestoreRunHistory {
-        command,
-        result: result.clone(),
-        progress,
-        finished_at: proxmox_time::epoch_i64(),
-    };
-    write_run_json(
-        &base
-            .join("restore-history")
-            .join(format!("{}.json", result.run_id)),
+    let history = base
+        .join("restore-history")
+        .join(format!("{}.json", result.run_id));
+    run_completion::finish(
+        &running,
         &history,
+        |command: HostRestoreRunCommand| {
+            Ok(HostRestoreRunHistory {
+                command,
+                result: result.clone(),
+                progress: read_restore_progress(&progress_path).ok(),
+                finished_at: proxmox_time::epoch_i64(),
+            })
+        },
+        |record: &HostRestoreRunHistory| {
+            if record.command.host_id != result.host_id || record.command.run_id != result.run_id {
+                bail!("host restore completion identity mismatch");
+            }
+            if record.result != *result {
+                bail!("conflicting host restore completion result");
+            }
+            Ok(())
+        },
+        |record| &record.command,
+        write_run_json,
     )?;
-    std::fs::remove_file(running)?;
     let _ = std::fs::remove_file(progress_path);
 
     let history_dir = base.join("restore-history");

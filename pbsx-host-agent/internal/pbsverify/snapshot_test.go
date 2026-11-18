@@ -89,7 +89,7 @@ func TestLoadRootIndexesRejectsNonIncreasingOffsets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyIndex(&s.Manifest, "root.pxar.didx", data); err == nil || !strings.Contains(err.Error(), "offset") {
+	if err := datastore.VerifySnapshotIndex(&s.Manifest, "root.pxar.didx", data); err == nil || !strings.Contains(err.Error(), "offset") {
 		t.Fatalf("invalid offsets: %v", err)
 	}
 }

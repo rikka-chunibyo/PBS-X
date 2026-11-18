@@ -99,10 +99,12 @@ func (s *Server) platformStat(path string) (fswire.AgentFileInfo, error) {
 		bs = 4096
 	}
 	alloc := max(nfo.AllocationSize, 0)
+	preciseMtime := nativeWindowsModTime(nfo.LastWriteTime)
 	return fswire.AgentFileInfo{
-		Name: filepath.Base(filepath.Clean(path)),
-		Size: nfo.EndOfFile,
-		Mode: mode,
+		Name:          filepath.Base(filepath.Clean(path)),
+		Size:          nfo.EndOfFile,
+		Mode:          mode,
+		NativeModTime: &preciseMtime,
 		ModTime: filetimeToUnix(windows.Filetime{
 			LowDateTime:  uint32(uint64(nfo.LastWriteTime) & 0xFFFFFFFF),
 			HighDateTime: uint32(uint64(nfo.LastWriteTime) >> 32),

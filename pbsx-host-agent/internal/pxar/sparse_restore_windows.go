@@ -3,49 +3,17 @@
 package pxar
 
 import (
-	"context"
+	"errors"
 	"os"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-type fileZeroDataInformation struct {
-	FileOffset      int64
-	BeyondFinalZero int64
-}
-
-func applySparseLayout(ctx context.Context, st *restoreState, file *os.File, xattrs map[string][]byte, fileSize uint64) {
-	holes, present, err := decodeSparseHoles(xattrs, fileSize)
-	if err != nil {
-		st.reportErr(ctx, "decode sparse layout", file.Name(), err)
-		return
-	}
-	if !present || len(holes) == 0 {
-		return
-	}
-	h := windows.Handle(file.Fd())
+func enableSparseFile(file *os.File) (bool, error) {
 	var returned uint32
-	if err := windows.DeviceIoControl(h, windows.FSCTL_SET_SPARSE, nil, 0, nil, 0, &returned, nil); err != nil {
-		st.reportErr(ctx, "mark file sparse", file.Name(), err)
-		return
+	err := windows.DeviceIoControl(windows.Handle(file.Fd()), windows.FSCTL_SET_SPARSE, nil, 0, nil, 0, &returned, nil)
+	if errors.Is(err, windows.ERROR_INVALID_FUNCTION) || errors.Is(err, windows.ERROR_NOT_SUPPORTED) || errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+		return false, nil // Preserve the payload as a dense file on this filesystem.
 	}
-	for _, hole := range holes {
-		info := fileZeroDataInformation{
-			FileOffset:      int64(hole.Offset),
-			BeyondFinalZero: int64(hole.Offset + hole.Length),
-		}
-		if err := windows.DeviceIoControl(
-			h,
-			windows.FSCTL_SET_ZERO_DATA,
-			(*byte)(unsafe.Pointer(&info)),
-			uint32(unsafe.Sizeof(info)),
-			nil,
-			0,
-			&returned,
-			nil,
-		); err != nil {
-			st.reportErr(ctx, "punch sparse hole", file.Name(), err)
-		}
-	}
+	return err == nil, err
 }

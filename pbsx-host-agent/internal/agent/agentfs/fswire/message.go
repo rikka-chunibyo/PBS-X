@@ -2,6 +2,7 @@ package fswire
 
 import (
 	"fmt"
+	"time"
 )
 
 type (
@@ -136,10 +137,12 @@ type (
 	}
 
 	AgentFileInfo struct {
-		Name           string          `cbor:"name"`
-		Size           int64           `cbor:"size"`
-		Mode           uint32          `cbor:"mode"`
-		ModTime        int64           `cbor:"mod_time"`
+		Name    string `cbor:"name"`
+		Size    int64  `cbor:"size"`
+		Mode    uint32 `cbor:"mode"`
+		ModTime int64  `cbor:"mod_time"`
+		// Native precision is kept separate from the legacy wire timestamp units.
+		NativeModTime  *time.Time      `cbor:"-" json:"-"`
 		IsDir          bool            `cbor:"is_dir"`
 		Blocks         uint64          `cbor:"blocks,omitempty"`
 		CreationTime   int64           `cbor:"creation_time,omitempty"`

@@ -122,6 +122,7 @@ func (s *Server) RunBackup(ctx context.Context, root string, config BackupConfig
 	if err != nil {
 		return nil, fmt.Errorf("start session: %w", err)
 	}
+	defer sess.Close()
 
 	rootStat, err := s.client.Stat(ctx, root)
 	if err != nil {
@@ -295,33 +296,35 @@ func (s *Server) RunMetadataBackup(ctx context.Context, root string, config Back
 	}
 	defer snapSrc.Close()
 
-	// Download previous snapshot's indexes
-	metaIdxData, err := snapSrc.ReadArchive("root.mpxar.didx")
+	// Verify the completed snapshot before trusting its archive-relative paths
+	// or reusing any payload references. This precedes starting an upload.
+	indexes, err := datastore.LoadPlainRootIndexes(previousFileSource{snapSrc}, prev.BackupType.String(), prev.BackupID, prev.BackupTime)
 	if err != nil {
-		return nil, fmt.Errorf("read previous metadata index: %w", err)
+		return nil, fmt.Errorf("verify previous snapshot: %w", err)
 	}
-	payloadIdxData, err := snapSrc.ReadArchive("root.ppxar.didx")
-	if err != nil {
-		return nil, fmt.Errorf("read previous payload index: %w", err)
+	if indexes.Metadata == nil {
+		return nil, fmt.Errorf("metadata reuse requires a split previous snapshot")
 	}
-
-	metaIdx, err := datastore.ParseDynamicIndex(metaIdxData)
+	metaIdx, err := datastore.ParseDynamicIndex(indexes.Metadata)
 	if err != nil {
 		return nil, fmt.Errorf("parse previous metadata index: %w", err)
 	}
-	payloadIdx, err := datastore.ParseDynamicIndex(payloadIdxData)
+	defer metaIdx.Close()
+	payloadIdx, err := datastore.ParseDynamicIndex(indexes.Payload)
 	if err != nil {
 		return nil, fmt.Errorf("parse previous payload index: %w", err)
 	}
+	defer payloadIdx.Close()
+	chunkSource := &datastore.VerifiedChunkSource{Inner: snapSrc.ChunkSource()}
 
 	// Build the metadata catalog from previous backup
-	catalog, err := BuildCatalog(metaIdx, snapSrc.ChunkSource())
+	catalog, err := BuildCatalog(metaIdx, chunkSource)
 	if err != nil {
 		return nil, fmt.Errorf("build metadata catalog: %w", err)
 	}
 
 	// Build a restorer for the previous payload stream
-	restorer := datastore.NewRestorer(snapSrc.ChunkSource())
+	restorer := datastore.NewRestorer(chunkSource)
 
 	// Start the backup session
 	start := time.Now()
@@ -329,6 +332,7 @@ func (s *Server) RunMetadataBackup(ctx context.Context, root string, config Back
 	if err != nil {
 		return nil, fmt.Errorf("start session: %w", err)
 	}
+	defer sess.Close()
 
 	rootStat, err := s.client.Stat(ctx, root)
 	if err != nil {
@@ -406,7 +410,7 @@ func (s *Server) RunMetadataBackup(ctx context.Context, root string, config Back
 			return nil, fmt.Errorf("open local chunk store: %w", err)
 		}
 		mw.copyChunk = func(info datastore.ChunkInfo) error {
-			blob, err := snapSrc.ChunkSource().GetChunk(info.Digest)
+			blob, err := chunkSource.GetChunk(info.Digest)
 			if err != nil {
 				return err
 			}
@@ -480,8 +484,10 @@ type pendingReuse struct {
 	previous *SnapshotEntry
 }
 
-func (mw *metadataWalker) maybeReusePayload(enc *encoder.Encoder, name, fullPath string, current DirEntry, currentMeta pxar.Metadata) (bool, error) {
-	prev, ok := mw.catalog[fullPath]
+func (mw *metadataWalker) maybeReusePayload(enc *encoder.Encoder, name, fullPath, archivePath string, current DirEntry, currentMeta pxar.Metadata) (bool, error) {
+	// Source paths include the caller's filesystem root (e.g. ./ or C:/).
+	// The previous catalog is rooted at the archive, independently of that path.
+	prev, ok := mw.catalog[path.Join("/", archivePath)]
 	if !ok || !EntryMatches(current, currentMeta, prev) || !prev.IsRegularFile {
 		return false, nil
 	}
@@ -694,7 +700,7 @@ func (s *Server) walkDir(ctx context.Context, dirPath, archiveDir string, enc *e
 
 			catBuilder.addFile(entry.Name, entry.Size, entry.Stat.Mtime.Secs)
 			if mw != nil {
-				if reused, err := mw.maybeReusePayload(enc, entry.Name, fullPath, entry, *meta); reused || err != nil {
+				if reused, err := mw.maybeReusePayload(enc, entry.Name, fullPath, archivePath, entry, *meta); reused || err != nil {
 					if err != nil {
 						return fmt.Errorf("reuse payload for %q: %w", entry.Name, err)
 					}
@@ -753,7 +759,12 @@ func (s *Server) encodeFile(ctx context.Context, enc *encoder.Encoder, name, ful
 	if err != nil {
 		return 0, err
 	}
-	defer r.Close()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = r.Close()
+		}
+	}()
 	fw, err := enc.CreateFile(meta, name, size)
 	if err != nil {
 		return 0, err
@@ -762,6 +773,11 @@ func (s *Server) encodeFile(ctx context.Context, enc *encoder.Encoder, name, ful
 	if _, err := io.Copy(fw, r); err != nil {
 		fw.Close()
 		return 0, err
+	}
+	closed = true
+	if err := r.Close(); err != nil {
+		_ = fw.Close()
+		return 0, fmt.Errorf("validate and close source %q: %w", fullPath, err)
 	}
 	if err := fw.Close(); err != nil {
 		return 0, err

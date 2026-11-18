@@ -2,10 +2,8 @@
 
 package pxar
 
-import (
-	"context"
-	"os"
-)
+import "os"
 
-func applySparseLayout(ctx context.Context, st *restoreState, file *os.File, xattrs map[string][]byte, fileSize uint64) {
-}
+// Seeking over verified zeros in a fresh file preserves its logical bytes on
+// filesystems both with and without sparse allocation support.
+func enableSparseFile(*os.File) (bool, error) { return true, nil }
