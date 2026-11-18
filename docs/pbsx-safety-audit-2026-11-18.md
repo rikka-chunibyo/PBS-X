@@ -111,8 +111,9 @@ commits changed only shared Go test fixtures and this report. Rust server code
 was unchanged and was not rebuilt; its existing ignored integration tests were
 outside these client/publication review cycles.
 
-These are source fixes. Existing public package, app and ISO release bytes are
-unchanged; distributing the fixes requires a subsequent verified release.
+These fixes were subsequently published in desktop `0.7.3-preview` and Android
+`0.5.6-preview`; see [publication and follow-up audit](pbsx-publication-and-audit-2026-11-18.md).
+Existing server package and ISO bytes are unchanged.
 Physical Samsung acceptance and bare-metal recovery remain separate tests.
 An audit covers the paths reviewed and the failures exercised; it does not
 establish that all possible data-loss or recovery cases have been eliminated.
