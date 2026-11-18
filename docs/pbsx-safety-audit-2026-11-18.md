@@ -2,6 +2,7 @@
 
 Three review cycles covered release publication, Android restore integrity and
 desktop credential selection, followed by a review of the fixes and CI coverage.
+Branch: `pbsx-safety-audit-20261118`.
 All fixtures use disposable files and dummy credentials. No live phone, server
 VM, repository container or hypervisor was changed during this audit.
 
@@ -83,11 +84,32 @@ and checks its manifest/index; Linux exercises both successful publication modes
 
 ## Validation and limits
 
-Local validation covers the complete Linux host-agent race suite, Android Go
-core race suite, shared datastore/transfer/backup-proxy race suites, publication
-and APT-guard regressions, Python compilation and patch whitespace checks.
-Build parallelism and Go memory use are bounded. Hosted checks provide the
-native Windows and Android build validation for the audit branch.
+Local validation passed the complete Linux host-agent race suite, Android Go
+core race suite and shared datastore/transfer/backup-proxy race suites. All
+85 Python tests passed: 26 combined-publication, 14 ISO, 11 APT-publication,
+16 client-publication, seven Android-source and 11 installed APT-guard tests.
+Python compilation and patch whitespace checks passed. Build parallelism and
+Go memory use were bounded.
+
+Hosted validation passed:
+
+- [Windows/Linux checks 44258970570](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44258970570):
+  native agent tests, shared archive/transport suites, both desktop bundles,
+  installer checks and the Linux window smoke test.
+- [Android checks 44258970444](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44258970444):
+  real universal Go bindings, debug/release APK builds, Java tests, both lint
+  variants and SAF provider instrumentation on an Android 13 emulator.
+- [Publication checks 44258970484](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44258970484):
+  corruption/refusal tests, durable host completion, Android Go race tests and
+  Java restore promotion/rollback tests.
+- [ISO checks 44257639390](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44257639390):
+  all 26 combined-publication cases plus ISO and APT protection regressions.
+
+The client runs used source `83f154ea96223fe4614cbcb44b2264d432581a97`.
+The ISO run used `8854fb585d98a986b163bbbcbf7752d6b1fb2c2d`; subsequent
+commits changed only shared Go test fixtures and this report. Rust server code
+was unchanged and was not rebuilt; its existing ignored integration tests were
+outside these client/publication review cycles.
 
 These are source fixes. Existing public package, app and ISO release bytes are
 unchanged; distributing the fixes requires a subsequent verified release.
