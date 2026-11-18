@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"path"
 	"sort"
 
@@ -67,39 +66,15 @@ func (c *Client) openGroupSnapshot(ctx context.Context, store, namespace, backup
 		}
 		return &verifiedChunkSource{reader.AsChunkSource(), key, encrypted}
 	}
-	meta, metaErr := reader.DownloadFile("root.mpxar.didx")
+	indexes, err := datastore.LoadRootIndexes(reader, manifest)
+	if err != nil {
+		return fail(err)
+	}
 	var archive transfer.ArchiveReader
-	if metaErr == nil {
-		if err = verifySnapshotIndex(manifest, "root.mpxar.didx", meta); err != nil {
-			return fail(err)
-		}
-		payload, e := reader.DownloadFile("root.ppxar.didx")
-		if e != nil {
-			return fail(e)
-		}
-		if err = verifySnapshotIndex(manifest, "root.ppxar.didx", payload); err != nil {
-			return fail(err)
-		}
-		// Split archives produced by PBS use one encryption mode for both streams.
-		for _, f := range manifest.Files {
-			if f.Filename == "root.ppxar.didx" {
-				for _, mf := range manifest.Files {
-					if mf.Filename == "root.mpxar.didx" && mf.CryptMode != f.CryptMode {
-						return fail(errors.New("mixed split-archive encryption is unsupported"))
-					}
-				}
-			}
-		}
-		archive, err = transfer.NewSplitReader(meta, payload, sources("root.mpxar.didx"))
+	if indexes.Metadata != nil {
+		archive, err = transfer.NewSplitReader(indexes.Metadata, indexes.Payload, sources("root.mpxar.didx"))
 	} else {
-		legacy, e := reader.DownloadFile("root.pxar.didx")
-		if e != nil {
-			return fail(fmt.Errorf("no readable root archive: %w", metaErr))
-		}
-		if err = verifySnapshotIndex(manifest, "root.pxar.didx", legacy); err != nil {
-			return fail(err)
-		}
-		archive, err = transfer.NewChunkedReader(legacy, sources("root.pxar.didx"))
+		archive, err = transfer.NewChunkedReader(indexes.Legacy, sources("root.pxar.didx"))
 	}
 	if err != nil {
 		return fail(err)

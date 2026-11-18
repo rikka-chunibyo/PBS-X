@@ -180,7 +180,7 @@ func TestSnapshotIndexRejectsCorruptionAndSubstitution(t *testing.T) {
 	}
 	sum, size := index.ComputeCsum()
 	manifest := &datastore.Manifest{Files: []datastore.BackupFileInfo{{Filename: "root.mpxar.didx", CSum: hex.EncodeToString(sum[:]), Size: size}}}
-	if err := verifySnapshotIndex(manifest, "root.mpxar.didx", original); err != nil {
+	if err := datastore.VerifySnapshotIndex(manifest, "root.mpxar.didx", original); err != nil {
 		t.Fatal("valid archive rejected", err)
 	}
 	corrupted := append([]byte(nil), original...)
@@ -192,18 +192,18 @@ func TestSnapshotIndexRejectsCorruptionAndSubstitution(t *testing.T) {
 		"truncated-entry":         original[:len(original)-1],
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := verifySnapshotIndex(manifest, "root.mpxar.didx", raw); err == nil {
+			if err := datastore.VerifySnapshotIndex(manifest, "root.mpxar.didx", raw); err == nil {
 				t.Fatal("invalid archive index accepted")
 			}
 		})
 	}
-	if err := verifySnapshotIndex(manifest, "root.ppxar.didx", original); err == nil {
+	if err := datastore.VerifySnapshotIndex(manifest, "root.ppxar.didx", original); err == nil {
 		t.Fatal("an index absent from the manifest was accepted")
 	}
 	wrongSize := *manifest
 	wrongSize.Files = append([]datastore.BackupFileInfo(nil), manifest.Files...)
 	wrongSize.Files[0].Size++
-	if err := verifySnapshotIndex(&wrongSize, "root.mpxar.didx", original); err == nil {
+	if err := datastore.VerifySnapshotIndex(&wrongSize, "root.mpxar.didx", original); err == nil {
 		t.Fatal("signed size mismatch accepted")
 	}
 }

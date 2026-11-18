@@ -53,6 +53,9 @@ jobs:
       - name: Linux race tests
         working-directory: pbsx-host-agent
         run: go test -race -tags agent -timeout 10m ./...
+      - name: Shared archive integrity and transport race tests
+        working-directory: pbsx-host-agent/third_party/pxar
+        run: go test -race -timeout 5m ./datastore ./transfer ./backupproxy
       - name: UI and installer refusal checks
         run: |
           node tests/host-ui-credentials.test.cjs
@@ -106,6 +109,9 @@ jobs:
       - name: Native Windows unit tests
         working-directory: pbsx-host-agent
         run: go test -tags agent -timeout 10m ./...
+      - name: Native Windows shared archive and transport tests
+        working-directory: pbsx-host-agent/third_party/pxar
+        run: go test -timeout 5m ./datastore ./transfer ./backupproxy
       - name: Build matched Windows preview bundle
         env:
           PBSX_VERSION: ${{ inputs.version || '0.7.2-preview' }}

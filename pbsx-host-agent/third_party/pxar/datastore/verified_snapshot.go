@@ -41,15 +41,29 @@ func LoadPlainRootIndexes(source SnapshotFileSource, kind, id string, stamp int6
 	if manifest.Signature != "" || !plainSnapshotMode(manifest.CryptMode) {
 		return nil, fmt.Errorf("encrypted or signed snapshots require encryption key support")
 	}
-	files := make(map[string]bool, len(manifest.Files))
 	for _, file := range manifest.Files {
-		if files[file.Filename] {
-			return nil, fmt.Errorf("duplicate manifest file %q", file.Filename)
-		}
-		files[file.Filename] = true
 		if !plainSnapshotMode(file.CryptMode) {
 			return nil, fmt.Errorf("unsupported snapshot encryption mode %q for %s", file.CryptMode, file.Filename)
 		}
+	}
+	return LoadRootIndexes(source, manifest)
+}
+
+// LoadRootIndexes selects and verifies indexes from an already authenticated
+// manifest. Callers must first check snapshot identity and, for protected
+// snapshots, verify its signature using the selected key. Index files themselves
+// are unencrypted; their referenced chunks are decoded separately by the caller.
+func LoadRootIndexes(source SnapshotFileSource, manifest *Manifest) (*VerifiedRootIndexes, error) {
+	files := make(map[string]string, len(manifest.Files))
+	for _, file := range manifest.Files {
+		if _, exists := files[file.Filename]; exists {
+			return nil, fmt.Errorf("duplicate manifest file %q", file.Filename)
+		}
+		mode := file.CryptMode
+		if mode == "" {
+			mode = string(CryptModeNone)
+		}
+		files[file.Filename] = mode
 	}
 	load := func(name string) ([]byte, error) {
 		data, err := source.DownloadFile(name)
@@ -62,9 +76,16 @@ func LoadPlainRootIndexes(source SnapshotFileSource, kind, id string, stamp int6
 		return data, nil
 	}
 	result := &VerifiedRootIndexes{}
-	if files["root.mpxar.didx"] || files["root.ppxar.didx"] {
-		if !files["root.mpxar.didx"] || !files["root.ppxar.didx"] {
+	_, metadata := files["root.mpxar.didx"]
+	_, payload := files["root.ppxar.didx"]
+	_, legacy := files["root.pxar.didx"]
+	var err error
+	if metadata || payload {
+		if !metadata || !payload {
 			return nil, fmt.Errorf("incomplete split root archive in snapshot manifest")
+		}
+		if files["root.mpxar.didx"] != files["root.ppxar.didx"] {
+			return nil, fmt.Errorf("mixed split-archive encryption is unsupported")
 		}
 		if result.Metadata, err = load("root.mpxar.didx"); err != nil {
 			return nil, err
@@ -72,7 +93,7 @@ func LoadPlainRootIndexes(source SnapshotFileSource, kind, id string, stamp int6
 		if result.Payload, err = load("root.ppxar.didx"); err != nil {
 			return nil, err
 		}
-	} else if files["root.pxar.didx"] {
+	} else if legacy {
 		if result.Legacy, err = load("root.pxar.didx"); err != nil {
 			return nil, err
 		}

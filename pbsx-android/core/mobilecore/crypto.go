@@ -170,11 +170,33 @@ func (c *Client) snapshotManifest(raw []byte, kind, id string, stamp int64) (*da
 	if m.BackupType != kind || m.BackupID != id || m.BackupTime != stamp {
 		return nil, nil, errors.New("snapshot manifest identity mismatch")
 	}
-	encrypted := m.CryptMode == string(datastore.CryptModeEncrypt)
-	for _, f := range m.Files {
-		encrypted = encrypted || f.CryptMode == string(datastore.CryptModeEncrypt)
+	protectedMode := func(mode string) (bool, error) {
+		switch datastore.CryptMode(mode) {
+		case "", datastore.CryptModeNone:
+			return false, nil
+		case datastore.CryptModeEncrypt, datastore.CryptModeSign:
+			return true, nil
+		default:
+			return false, fmt.Errorf("unsupported snapshot encryption mode %q", mode)
+		}
 	}
-	if !encrypted && m.Signature == "" {
+	protected, err := protectedMode(m.CryptMode)
+	if err != nil {
+		return nil, nil, err
+	}
+	seen := make(map[string]bool, len(m.Files))
+	for _, f := range m.Files {
+		if seen[f.Filename] {
+			return nil, nil, fmt.Errorf("duplicate manifest file %q", f.Filename)
+		}
+		seen[f.Filename] = true
+		fileProtected, err := protectedMode(f.CryptMode)
+		if err != nil {
+			return nil, nil, err
+		}
+		protected = protected || fileProtected
+	}
+	if !protected && m.Signature == "" {
 		return m, nil, nil
 	}
 	var info datastore.UnprotectedInfo
@@ -189,17 +211,6 @@ func (c *Client) snapshotManifest(raw []byte, kind, id string, stamp int64) (*da
 		return nil, nil, errors.New("snapshot signature verification failed")
 	}
 	return m, key, nil
-}
-func verifySnapshotIndex(m *datastore.Manifest, name string, data []byte) error {
-	idx, err := datastore.ParseDynamicIndex(data)
-	if err != nil {
-		return err
-	}
-	sum, size := idx.ComputeCsum()
-	if idx.IndexCsum() != sum {
-		return errors.New("archive index checksum mismatch")
-	}
-	return m.VerifyFile(name, hex.EncodeToString(sum[:]), size)
 }
 
 type verifiedChunkSource struct {
