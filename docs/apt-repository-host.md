@@ -43,7 +43,10 @@ SHA256:LvUHV6sBbDGKyDd3EVfN9aTw5VKedAkvxmNHGsqD07M
 
 ## Repository preparation
 
-Installed tools: nginx, reprepro, GnuPG, curl and CA certificates.
+Installed tools: nginx, reprepro, GnuPG, curl, CA certificates, Python 3 and
+Debian package tools. `xorriso` was added for independent verification of
+matching offline images during combined stable publication; `flock` serializes
+publication and refresh. See [server/ISO publishing](pbsx-server-publishing.md).
 
 - Static document root: `/srv/pbs-x-apt/public`.
 - Private administration state: `/var/lib/pbs-x-apt`, mode `0700`.

@@ -5,7 +5,14 @@ and repository configuration from the media. Installation requires no Internet
 connection. The installer still asks for the target disks, hostname, network
 settings and administrator password. Selected disks are erased.
 
-The initial preview uses PBS-X `4.2.9-1+pbsx1` and `pbsx-repository` 1.0.3:
+The current image includes PBS-X `4.2.9-1+pbsx2` and `pbsx-repository` 1.0.3:
+
+- [Download current ISO](https://pbsx.rikka.ca/iso/latest/pbsx-offline-amd64.iso)
+- [Current SHA256 checksum](https://pbsx.rikka.ca/iso/latest/pbsx-offline-amd64.iso.sha256)
+- [Current build details](https://pbsx.rikka.ca/iso/latest/iso-publication.json)
+- [GitHub release and alternate download](https://github.com/rikka-chunibyo/PBS-X/releases/tag/pbsx-iso-4.2.9-1+pbsx2-repo-1.0.3-d4e22c0a7b)
+
+The original `+pbsx1` preview remains available for historical reference:
 
 - [Download ISO](https://pbsx.rikka.ca/iso/pbsx_4.2.9-1+pbsx1-offline-amd64.iso)
 - [SHA256 checksum](https://pbsx.rikka.ca/iso/pbsx_4.2.9-1+pbsx1-offline-amd64.iso.sha256)
@@ -128,3 +135,5 @@ recovery on your actual server still require validation.
 
 See the [offline install validation report](pbsx-offline-iso-validation.md) for
 the BIOS/Secure Boot and later APT reconnection tests and their limits.
+See the [combined publication validation report](pbsx-apt-iso-publication-validation.md)
+for current-package matching, public download integrity and recovery checks.

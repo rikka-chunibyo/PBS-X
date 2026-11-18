@@ -6,6 +6,13 @@ The permanent installer link is
 **https://pbsx.rikka.ca/iso/latest/pbsx-offline-amd64.iso**. Its sibling checksum
 and manifest describe that exact image. Previous images retain versioned URLs.
 
+The maintainer machine needs Python 3, Git, GitHub CLI with repository access,
+OpenSSH, curl, GnuPG, Debian package tools and `xorriso` for independent image
+inspection. The existing repository container needs Python 3, `dpkg-deb`,
+`xorriso`, reprepro, GnuPG and `flock`. Install these dependencies before the
+first combined publication. Image construction happens on the hosted runner;
+the container only verifies and serves the completed image.
+
 From the trusted development checkout, after building/testing a package bundle
 and committing/pushing the publishing source:
 

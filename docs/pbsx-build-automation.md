@@ -17,11 +17,14 @@ administration system, outside source control and GitHub CI. ISO builds record
 the package versions and hashes actually used rather than assuming that the
 repository's newest version will stay fixed.
 
-The complete ISO CI build, checksum and artifact upload passed in
-[run 44003946462](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44003946462).
-CI uses the four hash-pinned packages mirrored into the private GitHub preview
-release, so Cloudflare browser challenges on the public feed do not block it.
+The current combined publication build, checksum, artifact and release-asset
+uploads passed in
+[run 44243247189](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44243247189).
+CI uses the four hash-pinned packages mirrored into its exact private GitHub
+input release, so Cloudflare browser challenges on the public feed do not block it.
 The installed server still uses `https://pbsx.rikka.ca/apt` for normal updates.
+See [publication validation](pbsx-apt-iso-publication-validation.md) for the live
+download, matching signed package index and recovery checks.
 
 Client downloads are published at `https://pbsx.rikka.ca/downloads/`. One
 maintainer command can rebuild Android, collect a successful native Windows/Linux
