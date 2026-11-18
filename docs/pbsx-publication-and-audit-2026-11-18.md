@@ -100,3 +100,6 @@ immutable release's files.
 The follow-up source fix passed
 [native Windows/Linux checks 44390522114](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44390522114)
 and [publication/consumer checks 44390521977](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44390521977).
+
+The fix was subsequently included in published desktop `0.7.4-preview` and
+Android `0.5.7-preview`; see [preview.2 publication validation](client-release-2026-11-18-preview-2.md).

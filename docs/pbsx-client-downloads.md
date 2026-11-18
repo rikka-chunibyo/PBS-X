@@ -120,4 +120,6 @@ permissions; publication itself remains an explicit maintainer command.
 See [the first client release validation](client-release-validation.md) for the
 published versions, source provenance, CI checks and public download verification.
 The [2026-11-18 publication and audit](pbsx-publication-and-audit-2026-11-18.md)
-records desktop `0.7.3-preview`, Android `0.5.6-preview` and the latest verification.
+records desktop `0.7.3-preview`, Android `0.5.6-preview` and their verification.
+The [subsequent preview.2 publication](client-release-2026-11-18-preview-2.md)
+records desktop `0.7.4-preview` and Android `0.5.7-preview` with the directory-flush fix.
