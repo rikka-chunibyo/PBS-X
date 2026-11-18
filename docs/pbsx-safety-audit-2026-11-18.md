@@ -76,6 +76,10 @@ The two actual on-disk PBS snapshot-layout tests (`TestBackupGroupRoundTrip` and
 requirement as their reason. They continue to run on Linux. Setup operations
 in those tests now check errors instead of silently ignoring failed writes.
 The Windows app's remote PBS, archive, credential and restore tests remain enabled.
+The direct-store manifest test now exercises both default and durable writes.
+On Windows, a permission error specifically from required directory fsync must
+leave the completed manifest absent. The default-write case still completes
+and checks its manifest/index; Linux exercises both successful publication modes.
 
 ## Validation and limits
 

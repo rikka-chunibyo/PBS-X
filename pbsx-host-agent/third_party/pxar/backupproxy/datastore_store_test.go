@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/pbs-plus/pxar/buzhash"
@@ -70,6 +73,12 @@ func TestDatastoreStoreDoesNotCountExistingRawChunkAsUploaded(t *testing.T) {
 }
 
 func TestDatastoreStorePublishesManifestLastWithoutLoadingReusedChunks(t *testing.T) {
+	t.Run("default", func(t *testing.T) { testDatastoreManifestPublication(t, false) })
+	t.Run("durable", func(t *testing.T) { testDatastoreManifestPublication(t, true) })
+}
+
+func testDatastoreManifestPublication(t *testing.T, syncWrites bool) {
+	t.Helper()
 	root := t.TempDir()
 	chunkStore, err := datastore.NewChunkStore(root)
 	if err != nil {
@@ -93,7 +102,7 @@ func TestDatastoreStorePublishesManifestLastWithoutLoadingReusedChunks(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewDatastoreStore(root, snapshotDir, cfg, DatastoreStoreOptions{UID: -1, GID: -1, SyncWrites: true})
+	store, err := NewDatastoreStore(root, snapshotDir, cfg, DatastoreStoreOptions{UID: -1, GID: -1, SyncWrites: syncWrites})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +119,7 @@ func TestDatastoreStorePublishesManifestLastWithoutLoadingReusedChunks(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer session.Close()
 
 	loaded := false
 	injections := make(chan InjectChunks, 1)
@@ -131,7 +141,16 @@ func TestDatastoreStorePublishesManifestLastWithoutLoadingReusedChunks(t *testin
 	if progress.ProcessedChunks != 1 || progress.ProcessedBytes != uint64(len(payload)) || progress.UploadedChunks != 0 || progress.UploadedBytes != 0 {
 		t.Fatalf("unexpected reused chunk progress: %+v", progress)
 	}
-	if _, err := session.UploadArchive(context.Background(), "target.mpxar.didx", bytes.NewReader([]byte("metadata"))); err != nil {
+	_, err = session.UploadArchive(context.Background(), "target.mpxar.didx", bytes.NewReader([]byte("metadata")))
+	if runtime.GOOS == "windows" && syncWrites && errors.Is(err, os.ErrPermission) && strings.Contains(err.Error(), "sync chunk dir") {
+		// Windows can reject directory fsync. Required durability must fail
+		// before publishing a completed manifest, rather than claim success.
+		if _, statErr := os.Stat(filepath.Join(snapshotDir, "index.json.blob")); !os.IsNotExist(statErr) {
+			t.Fatal("durability failure published a completed manifest")
+		}
+		return
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(snapshotDir, "index.json.blob")); !os.IsNotExist(err) {
