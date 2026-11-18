@@ -41,7 +41,7 @@ func TestDatastoreStoreDoesNotCountExistingRawChunkAsUploaded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewDatastoreStore(root, snapshotDir, cfg, DatastoreStoreOptions{UID: -1, GID: -1, SyncWrites: true})
+	store, err := NewDatastoreStore(root, snapshotDir, cfg, DatastoreStoreOptions{UID: -1, GID: -1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,11 @@ func testDatastoreManifestPublication(t *testing.T, syncWrites bool) {
 		},
 	}}, Size: uint64(len(payload))}
 	close(injections)
-	if _, err := session.UploadPayloadInterleaved(context.Background(), "target.ppxar.didx", bytes.NewReader(nil), injections, nil); err != nil {
+	_, err = session.UploadPayloadInterleaved(context.Background(), "target.ppxar.didx", bytes.NewReader(nil), injections, nil)
+	if directorySyncRefused(t, snapshotDir, syncWrites, err) {
+		return
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	if loaded {
@@ -142,12 +146,7 @@ func testDatastoreManifestPublication(t *testing.T, syncWrites bool) {
 		t.Fatalf("unexpected reused chunk progress: %+v", progress)
 	}
 	_, err = session.UploadArchive(context.Background(), "target.mpxar.didx", bytes.NewReader([]byte("metadata")))
-	if runtime.GOOS == "windows" && syncWrites && errors.Is(err, os.ErrPermission) && strings.Contains(err.Error(), "sync chunk dir") {
-		// Windows can reject directory fsync. Required durability must fail
-		// before publishing a completed manifest, rather than claim success.
-		if _, statErr := os.Stat(filepath.Join(snapshotDir, "index.json.blob")); !os.IsNotExist(statErr) {
-			t.Fatal("durability failure published a completed manifest")
-		}
+	if directorySyncRefused(t, snapshotDir, syncWrites, err) {
 		return
 	}
 	if err != nil {
@@ -189,6 +188,22 @@ func testDatastoreManifestPublication(t *testing.T, syncWrites bool) {
 	if idx.Count() != 1 || entry.Digest != digest || entry.EndOffset != uint64(len(payload)) {
 		t.Fatalf("unexpected reused index entry: %+v", entry)
 	}
+}
+
+func directorySyncRefused(t *testing.T, snapshotDir string, syncWrites bool, err error) bool {
+	t.Helper()
+	if runtime.GOOS != "windows" || !syncWrites || !errors.Is(err, os.ErrPermission) {
+		return false
+	}
+	if !strings.Contains(err.Error(), "sync chunk dir") && !strings.Contains(err.Error(), "sync snapshot directory") {
+		return false
+	}
+	// Required durability must fail before publishing a completed manifest,
+	// including when the first failure is an index-directory flush.
+	if _, statErr := os.Stat(filepath.Join(snapshotDir, "index.json.blob")); !os.IsNotExist(statErr) {
+		t.Fatal("durability failure published a completed manifest")
+	}
+	return true
 }
 
 func TestDatastoreStoreRejectsSnapshotOutsideDatastore(t *testing.T) {

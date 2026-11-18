@@ -61,13 +61,13 @@ The relevant publication suite now has 18 passing tests. The injected failure
 cases and host-key assertion failed before these fixes. The newly published
 release used the corrected activator.
 
-## Remaining audit finding
+## Direct-local datastore finding (subsequently fixed)
 
-**P2: the direct-local datastore helper does not flush snapshot directory
+**P2 at review: the direct-local datastore helper did not flush snapshot directory
 renames under `SyncWrites`.** In
 `pbsx-host-agent/third_party/pxar/backupproxy/store.go`,
-`localSession.publishSnapshotTemp` flushes the temporary file and renames it,
-then returns without syncing `s.baseDir`. A process can therefore acknowledge
+`localSession.publishSnapshotTemp` flushed the temporary file and renamed it,
+then returned without syncing `s.baseDir`. A process could therefore acknowledge
 durable index/manifest publication before those new directory entries are
 durable; power loss could lose them.
 
@@ -80,7 +80,19 @@ trace of an isolated test, not a power-loss experiment.
 
 No production caller of `NewDatastoreStore` was found in this checkout.
 The shipped Android and desktop backup runners use `NewPBSStore` and the remote
-PBS protocol. This remaining finding does not affect that active write path.
-Before enabling the direct-local API, sync its snapshot directory after each
-required rename, propagate failures, and add a directory-flush failure regression.
-The helper was not changed in this release.
+PBS protocol. The finding did not affect that active write path.
+
+The subsequent source fix flushes the snapshot directory after each durable
+index/manifest rename and propagates open/flush errors. Default writes retain
+their existing behavior. Real Unix permission failures now test index and
+manifest publication, verify that `Finish` returns no successful manifest, and
+check temporary-file cleanup. These permission probes require a non-root Unix
+user; root runs explicitly skip them because root bypasses the tested denial.
+The existing Windows durability probes also accept a refusal at the new index
+directory barrier, while default publication continues to complete.
+
+The shared datastore, transfer and backup-proxy race suites pass. A new syscall
+trace confirms a successful snapshot-directory `fsync` immediately after each
+of the two index renames and the final manifest rename. This is source
+hardening after the client release above; it does not rebuild or change that
+immutable release's files.

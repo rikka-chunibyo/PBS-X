@@ -209,9 +209,10 @@ func NewLocalStore(baseDir string, config buzhash.Config, compress bool) (*Local
 
 // DatastoreStoreOptions configures direct publication into an existing PBS datastore.
 type DatastoreStoreOptions struct {
-	Compress   bool
-	UID        int
-	GID        int
+	Compress bool
+	UID      int
+	GID      int
+	// SyncWrites flushes new files and their directory entries before success.
 	SyncWrites bool
 }
 
@@ -319,7 +320,22 @@ func (s *localSession) publishSnapshotTemp(tmp *os.File, tmpName, name string) e
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, filepath.Join(s.baseDir, name))
+	if err := os.Rename(tmpName, filepath.Join(s.baseDir, name)); err != nil {
+		return err
+	}
+	if s.syncWrites {
+		// Flushing the file does not persist its renamed directory entry.
+		// Commit that entry before acknowledging a durable index or manifest.
+		directory, err := os.Open(s.baseDir)
+		if err != nil {
+			return fmt.Errorf("sync snapshot directory: %w", err)
+		}
+		defer directory.Close()
+		if err := directory.Sync(); err != nil {
+			return fmt.Errorf("sync snapshot directory: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *localSession) writeSnapshotFile(name string, data []byte) error {
