@@ -13,6 +13,13 @@ The initial preview uses PBS-X `4.2.9-1+pbsx1` and `pbsx-repository` 1.0.3:
 
 The GitHub repository is private, so its download requires repository access.
 
+The permanent current-installer endpoint is
+https://pbsx.rikka.ca/iso/latest/pbsx-offline-amd64.iso, with its checksum at
+https://pbsx.rikka.ca/iso/latest/pbsx-offline-amd64.iso.sha256. Stable releases
+use the [combined APT/ISO workflow](pbsx-server-publishing.md) to keep this link
+matched to the public PBS-X packages. The original preview links above remain
+available as historical images.
+
 Keep the ISO's original filename when checking its checksum. Remove installation
 media after installation completes so the machine boots from its installed disk.
 The public ISO location supports resumable downloads. If a download is
@@ -36,10 +43,9 @@ These defaults are applied once during installation; package reinstalls do not
 reset subsequent administrator changes. An entirely offline server can instead
 be updated from a new, complete release bundle copied to it.
 
-The current signed APT update is `4.2.9-1+pbsx2`. The existing immutable ISO
-still installs `+pbsx1`; once connected, its configured repository supplies
-`+pbsx2` through `apt update` and `apt upgrade`. See the
-[server update validation](server-pbsx2-publication.md).
+The historical `+pbsx1` image can be updated through its configured repository.
+New stable releases build a current installer before activation, so future
+downloads through the latest-image link include the current PBS-X package set.
 
 ## Build
 
@@ -87,19 +93,19 @@ its menu identifies the fork as PBS-X. The media identifier remains compatible
 with the upstream installer.
 
 The GitHub **PBS-X offline ISO** workflow runs regression checks on relevant
-pushes/PRs. Dispatch it manually to build and retain an ISO artifact for 14 days.
-It uses a Debian 13 container with current Debian archive trust roots. CI fetches
-the four mirrored release inputs using its read-only GitHub token and verifies
-their sizes, SHA256 hashes and package identities against the committed
-`packaging/iso/release-inputs.json`. These hashes were verified against the signed
-APT feed before mirroring. This avoids Cloudflare's browser challenge for GitHub
-runners without weakening package verification or changing the installed APT
-source. New CI input versions require updating the pinned manifest after release
-verification; arbitrary `--version` values are rejected.
+pushes/PRs. The combined publisher dispatches it with an exact input-release tag
+and retains the resulting artifact for 14 days. Manual dispatch requires that
+tag too. A Debian 13 container fetches the four mirrored packages using its
+read-only GitHub token and verifies their sizes, hashes, architectures and
+identities against that release's `iso-inputs.json`. The publisher derives those
+inputs from signed stable APT plus the tested candidate bundle, so subsequent
+releases do not need a manual committed-pin update. The original committed
+`packaging/iso/release-inputs.json` remains a historical CLI rebuild input.
 
-It uses published packages and does not build or publish a new server release.
-It does not publish to the APT server or include unattended answers, passwords,
-enrollment tokens, personal SSH keys or repository signing secrets.
+This mirror avoids Cloudflare's browser challenge for hosted runners. CI builds
+the image; the trusted maintainer command verifies and publishes both APT and
+ISO over the existing SSH connection. The image contains no unattended answers,
+passwords, enrollment tokens, personal SSH keys or repository signing secrets.
 
 ## Verification and installation
 

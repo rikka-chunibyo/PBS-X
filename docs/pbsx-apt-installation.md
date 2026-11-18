@@ -85,6 +85,10 @@ version. Repository-support-only updates remain allowed. Run
 `bash tools/pbsx-apt-repository.sh --check-release BUNDLE_DIRECTORY` on the build
 machine for the same read-only checks before publication; publication repeats
 them before changing repository state.
+Stable publication additionally requires the exact matching offline ISO. Use
+the [combined server/ISO publisher](pbsx-server-publishing.md), which builds and
+verifies it before activation. Testing-channel publication remains available
+without a new image. Repository-support-only stable updates also refresh the ISO.
 The `pbsx-apt-refresh.timer` runs daily
 to refresh the signed metadata's 14-day validity. Monitor that service and disk
 space. Unreferenced package payloads are retained for clients with cached indexes;

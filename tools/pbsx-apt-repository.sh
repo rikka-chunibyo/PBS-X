@@ -48,12 +48,37 @@ fi
 state=/var/lib/pbs-x-apt/release
 public=/srv/pbs-x-apt/public/apt
 export GNUPGHOME=$state/gnupg
+iso_publisher=/usr/local/libexec/pbsx-iso-publication.py
+# Serialize package exports, metadata refresh and ISO pointer updates. The
+# expensive hosted build happens before this short repository transaction.
+if [[ ${1:-} == publish || ${1:-} == refresh ]]; then
+    exec 9>"$state/publication.lock"
+    flock -x 9
+fi
 repo() {
     # A root shell or backup wrapper may use umask 077. Only archive payloads
     # and indexes belong here; signer/admin state stays under its 0700 parent.
     (umask 022; reprepro --keepunreferencedfiles --basedir "$state/repository" --outdir "$public" "$@")
     find "$public" -type d -exec chmod 0755 {} +
     find "$public" -type f -exec chmod 0644 {} +
+}
+publish_release() {
+    local channel=$1 directory=$2
+    validate_release "$directory"
+    if [[ $channel == trixie ]]; then
+        [[ -f $iso_publisher && -f $directory/iso-publication.json ]] || {
+            echo 'Stable APT updates require a matching ISO. Use tools/publish-pbsx-server.py release.' >&2
+            exit 1
+        }
+        # Verify and durably stage the complete image before changing APT.
+        python3 "$iso_publisher" prepare --bundle "$directory"
+    fi
+    repo --export=never includedeb "$channel" "${packages[@]}"
+    repo export "$channel"
+    repo check "$channel"
+    if [[ $channel == trixie ]]; then
+        python3 "$iso_publisher" activate --bundle "$directory"
+    fi
 }
 case ${1:-} in
     init)
@@ -109,13 +134,15 @@ EOF
         ;;
     publish)
         [[ $# == 3 && ( $2 == trixie || $2 == trixie-testing ) ]]
-        channel=$2
-        validate_release "$3"
-        repo --export=never includedeb "$channel" "${packages[@]}"
-        repo export "$channel"
-        repo check "$channel"
+        publish_release "$2" "$3"
         ;;
     refresh)
+        if [[ -f $state/iso-publication-pending && ! -L $state/iso-publication-pending ]]; then
+            # A crash may have interrupted includedeb before its complete set
+            # was exported. Finish the validated transaction before renewing
+            # indexes, rather than exposing a partial package family.
+            publish_release trixie "$(cat "$state/iso-publication-pending")"
+        fi
         repo --export=force export
         repo check
         ;;

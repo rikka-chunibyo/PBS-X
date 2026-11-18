@@ -204,7 +204,7 @@ def page(data):
 <p>Windows: extract the ZIP and run the included installer from an Administrator PowerShell. Linux: extract, then run <code>sudo python3 install.py</code>; add <code>--headless</code> for CLI-only installation. Android: open the APK and allow installation from your browser or file manager.</p>
 <p>The desktop companion enrolls and controls the background agent. Configure desktop backup jobs in the PBS-X server web UI. Android manages jobs in the app. Existing managed credentials are retained during updates.</p>
 <p>These are preview builds. Windows executables are unsigned; Android retains its existing development signing certificate. Automatic client updates are not enabled.</p>
-<p><a href="'''+prefix+'''SHA256SUMS">Checksums</a> · <a href="'''+prefix+'''release.json">Build details</a> · <a href="/iso/pbsx_4.2.9-1+pbsx1-offline-amd64.iso">Server ISO</a> · <a href="/">APT repository</a></p><small>Release: '''+tag+'''</small></html>\n'''
+<p><a href="'''+prefix+'''SHA256SUMS">Checksums</a> · <a href="'''+prefix+'''release.json">Build details</a> · <a href="/iso/latest/pbsx-offline-amd64.iso">Server ISO</a> · <a href="/">APT repository</a></p><small>Release: '''+tag+'''</small></html>\n'''
 
 
 def atomic_text(path, text, mode=0o644):
@@ -277,7 +277,7 @@ def activate(staging, public, private, allow_rollback=False):
                 if not backup.exists():
                     backup.write_text(old)
                     backup.chmod(0o600)
-                atomic_text(index, old+'\n<p><a href="/downloads/">Windows, Linux and Android apps</a> · <a href="/iso/pbsx_4.2.9-1+pbsx1-offline-amd64.iso">PBS-X offline ISO</a></p>\n')
+                atomic_text(index, old+'\n<p><a href="/downloads/">Windows, Linux and Android apps</a> · <a href="/iso/latest/pbsx-offline-amd64.iso">PBS-X offline ISO</a></p>\n')
     return data
 
 

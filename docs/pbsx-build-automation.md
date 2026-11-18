@@ -5,12 +5,14 @@
 | Linux/Windows host apps | GitHub CI tests, native builds, bundle validation, Linux window smoke test and preview artifacts; client publisher packages verified builds for GitHub and HTTPS | Invoke publication of a successful CI run; production Windows signing |
 | Server Debian packages | `tools/build-pbsx-release.sh`: clean source export, Debian package build/tests, matching bundle, hashes and installer | Invoke on the Debian 13 builder and review the result |
 | Android | Hosted universal Go bindings, debug/release compilation, Java tests/lint and Android 13 SAF instrumentation; publication CI also runs Go race tests. `pbsx-android/build.sh` performs the maintainer build, certificate/alignment checks and provenance | Invoke publication with the SDK and existing preview keystore; production signing remains separate |
-| APT feed | Repository package tooling, signed metadata/package checks and publication scripts; deployed metadata refresh timer | Approve and invoke publication of a tested release |
-| Offline ISO | Relevant-change regression CI; manually dispatched full ISO build from pinned release inputs, offline dependency checks, final package hashes and artifact upload | VM/hardware installation checks and release publication |
+| APT feed | Combined server publisher builds/verifies a matching ISO before stable activation; repository tooling verifies package sets and signs metadata | Invoke the combined publisher with a tested bundle |
+| Offline ISO | Combined publisher dispatches hosted builds from exact mirrored package hashes, verifies artifacts, publishes GitHub/HTTPS and switches the latest-image link with stable APT | Hardware-specific installation checks and production signing remain separate |
 
-These are separate stages. A green host-app run does not rebuild the server or
-Android app. An ISO build consumes already published PBS-X packages; it does not
-publish new Debian packages. Repository signing keys stay on the repository
+Client and server builds remain separate. A green host-app run does not rebuild
+the server or Android app. Stable server publication now couples APT and ISO:
+the matching image is completely built and verified before the stable package
+index can change. Testing-channel publication and daily signature refresh do
+not trigger image builds. Repository signing keys stay on the repository
 administration system, outside source control and GitHub CI. ISO builds record
 the package versions and hashes actually used rather than assuming that the
 repository's newest version will stay fixed.
@@ -35,5 +37,6 @@ are not release downloads and cannot replace previews signed with the pinned
 maintainer certificate. Public client publication remains an explicit command.
 
 See [offline installation media](pbsx-offline-iso.md),
+[combined server/ISO publishing](pbsx-server-publishing.md),
 [server installation](pbsx-installation.md) and
 [APT repository administration](apt-repository-host.md).

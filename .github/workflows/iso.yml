@@ -1,4 +1,5 @@
 name: PBS-X offline ISO
+run-name: "PBS-X ISO ${{ inputs.release_tag || inputs.version || 'checks' }} [${{ inputs.request_id || github.run_id }}]"
 on:
   pull_request:
     paths:
@@ -6,6 +7,9 @@ on:
       - 'tools/pbsx_iso.py'
       - 'tools/build-pbsx-iso.py'
       - 'tools/fetch-pbsx-iso-release.py'
+      - 'tools/pbsx_iso_publication.py'
+      - 'tools/publish-pbsx-server.py'
+      - 'tests/iso-publication.test.py'
       - 'tests/pbsx-iso.test.py'
       - 'tools/build-pbsx-repository-package.sh'
       - '.github/workflows/iso.yml'
@@ -15,13 +19,24 @@ on:
       - 'tools/pbsx_iso.py'
       - 'tools/build-pbsx-iso.py'
       - 'tools/fetch-pbsx-iso-release.py'
+      - 'tools/pbsx_iso_publication.py'
+      - 'tools/publish-pbsx-server.py'
+      - 'tests/iso-publication.test.py'
       - 'tests/pbsx-iso.test.py'
       - 'tools/build-pbsx-repository-package.sh'
       - '.github/workflows/iso.yml'
   workflow_dispatch:
     inputs:
+      release_tag:
+        description: 'Exact hash-pinned input release prepared by the stable server publisher'
+        required: true
+        type: string
+      request_id:
+        description: 'Publisher correlation ID'
+        required: false
+        type: string
       version:
-        description: 'Pinned PBS-X version (empty uses release-inputs.json)'
+        description: 'Expected PBS-X version (empty uses the selected input release)'
         required: false
         type: string
 permissions:
@@ -36,6 +51,7 @@ jobs:
       - name: Offline package and repository regression tests
         run: |
           python3 tests/pbsx-iso.test.py
+          python3 tests/iso-publication.test.py
           python3 packaging/pbsx-repository/test_apt_guard.py
   build:
     if: github.event_name == 'workflow_dispatch'
@@ -56,9 +72,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PBSX_VERSION: ${{ inputs.version }}
+          PBSX_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           args=()
           if [ -n "$PBSX_VERSION" ]; then args+=(--version "$PBSX_VERSION"); fi
+          if [ -n "$PBSX_RELEASE_TAG" ]; then args+=(--release-tag "$PBSX_RELEASE_TAG"); fi
           python3 tools/fetch-pbsx-iso-release.py --output artifacts/iso/inputs "${args[@]}"
       - name: Build from verified upstream media and signed package repositories
         env:
