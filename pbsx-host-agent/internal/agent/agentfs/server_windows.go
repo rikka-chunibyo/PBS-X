@@ -40,11 +40,22 @@ func (s *Server) abs(filename string) string {
 }
 
 func (s *Server) platformOpen(path string) (*FileHandle, error) {
+	return s.platformOpenWithSharing(path, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE)
+}
+
+func (s *Server) platformOpenNative(path string) (*FileHandle, error) {
+	// Windows can defer timestamp updates while handles remain open. Prevent
+	// concurrent writes/deletion instead of relying only on those timestamps.
+	// Existing writable handles fail this open; snapshot mode handles busy files.
+	return s.platformOpenWithSharing(path, windows.FILE_SHARE_READ)
+}
+
+func (s *Server) platformOpenWithSharing(path string, sharing uint32) (*FileHandle, error) {
 	pathUTF16, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := windows.CreateFile(pathUTF16, windows.GENERIC_READ, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	raw, err := windows.CreateFile(pathUTF16, windows.GENERIC_READ, sharing, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		return nil, err
 	}

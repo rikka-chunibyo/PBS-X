@@ -20,6 +20,10 @@ func (s *Server) abs(filename string) string {
 	return Join(s.snapshot.Path, filename)
 }
 
+func (s *Server) platformOpenNative(path string) (*FileHandle, error) {
+	return s.platformOpen(path)
+}
+
 func (s *Server) platformOpen(path string) (*FileHandle, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {

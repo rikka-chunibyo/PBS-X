@@ -27,7 +27,10 @@ Native file readers capture size, mode, precise modification time and the
 platform's change timestamp from the opened handle. They check those values
 after reading and again when closing. Growth, truncation, an incomplete read,
 or a changed timestamp fails the backup. Change timestamps also detect ordinary
-writes whose modification time is subsequently restored.
+writes whose modification time is subsequently restored on Unix. Windows can
+defer timestamp updates, so native reads also deny concurrent writes and
+deletion until the read handle closes. Existing writable handles cause the
+native open to fail; use a snapshot to back up files held open for writing.
 
 The archive encoder propagates source-close failures before committing a
 snapshot, and failed backup sessions are closed. The reader deliberately does

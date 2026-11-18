@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -106,7 +107,8 @@ func TestCheckedNativeReadAcceptsStableAndEmptyFiles(t *testing.T) {
 }
 
 func TestCheckedNativeReadRejectsWriteWithRestoredMtime(t *testing.T) {
-	name := filepath.Join(t.TempDir(), "source")
+	root := t.TempDir()
+	name := filepath.Join(root, "source")
 	if err := os.WriteFile(name, []byte("AAAA"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -114,21 +116,32 @@ func TestCheckedNativeReadRejectsWriteWithRestoredMtime(t *testing.T) {
 	if err := os.Chtimes(name, stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
-	file, err := os.Open(name)
+	accessor := NewNativeAccessor("source", "standard", snapshots.Snapshot{Path: root, SourcePath: root, Direct: true})
+	defer accessor.Close()
+	reader, _, err := accessor.OpenFile("source")
 	if err != nil {
-		t.Fatal(err)
-	}
-	reader, err := newCheckedNativeFile(file)
-	if err != nil {
-		file.Close()
 		t.Fatal(err)
 	}
 	defer reader.Close()
 	if _, err := io.ReadFull(reader, make([]byte, 1)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(name, []byte("BBBB"), 0600); err != nil {
-		t.Fatal(err)
+	writeErr := os.WriteFile(name, []byte("BBBB"), 0600)
+	if runtime.GOOS == "windows" {
+		if writeErr == nil {
+			t.Fatal("concurrent write was permitted during native Windows read")
+		}
+		got, err := io.ReadAll(reader)
+		if err != nil || string(got) != "AAA" {
+			t.Fatalf("protected read changed: %q %v", got, err)
+		}
+		if err := reader.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	if err := os.Chtimes(name, stamp, stamp); err != nil {
 		t.Fatal(err)
@@ -181,6 +194,7 @@ func (r *changingReadStream) Read(p []byte) (int, error) {
 	}
 	n, err := r.ReadCloser.Read(p)
 	if n > 0 && !r.owner.changed {
+		r.owner.changed = true // A denied Windows write is also a safe failure.
 		if err := os.WriteFile(r.owner.name, bytes.Repeat([]byte("B"), 8192), 0600); err != nil {
 			return 0, err
 		}
@@ -188,7 +202,6 @@ func (r *changingReadStream) Read(p []byte) (int, error) {
 		if err := os.Chtimes(r.owner.name, now, now); err != nil {
 			return 0, err
 		}
-		r.owner.changed = true
 	}
 	return n, err
 }
