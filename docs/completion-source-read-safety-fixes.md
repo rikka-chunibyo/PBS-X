@@ -1,9 +1,10 @@
 # Completion and native source-read fixes — 2026-11-17
 
-These fixes follow the next safety review. They are local source changes;
-published server packages and client downloads do not yet contain them. The
-earlier [sparse and incremental fixes](sparse-incremental-safety-fixes.md) remain
-in the working tree.
+These fixes follow the next safety review. Client changes are published in
+[preview.3](client-release-validation.md#third-client-preview--2026-11-17),
+with Windows/Linux `0.7.2-preview` and Android `0.5.5-preview`. Server completion
+changes are published in [PBS-X `4.2.9-1+pbsx2`](server-pbsx2-publication.md). The
+[sparse and incremental fixes](sparse-incremental-safety-fixes.md) are included.
 
 ## Completion acknowledgements can be retried
 
@@ -71,7 +72,12 @@ backup/datastore/transfer race suites, and Android Go core race suite passed.
 Windows agent and CLI binaries and the affected test packages cross-compiled.
 Builds use one worker and capped Go memory settings.
 
-Windows runtime execution and a full PBS server build remain unverified in this
-environment. The isolated Rust tests exercise the production transition helper;
-they do not replace building and testing the full server on its Debian build
-environment. No hypervisor, VM or physical phone was modified for these checks.
+Native Windows runtime tests subsequently passed in hosted CI. The full Debian
+server package build passed its optimized workspace tests: 171 passed, zero
+failed, two ignored, including all five completion tests. The candidate then
+passed a signed APT upgrade on the disposable installation VM, real completion
+API retry/conflict/recovery checks against old and newly generated history, and
+a ZFS-snapshot service backup and metadata/hash-checked restore. See the
+[server publication record](server-pbsx2-publication.md) for source provenance,
+public signature/hash checks and the bounded build/test setup. Physical phone
+and production-server tests remain separate from these lab checks.

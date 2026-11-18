@@ -182,3 +182,8 @@ rollback. With the original `4.2.9-1+pbsx1` server, a real service ZFS-snapshot
 backup and queued restore passed. Restored hashes, special modes, owners/groups,
 ACLs, capabilities, symlink target, hardlink identity and sparse allocation
 matched the source. The test job was disabled again afterward.
+
+The corresponding [server update `4.2.9-1+pbsx2`](server-pbsx2-publication.md)
+was then built, validated and published. The same agent passed backup/restore
+again after upgrading the server, and completion API checks passed against both
+old and freshly generated history.

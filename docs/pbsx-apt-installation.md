@@ -2,9 +2,11 @@
 
 The public repository is `https://pbsx.rikka.ca/apt`, suite `trixie`, component
 `main`, for Debian 13 amd64. It currently serves the tested
-`4.2.9-1+pbsx1` server/client/file-restore build and `pbsx-repository` 1.0.3.
+`4.2.9-1+pbsx2` server/client/file-restore build and `pbsx-repository` 1.0.3.
 The Ubuntu repository container is an HTTP backend at `10.0.1.37:80`;
 Nginx Proxy Manager terminates public HTTPS. There is no container TLS listener.
+The [server update validation](server-pbsx2-publication.md) records the tested
+upgrade, completion recovery and backup/restore results.
 
 ## Install
 

@@ -1,7 +1,8 @@
 # Sparse restore and incremental reuse fixes — 2026-11-17
 
-These changes address the follow-up review of client preview.2. They are local
-source changes and require a new release before public downloads include them.
+These changes address the follow-up review of client preview.2. They are published
+in [client preview.3](client-release-validation.md#third-client-preview--2026-11-17):
+Windows/Linux `0.7.2-preview` and Android `0.5.5-preview`.
 
 ## Sparse restores preserve the verified payload
 
@@ -74,5 +75,8 @@ runs use one build worker, `GOMAXPROCS=1` and the Go soft memory limit
 `GOMEMLIMIT=256MiB`.
 
 No physical device, hypervisor or server VM is needed for these regressions.
-Native Windows runtime checks remain for the next hosted CI run; cross-building
-does not substitute for executing them.
+Native Windows host tests subsequently passed in
+[CI run 44206546363](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44206546363).
+The published Linux agent also passed real ZFS-snapshot service backup and
+queued restore on the disposable installation VM, both before and after the
+[server update](server-pbsx2-publication.md).

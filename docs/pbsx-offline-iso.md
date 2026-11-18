@@ -36,6 +36,11 @@ These defaults are applied once during installation; package reinstalls do not
 reset subsequent administrator changes. An entirely offline server can instead
 be updated from a new, complete release bundle copied to it.
 
+The current signed APT update is `4.2.9-1+pbsx2`. The existing immutable ISO
+still installs `+pbsx1`; once connected, its configured repository supplies
+`+pbsx2` through `apt update` and `apt upgrade`. See the
+[server update validation](server-pbsx2-publication.md).
+
 ## Build
 
 On an amd64 Debian/Ubuntu build machine:

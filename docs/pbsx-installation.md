@@ -9,9 +9,10 @@ The alternative procedure below installs Debian packages over a PBS 4.x /
 Debian 13 amd64 base. The official upstream PBS ISO supplies the base but does
 not contain this fork.
 This branch uses upstream PBS 4.2.9 plus the PBS-X changes, packaged as
-`4.2.9-1+pbsx1`.
+`4.2.9-1+pbsx2`.
 See the [fresh-install validation](production-install-validation.md) for tested
-behavior and remaining hardware/recovery limits.
+behavior and remaining hardware/recovery limits, and the
+[current server update validation](server-pbsx2-publication.md).
 
 The public [APT installer](pbsx-apt-installation.md) configures the signed feed
 at `https://pbsx.rikka.ca/apt` and protected APT updates. The bundle procedure
