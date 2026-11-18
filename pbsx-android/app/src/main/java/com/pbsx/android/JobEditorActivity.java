@@ -21,7 +21,8 @@ public final class JobEditorActivity extends Activity {
   private TextView appSummary;
   private Button chooseApps;
   private boolean choosingApps;
-  private LinearLayout folders;
+  private LinearLayout folders, shizukuFolders;
+  private Button addShizukuFolder;
   private Button connection, encryption;
 
   @Override
@@ -35,6 +36,8 @@ public final class JobEditorActivity extends Activity {
         job.encryptionKeyID = state.getString("encryption_key_id", job.encryptionKeyID);
         job.id = state.getString("job_id", job.id);
         job.sources = new JSONArray(state.getString("sources", "[]"));
+        job.shizukuFolders =
+            new JSONArray(state.getString("shizuku_folders", job.shizukuFolders.toString()));
         job.packages = new JSONArray(state.getString("packages", job.packages.toString()));
       }
       LinearLayout root = Ui.screen(this, id == null ? "New backup job" : "Edit backup job"),
@@ -87,6 +90,21 @@ public final class JobEditorActivity extends Activity {
       LinearLayout extra = Ui.card(page);
       Ui.text(extra, "Optional Shizuku sources", 18, Ui.TEXT);
       shizuku = Ui.check(extra, "Enable Shizuku for this job", job.shizuku);
+      Ui.text(extra, "Shared-storage folders", 18, Ui.TEXT);
+      Ui.hint(
+          extra,
+          "Select Download or another internal shared folder through Shizuku. These folders are"
+              + " independent of the app selection below. SD-card folders use the normal Add folder"
+              + " button.");
+      shizukuFolders = Ui.column(this);
+      extra.addView(shizukuFolders);
+      addShizukuFolder =
+          Ui.button(
+              extra,
+              "+ Add folder via Shizuku",
+              false,
+              v -> new ShizukuFolderPicker(this, executor, path -> nameFolder(null, path)).show());
+      renderShizukuFolders();
       apks = Ui.check(extra, "Installed application APKs", job.apks);
       data = Ui.check(extra, "Android/data", job.data);
       obb = Ui.check(extra, "Android/obb", job.obb);
@@ -170,6 +188,17 @@ public final class JobEditorActivity extends Activity {
     for (android.view.View option : new android.view.View[] {apks, data, obb, allApps, appSummary})
       shizukuControl(option, enabled);
     shizukuControl(chooseApps, enabled && !choosingApps);
+    shizukuControl(addShizukuFolder, enabled);
+    if (shizukuFolders != null) {
+      for (int i = 0; i < shizukuFolders.getChildCount(); i++) {
+        android.view.View row = shizukuFolders.getChildAt(i);
+        shizukuControl(row, enabled);
+        if (row instanceof android.view.ViewGroup) {
+          android.view.ViewGroup group = (android.view.ViewGroup) row;
+          for (int j = 0; j < group.getChildCount(); j++) group.getChildAt(j).setEnabled(enabled);
+        }
+      }
+    }
     for (CheckBox option : exportOptions) shizukuControl(option, enabled);
   }
 
@@ -333,6 +362,33 @@ public final class JobEditorActivity extends Activity {
         100);
   }
 
+  private void renderShizukuFolders() {
+    shizukuFolders.removeAllViews();
+    try {
+      if (job.shizukuFolders.length() == 0) Ui.hint(shizukuFolders, "No Shizuku folders selected.");
+      for (int i = 0; i < job.shizukuFolders.length(); i++) {
+        final int index = i;
+        JSONObject folder = job.shizukuFolders.getJSONObject(i);
+        LinearLayout row = Ui.row(this);
+        TextView label =
+            Ui.text(row, folder.getString("label") + "\n" + folder.getString("path"), 16, Ui.TEXT);
+        label.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1));
+        Ui.button(
+            row,
+            "Remove",
+            false,
+            v -> {
+              job.shizukuFolders.remove(index);
+              renderShizukuFolders();
+              updateShizukuControls();
+            });
+        shizukuFolders.addView(row);
+      }
+    } catch (Exception e) {
+      error(e);
+    }
+  }
+
   @Override
   protected void onActivityResult(int request, int result, Intent intent) {
     super.onActivityResult(request, result, intent);
@@ -358,9 +414,30 @@ public final class JobEditorActivity extends Activity {
       for (int i = 0; i < job.sources.length(); i++)
         if (uri.toString().equals(job.sources.getJSONObject(i).getString("uri")))
           throw new Exception("This folder is already in the job");
+      nameFolder(uri, null);
+    } catch (Exception e) {
+      error(e);
+    }
+  }
+
+  private void nameFolder(Uri uri, String sharedPath) {
+    try {
+      boolean shared = sharedPath != null;
+      if (shared) {
+        SharedStorage.validate(sharedPath, false);
+        for (int i = 0; i < job.shizukuFolders.length(); i++)
+          if (sharedPath.equals(job.shizukuFolders.getJSONObject(i).getString("path")))
+            throw new Exception("This Shizuku folder is already in the job");
+      }
       LinearLayout form = Ui.form(this);
       EditText label =
-          Ui.input(form, "Folder name in backup", "Folder-" + (job.sources.length() + 1), false);
+          Ui.input(
+              form,
+              "Folder name in backup",
+              shared
+                  ? sharedPath.substring(sharedPath.lastIndexOf('/') + 1)
+                  : "Folder-" + (job.sources.length() + 1),
+              false);
       AlertDialog dialog =
           new AlertDialog.Builder(this)
               .setTitle("Name this folder")
@@ -376,20 +453,28 @@ public final class JobEditorActivity extends Activity {
                       v -> {
                         try {
                           String value = label.getText().toString().trim();
-                          JSONArray proposed = new JSONArray(job.sources.toString());
+                          JSONArray proposed =
+                              new JSONArray((shared ? job.shizukuFolders : job.sources).toString());
                           proposed.put(
-                              new JSONObject().put("label", value).put("uri", uri.toString()));
-                          JSONArray old = job.sources;
-                          job.sources = proposed;
-                          try {
-                            BackupJob check = new BackupJob();
-                            check.sources = proposed;
-                            check.validate(false);
-                          } catch (Exception e) {
-                            job.sources = old;
-                            throw e;
-                          }
+                              new JSONObject()
+                                  .put("label", value)
+                                  .put(
+                                      shared ? "path" : "uri",
+                                      shared ? sharedPath : uri.toString()));
+                          BackupJob check = BackupJob.from(job.json());
+                          if (shared) check.shizukuFolders = proposed;
+                          else check.sources = proposed;
+                          check.shizuku = shizuku.isChecked();
+                          check.exports = new JSONArray();
+                          for (int i = 0; i < exportOptions.length; i++)
+                            if (exportOptions[i].isChecked())
+                              check.exports.put(DeviceExport.CATEGORIES.get(i));
+                          check.validate(false);
+                          if (shared) job.shizukuFolders = proposed;
+                          else job.sources = proposed;
                           renderFolders();
+                          renderShizukuFolders();
+                          updateShizukuControls();
                           dialog.dismiss();
                         } catch (Exception e) {
                           label.setError(e.getMessage());
@@ -441,6 +526,7 @@ public final class JobEditorActivity extends Activity {
     super.onSaveInstanceState(out);
     if (job == null || name == null) return;
     out.putString("sources", job.sources.toString());
+    out.putString("shizuku_folders", job.shizukuFolders.toString());
     out.putString("name", name.getText().toString());
     out.putString("store", store.getText().toString());
     out.putString("namespace", namespace.getText().toString());

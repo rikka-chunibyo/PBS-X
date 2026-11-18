@@ -81,7 +81,7 @@ app cache. The following information is included:
 | --- | --- |
 | `vault` | All connection profiles, default selection, API credentials, enrolled certificates/private identities, backup keys, fingerprints and names. |
 | `preferences.settings` | Every saved general preference, including browsing Wi-Fi settings and saved status. |
-| `preferences.jobs-v1` | Every job, source label/URI, Backup ID, connection/key reference, schedule, constraints, Shizuku/app selections, export categories, scheduler allocator and retained activity history. |
+| `preferences.jobs-v1` | Every job, source label/URI, Shizuku shared-folder label/path, Backup ID, connection/key reference, schedule, constraints, Shizuku/app selections, export categories, scheduler allocator and retained activity history. |
 | `folder_permissions` | Descriptions of the current persisted folder grants, for reference. |
 | Metadata | Format version, app version and export time. |
 

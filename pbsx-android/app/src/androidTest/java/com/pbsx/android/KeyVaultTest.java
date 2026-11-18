@@ -56,6 +56,7 @@ public class KeyVaultTest {
     job.allApps = false;
     job.packages.put("com.pbsx.android");
     job.exports.put("contacts");
+    job.shizukuFolders.put(new JSONObject().put("label", "Downloads").put("path", "Download"));
     job.sources.put(
         new JSONObject().put("label", "Photos").put("uri", "content://fixture/tree/photos"));
     JobStore.save(from, job);

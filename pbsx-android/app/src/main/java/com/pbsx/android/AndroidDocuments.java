@@ -17,6 +17,7 @@ final class AndroidDocuments implements Documents, AutoCloseable {
   private final DocumentTree output;
   private final ExportCache exports;
   private final java.util.Set<String> selected = new java.util.HashSet<>();
+  private final java.util.Set<String> sharedFolders = new java.util.HashSet<>();
   private boolean allApps = true;
 
   AndroidDocuments(
@@ -77,8 +78,22 @@ final class AndroidDocuments implements Documents, AutoCloseable {
         trees.put(
             label, new DocumentTree(context.getContentResolver(), Uri.parse(s.getString("uri"))));
       }
-      if (job.shizuku && (job.apks || job.data || job.obb || job.exports.length() > 0)) {
+      if (job.shizuku
+          && (job.apks
+              || job.data
+              || job.obb
+              || job.exports.length() > 0
+              || job.shizukuFolders.length() > 0)) {
         opened = new ShizukuBridge(context, service);
+        for (int i = 0; i < job.shizukuFolders.length(); i++) {
+          JSONObject folder = job.shizukuFolders.getJSONObject(i);
+          String label = folder.getString("label");
+          String path = "/@shared/" + folder.getString("path");
+          if (!new JSONObject(opened.files().stat(path)).getBoolean("directory"))
+            throw new Exception("Shizuku source is no longer a folder: " + label);
+          privileged.put(label, path);
+          sharedFolders.add(label);
+        }
         if (job.apks) privileged.put("Installed-APKs", "/@apps");
         if (job.data) privileged.put("Android-data", "/storage/emulated/0/Android/data");
         if (job.obb) privileged.put("Android-obb", "/storage/emulated/0/Android/obb");
@@ -120,7 +135,7 @@ final class AndroidDocuments implements Documents, AutoCloseable {
 
   private String privilegedPath(String path) {
     String base = privileged.get(label(path));
-    if (!allApps && !child(path).equals(".")) {
+    if (!allApps && !sharedFolders.contains(label(path)) && !child(path).equals(".")) {
       String pkg = child(path).split("/", 2)[0];
       if (!selected.contains(pkg)) throw new SecurityException("App is not selected for this job");
     }
@@ -195,7 +210,8 @@ final class AndroidDocuments implements Documents, AutoCloseable {
         return out.toString();
       }
       JSONArray all = new JSONArray(bridge.files().list(privilegedPath(path)));
-      if (allApps || !child(path).equals(".")) return all.toString();
+      if (allApps || sharedFolders.contains(label(path)) || !child(path).equals("."))
+        return all.toString();
       JSONArray filtered = new JSONArray();
       for (int i = 0; i < all.length(); i++)
         if (selected.contains(all.getJSONObject(i).getString("name"))) filtered.put(all.get(i));

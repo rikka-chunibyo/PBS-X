@@ -10,6 +10,7 @@ final class BackupJob {
   String backupID = "backup-" + id.replace("-", "").substring(0, 12);
   String connectionID = "", encryptionKeyID = "";
   JSONArray sources = new JSONArray();
+  JSONArray shizukuFolders = new JSONArray();
   int hours = 0, schedulerId = 0;
   boolean wifi = true, charging = true, shizuku = false, apks = false, data = false, obb = false;
   boolean allApps = false;
@@ -25,6 +26,7 @@ final class BackupJob {
         .put("connection_id", connectionID)
         .put("encryption_key_id", encryptionKeyID)
         .put("sources", sources)
+        .put("shizuku_folders", shizukuFolders)
         .put("hours", hours)
         .put("scheduler_id", schedulerId)
         .put("wifi", wifi)
@@ -41,7 +43,7 @@ final class BackupJob {
   static BackupJob from(JSONObject value) throws Exception {
     if (value.has("all_apps") && !(value.opt("all_apps") instanceof Boolean))
       throw new Exception("Invalid saved app selection mode");
-    for (String key : new String[] {"packages", "exports"})
+    for (String key : new String[] {"packages", "exports", "shizuku_folders"})
       if (value.has(key) && !(value.opt(key) instanceof JSONArray))
         throw new Exception("Invalid saved " + key + " selection");
     BackupJob j = new BackupJob();
@@ -58,6 +60,11 @@ final class BackupJob {
             value.optJSONArray("sources") == null
                 ? "[]"
                 : value.getJSONArray("sources").toString());
+    j.shizukuFolders =
+        new JSONArray(
+            value.optJSONArray("shizuku_folders") == null
+                ? "[]"
+                : value.getJSONArray("shizuku_folders").toString());
     j.hours = value.optInt("hours", 0);
     j.schedulerId = value.optInt("scheduler_id", 0);
     j.wifi = value.optBoolean("wifi", true);
@@ -115,8 +122,14 @@ final class BackupJob {
     if (runnable && shizuku && (apks || data || obb) && !allApps && packages.length() == 0)
       throw new Exception("Choose apps or enable All apps");
     java.util.HashSet<String> labels = new java.util.HashSet<>(), uris = new java.util.HashSet<>();
-    for (int i = 0; i < sources.length(); i++) {
-      JSONObject s = sources.getJSONObject(i);
+    if (shizukuFolders.length() > 100) throw new Exception("Select at most 100 Shizuku folders");
+    java.util.HashSet<String> sharedPaths = new java.util.HashSet<>();
+    for (int i = 0; i < sources.length() + shizukuFolders.length(); i++) {
+      boolean shared = i >= sources.length();
+      JSONObject s =
+          shared ? shizukuFolders.getJSONObject(i - sources.length()) : sources.getJSONObject(i);
+      if (shared && (!(s.opt("label") instanceof String) || !(s.opt("path") instanceof String)))
+        throw new Exception("Invalid saved Shizuku folder");
       String label = s.getString("label");
       if (Paths.parts(label).length != 1
           || label.equals("Installed-APKs")
@@ -124,13 +137,20 @@ final class BackupJob {
           || label.equals("Android-obb")
           || (label.equals("Device-data") && shizuku && exports.length() > 0)
           || !labels.add(label)) throw new Exception("Folder labels must be unique simple names");
+      if (shared) {
+        String path = s.getString("path");
+        SharedStorage.validate(path, false);
+        if (!sharedPaths.add(path)) throw new Exception("Choose each Shizuku folder only once");
+        continue;
+      }
       String uri = s.getString("uri");
       if (!uri.startsWith("content://") || !uris.add(uri))
         throw new Exception("Choose each folder only once in this job");
     }
     if (runnable
         && sources.length() == 0
-        && !(shizuku && (apks || data || obb || exports.length() > 0)))
+        && !(shizuku
+            && (apks || data || obb || exports.length() > 0 || shizukuFolders.length() > 0)))
       throw new Exception("Add a folder or enable a Shizuku source for this job");
   }
 
@@ -178,6 +198,12 @@ final class BackupJob {
 
   int sourceCount() {
     return sources.length()
-        + (shizuku ? (apks ? 1 : 0) + (data ? 1 : 0) + (obb ? 1 : 0) + exports.length() : 0);
+        + (shizuku
+            ? (apks ? 1 : 0)
+                + (data ? 1 : 0)
+                + (obb ? 1 : 0)
+                + exports.length()
+                + shizukuFolders.length()
+            : 0);
   }
 }

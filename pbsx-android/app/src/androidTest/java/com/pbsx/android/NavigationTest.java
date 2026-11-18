@@ -321,6 +321,7 @@ public class NavigationTest {
     assertFalse(defaults.allApps);
     assertEquals(0, defaults.packages.length());
     assertEquals(0, defaults.exports.length());
+    assertEquals(0, defaults.shizukuFolders.length());
     Activity editor =
         instrumentation.startActivitySync(
             new Intent(instrumentation.getTargetContext(), JobEditorActivity.class)
@@ -344,6 +345,7 @@ public class NavigationTest {
               assertEquals(label, 0.4f, box.getAlpha(), 0.01f);
             }
             assertFalse(find(root, "Choose apps", false).isEnabled());
+            assertFalse(find(root, "+ Add folder via Shizuku", false).isEnabled());
           });
       click(editor, "Enable Shizuku for this job");
       instrumentation.runOnMainSync(
@@ -355,7 +357,8 @@ public class NavigationTest {
                   "Android/data",
                   "Android/obb",
                   "All apps and external app folders",
-                  "Choose apps"
+                  "Choose apps",
+                  "+ Add folder via Shizuku"
                 }) {
               View control = find(root, label, false);
               assertTrue(label, control.isEnabled());

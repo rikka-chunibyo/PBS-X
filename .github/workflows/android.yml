@@ -75,7 +75,7 @@ jobs:
           path: fixtures
       # The emulator uses a clean runner, without native compilation caches or
       # an NDK download competing with its system image for disk space.
-      - name: Exercise SAF restores on a disposable Android 13 emulator
+      - name: Exercise SAF restores, shared-folder jobs and settings on Android 13
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-33;aosp_atd;x86_64'
           export ANDROID_USER_HOME="$RUNNER_TEMP/android-user"
@@ -115,13 +115,13 @@ jobs:
           "$adb" -s emulator-5554 shell input keyevent 82
           "$adb" -s emulator-5554 install -r -t fixtures/debug/app-debug.apk
           "$adb" -s emulator-5554 install -r -t fixtures/androidTest/debug/app-debug-androidTest.apk
-          "$adb" -s emulator-5554 shell am instrument -w -r -e class com.pbsx.android.DocumentsTest com.pbsx.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/pbsx-instrumentation.log"
+          "$adb" -s emulator-5554 shell am instrument -w -r -e class 'com.pbsx.android.DocumentsTest,com.pbsx.android.SharedFolderJobTest,com.pbsx.android.KeyVaultTest#completeSettingsRoundTripIncludesJobsKeysPreferencesAndHistory,com.pbsx.android.NavigationTest#newJobsStartWithNoShizukuSelectionsAndDisableDependentControls' com.pbsx.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/pbsx-instrumentation.log"
           python3 - "$RUNNER_TEMP/pbsx-instrumentation.log" <<'PY'
           import pathlib, re, sys
           output = pathlib.Path(sys.argv[1]).read_text()
           match = re.search(r'OK \((\d+) tests?\)', output)
-          if not match or int(match[1]) < 3 or 'FAILURES!!!' in output or 'INSTRUMENTATION_FAILED' in output:
-              sys.exit('SAF instrumentation did not report successful completion of all three tests')
+          if not match or int(match[1]) < 7 or 'FAILURES!!!' in output or 'INSTRUMENTATION_FAILED' in output:
+              sys.exit('Android instrumentation did not report successful completion of all seven tests')
           PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()

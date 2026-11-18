@@ -68,7 +68,9 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
     return f;
   }
 
-  private static File allowed(String path) throws Exception {
+  private File allowed(String path) throws Exception {
+    if (path.startsWith("/@shared/"))
+      return SharedStorage.resolve(sharedRoot(), path.substring("/@shared/".length()), false);
     if (!path.startsWith("/storage/emulated/0/Android/data")
         && !path.startsWith("/storage/emulated/0/Android/obb"))
       throw new SecurityException("Source outside selected Shizuku roots");
@@ -86,6 +88,26 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
     if (!f.exists() || !f.canRead())
       throw new Exception("Shizuku cannot read this source on this Android version");
     return f;
+  }
+
+  private File sharedRoot() {
+    return new File("/storage/emulated/" + (owner / 100000));
+  }
+
+  @Override
+  public String folders(String relativePath) {
+    authorize();
+    try {
+      JSONArray out = new JSONArray();
+      for (File folder : SharedStorage.directories(sharedRoot(), relativePath))
+        out.put(directory(folder.getName()));
+      String json = out.toString();
+      if (json.length() > 350000)
+        throw new Exception("Folder list exceeds safe Binder message size");
+      return json;
+    } catch (Exception e) {
+      throw error(e);
+    }
   }
 
   private static JSONObject entry(File f, String name) throws Exception {
@@ -161,7 +183,7 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
         File dir = allowed(path);
         File[] files = dir.listFiles();
         if (files == null) throw new Exception("Shizuku cannot list this directory");
-        for (File f : files) out.put(entry(allowed(f.getPath()), f.getName()));
+        for (File f : files) out.put(entry(allowed(path + "/" + f.getName()), f.getName()));
       }
       String json = out.toString();
       if (json.length() > 350000) throw new Exception("Directory exceeds safe Binder message size");

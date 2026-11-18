@@ -6,5 +6,6 @@ interface IPrivilegedFiles {
     ParcelFileDescriptor openRead(String path) = 2;
     String apps() = 3;
     ParcelFileDescriptor openExport(String category) = 4;
+    String folders(String relativePath) = 5;
     void destroy() = 16777114;
 }
