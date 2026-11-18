@@ -23,7 +23,7 @@ Ext.define('PBS.HostBackupBrowser', {
 	} else if (archive !== 'root.mpxar.didx') {
 	    throw new Error(gettext('This archive is not supported by native host restore.'));
 	}
-	if (!path.startsWith('/') || /[\x00\r\n\\]/.test(path) ||
+	if (!path.startsWith('/') || path.includes('\0') || /[\r\n\\]/.test(path) ||
 	    path.split('/').some(part => part === '..' || part === '.')) {
 	    throw new Error(gettext('This filename cannot be represented safely in the restore form.'));
 	}

@@ -31,6 +31,7 @@ for (const [path, archive] of [
     ['/another.pxar.didx/private', 'root.pxar.didx'],
     ['/root.pxar.didx-other/private', 'root.pxar.didx'],
     ['/root.pxar.didx/file\nother', 'root.pxar.didx'],
+    ['/root.pxar.didx/file\rother', 'root.pxar.didx'],
     ['/root.pxar.didx/file\0', 'root.pxar.didx'],
     ['/root.pxar.didx/file ', 'root.pxar.didx'],
     ['/root.pxar.didx/a\\b', 'root.pxar.didx'],
