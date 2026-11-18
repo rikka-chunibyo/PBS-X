@@ -56,6 +56,10 @@ jobs:
   build:
     if: github.event_name == 'workflow_dispatch'
     needs: checks
+    # PR checks stay read-only. Only an explicitly dispatched build can mirror
+    # the verified image; SSH and repository signing keys remain off CI.
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     container: debian:13-slim
     defaults:
@@ -100,3 +104,23 @@ jobs:
             artifacts/iso/pbsx-offline-amd64.boot.txt
           compression-level: 0
           retention-days: 14
+      - name: Mirror verified ISO assets to their exact input release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PBSX_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          python3 - <<'PY'
+          import importlib.util, os, pathlib, sys
+          sys.path.insert(0, 'tools')
+          spec = importlib.util.spec_from_file_location('server_publisher', 'tools/publish-pbsx-server.py')
+          publisher = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(publisher)
+          repository = os.environ['GITHUB_REPOSITORY']
+          tag = os.environ['PBSX_RELEASE_TAG']
+          info = publisher.release_info(repository, tag)
+          if info is None or info['target_commitish'] != os.environ['GITHUB_SHA'] or info['draft']:
+              raise ValueError('ISO release must identify this exact checked builder commit')
+          publisher.ensure_assets(repository, tag, [pathlib.Path('artifacts/iso')/name
+              for name in publisher.publication.PUBLIC_FILES[:4]])
+          print('Verified ISO assets mirrored without deployment or signing credentials')
+          PY

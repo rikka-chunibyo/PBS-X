@@ -96,14 +96,15 @@ The GitHub **PBS-X offline ISO** workflow runs regression checks on relevant
 pushes/PRs. The combined publisher dispatches it with an exact input-release tag
 and retains the resulting artifact for 14 days. Manual dispatch requires that
 tag too. A Debian 13 container fetches the four mirrored packages using its
-read-only GitHub token and verifies their sizes, hashes, architectures and
+GitHub token and verifies their sizes, hashes, architectures and
 identities against that release's `iso-inputs.json`. The publisher derives those
 inputs from signed stable APT plus the tested candidate bundle, so subsequent
 releases do not need a manual committed-pin update. The original committed
 `packaging/iso/release-inputs.json` remains a historical CLI rebuild input.
 
 This mirror avoids Cloudflare's browser challenge for hosted runners. CI builds
-the image; the trusted maintainer command verifies and publishes both APT and
+the image and mirrors its checked assets to the exact input release; the trusted
+maintainer command verifies and publishes both APT and
 ISO over the existing SSH connection. The image contains no unattended answers,
 passwords, enrollment tokens, personal SSH keys or repository signing secrets.
 

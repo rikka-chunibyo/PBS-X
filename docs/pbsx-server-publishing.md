@@ -27,9 +27,12 @@ Repository-support-only changes therefore rebuild the ISO too.
 The publisher mirrors those four verified packages and `iso-inputs.json` into
 a GitHub prerelease, then dispatches `.github/workflows/iso.yml` with its exact
 tag, version and a unique request ID. The initial prerelease is labelled as
-build inputs; it does not announce a completed installer. Hosted CI has only
-read access and no SSH deployment or signing secret. This mirror avoids public
-edge browser challenges on hosted runners.
+build inputs; it does not announce a completed installer. CI checks have read-only
+access. The dispatched image-build job gets an ephemeral repository write token
+to mirror checked ISO assets to the release identifying that exact builder
+commit. It has no SSH deployment or signing secret. This mirror avoids public
+edge browser challenges and a redundant 2 GB upload through the maintainer's
+Internet connection.
 
 CI verifies the mirrored hashes/identities, pinned upstream ISO, signed runtime
 dependencies, offline dependency closure, final embedded package bytes and
@@ -74,6 +77,8 @@ remains readable and the repository records the staging path in
 to finish the link switch. Do not reconstruct different bytes under the same
 release identity. `--run-id` on `prepare` can collect a successful ISO run from
 the same source when recovering from an interrupted build collection.
+If a hosted build fails after completing some immutable ISO uploads, start a
+fresh build with a unique `--tag`; completed image bytes are never overwritten.
 An unfinished transaction must be completed before a different stable release
 can start; its durable pending marker cannot be overwritten by a newer caller.
 The existing metadata-refresh service also finishes a pending, fully staged
