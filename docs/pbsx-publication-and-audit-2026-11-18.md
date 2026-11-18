@@ -96,3 +96,7 @@ trace confirms a successful snapshot-directory `fsync` immediately after each
 of the two index renames and the final manifest rename. This is source
 hardening after the client release above; it does not rebuild or change that
 immutable release's files.
+
+The follow-up source fix passed
+[native Windows/Linux checks 44390522114](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44390522114)
+and [publication/consumer checks 44390521977](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44390521977).
