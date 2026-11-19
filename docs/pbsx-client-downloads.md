@@ -127,3 +127,6 @@ The [preview.3 publication](client-release-2026-11-18-preview-3.md) adds Android
 `0.5.8-preview` with the Shizuku shared-folder picker, including Download.
 The [preview.4 publication](client-release-2026-11-18-preview-4.md) updates Android
 to `0.5.9-preview`, defaulting normal folder labels to the selected folder name.
+The [preview.5 publication](client-release-2026-11-18-preview-5.md) publishes
+Android `0.5.10-preview` and Windows/Linux `0.7.5-preview` with cumulative upload
+progress for ordinary, split and interleaved PBS archive uploads.
