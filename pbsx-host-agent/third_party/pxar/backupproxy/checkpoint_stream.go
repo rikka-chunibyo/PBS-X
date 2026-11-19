@@ -26,7 +26,8 @@ type StreamCheckpoint struct {
 // checkpointStream chunks writes on the producer side so checkpoint boundaries
 // can flush partial chunks and acknowledge every reference before saving walker
 // state. Legacy UploadArchive uses a reader-side chunker and remains unchanged.
-// This experimental writer is not wired into the current backup operation.
+// The resumable document coordinator uses this writer; the ordinary host
+// archive uploader retains its existing path.
 type checkpointStream struct {
 	ctx      context.Context
 	session  *pbsSession

@@ -49,7 +49,7 @@ public final class BackupService extends Service {
             .setOngoing(working)
             .setOnlyAlertOnce(true);
     if (working) {
-      if (!TransferState.current().restore)
+      if (Operations.canPause())
         builder.addAction(
             new Notification.Action.Builder(
                     null,

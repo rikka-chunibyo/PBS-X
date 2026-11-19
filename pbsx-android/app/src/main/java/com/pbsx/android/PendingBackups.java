@@ -47,6 +47,15 @@ final class PendingBackups {
     return new File(c.getFilesDir(), "pending-backups-v1");
   }
 
+  static String sourceIdentity(String device, BackupJob job) throws Exception {
+    byte[] bytes =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest((device + "\n" + job.json().toString()).getBytes(StandardCharsets.UTF_8));
+    StringBuilder out = new StringBuilder();
+    for (byte b : bytes) out.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
+    return out.toString();
+  }
+
   static JSONArray validate(JSONArray runs) throws Exception {
     if (runs.length() > 100 || runs.toString().getBytes(StandardCharsets.UTF_8).length > LIMIT)
       throw new Exception("Too many pending backups");
@@ -62,6 +71,8 @@ final class PendingBackups {
           || !run.getString("device").matches("[a-f0-9]{64}")
           || !java.util.Arrays.asList("running", "paused", "failed", "cancelling")
               .contains(run.getString("state"))) throw new Exception("Invalid pending backup");
+      if (!sourceIdentity(run.getString("device"), job).equals(run.getString("source")))
+        throw new Exception("Pending backup source settings have changed");
       run.getBoolean("automatic");
       if (run.has("occurrence")
           && (!(run.opt("occurrence") instanceof Number) || run.getLong("occurrence") < 0))

@@ -43,13 +43,14 @@ public class PendingBackupsTest {
         new JSONObject().put("label", "Download").put("uri", "content://fixture/tree/download"));
     JobStore.save(c, job);
     String history = JobStore.start(c, job, "backup"), hex = repeat("ab", 32);
+    String source = PendingBackups.sourceIdentity(hex, job);
     JSONObject descriptor =
         new JSONObject()
             .put("version", 1)
             .put("token", hex)
             .put("state_key", repeat("cd", 32))
             .put("binding", hex)
-            .put("source", hex)
+            .put("source", source)
             .put("store", job.store)
             .put("namespace", job.namespace)
             .put("backup_id", job.backupID)
@@ -65,7 +66,7 @@ public class PendingBackupsTest {
         .put("job", job.json())
         .put("history", history)
         .put("device", hex)
-        .put("source", hex)
+        .put("source", source)
         .put("descriptor", descriptor.toString())
         .put("state", "paused")
         .put("automatic", false);
@@ -177,7 +178,12 @@ public class PendingBackupsTest {
     BackupJob job = BackupJob.from(run.getJSONObject("job"));
     job.connectionID = connection;
     JobStore.save(from, job);
-    run.put("job", job.json()).put("automatic", true);
+    String source = PendingBackups.sourceIdentity(run.getString("device"), job);
+    JSONObject descriptor = new JSONObject(run.getString("descriptor")).put("source", source);
+    run.put("job", job.json())
+        .put("automatic", true)
+        .put("source", source)
+        .put("descriptor", descriptor.toString());
     PendingBackups.put(from, run);
     String exported = SettingsTransfer.exportJSON(from);
     assertEquals(

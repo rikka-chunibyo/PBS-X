@@ -262,7 +262,7 @@ public final class MainActivity extends Activity {
         transferBar.setContentDescription("Current file progress");
         running.addView(transferBar, new LinearLayout.LayoutParams(-1, Ui.dp(this, 12)));
         transferBarLabel = Ui.hint(running, "");
-        if (!TransferState.current().restore)
+        if (Operations.canPause())
           Ui.button(
               running,
               "Pause backup",

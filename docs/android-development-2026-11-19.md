@@ -165,7 +165,8 @@ the development VM, hypervisor, or PBS server handling the user's backup.
   are untouched. `/run` is mounted noexec, so the initial staging attempt there
   failed and the helper automatically restored the original service; executable
   staging was moved to `/usr/local/lib` without weakening mount protection.
-- **Runtime proxy is currently the experimental fixture version.** Rollback:
+- The temporary proxy was restored to the installed version after live tests.
+  If reactivating the fixture, rollback is:
   `ssh rikka@10.0.1.21 python3 /home/rikka/pbsx-resume-fixture-20261119.py restore`.
   The helper removes only its drop-in and restarts the original test-VM proxy.
   Source helper is `/tmp/pbsx-resume-fixture-20261119.py` locally. Do not stop or

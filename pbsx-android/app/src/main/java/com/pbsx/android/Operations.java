@@ -20,6 +20,10 @@ final class Operations {
   private static volatile String activeJobId = "";
   private static volatile String activeRunId = "";
 
+  static boolean canPause() {
+    return active != null && !TransferState.current().restore;
+  }
+
   static String activeJobId() {
     return activeJobId;
   }
@@ -264,10 +268,8 @@ final class Operations {
       cancellation.client = client;
       client.setProgressDetails(
           value -> {
-            if (destination == null) {
-              if (cancellation.cancelled()) client.cancel();
-              else if (cancellation.paused()) client.pause();
-            }
+            if (cancellation.cancelled()) client.cancel();
+            else if (destination == null && cancellation.paused()) client.pause();
             if (isActive(cancellation) && TransferState.accept(value)) publish.run();
           });
       cancellation.check();
@@ -345,7 +347,7 @@ final class Operations {
         BackupJob frozen = BackupJob.from(job.json());
         frozen.connectionID = KeyProfiles.connection(context, job.connectionID).getString("id");
         frozen.backupID = job.backupID(context);
-        String sourceIdentity = hash(device + "\n" + frozen.json().toString());
+        String sourceIdentity = PendingBackups.sourceIdentity(device, frozen);
         String descriptor =
             client.newBackupRun(
                 frozen.store,
