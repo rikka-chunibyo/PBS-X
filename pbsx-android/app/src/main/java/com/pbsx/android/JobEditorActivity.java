@@ -421,6 +421,27 @@ public final class JobEditorActivity extends Activity {
   }
 
   private void nameFolder(Uri uri, String sharedPath) {
+    if (sharedPath != null) {
+      showFolderName(uri, sharedPath, sharedPath.substring(sharedPath.lastIndexOf('/') + 1));
+      return;
+    }
+    executor.execute(
+        () -> {
+          String folderName = "";
+          try {
+            folderName = new DocumentTree(getContentResolver(), uri).stat(".").getString("name");
+          } catch (Exception ignored) {
+            // A provider may omit its display name; the label remains editable.
+          }
+          String suggested = folderName;
+          runOnUiThread(
+              () -> {
+                if (!isDestroyed() && !isFinishing()) showFolderName(uri, null, suggested);
+              });
+        });
+  }
+
+  private void showFolderName(Uri uri, String sharedPath, String suggested) {
     try {
       boolean shared = sharedPath != null;
       if (shared) {
@@ -434,9 +455,7 @@ public final class JobEditorActivity extends Activity {
           Ui.input(
               form,
               "Folder name in backup",
-              shared
-                  ? sharedPath.substring(sharedPath.lastIndexOf('/') + 1)
-                  : "Folder-" + (job.sources.length() + 1),
+              suggested.trim().isEmpty() ? "Folder-" + (job.sources.length() + 1) : suggested,
               false);
       AlertDialog dialog =
           new AlertDialog.Builder(this)
