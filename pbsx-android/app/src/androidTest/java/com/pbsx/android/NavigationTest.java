@@ -344,7 +344,13 @@ public class NavigationTest {
               assertNotNull(label, box);
               assertFalse(label, box.isChecked());
               assertFalse(label, box.isEnabled());
-              assertEquals(label, 0.4f, box.getAlpha(), 0.01f);
+              float alpha = box.getAlpha();
+              android.view.ViewParent parent = box.getParent();
+              while (parent instanceof View) {
+                alpha *= ((View) parent).getAlpha();
+                parent = parent.getParent();
+              }
+              assertEquals(label, 0.4f, alpha, 0.01f);
             }
             assertFalse(find(root, "Choose apps · APKs", false).isEnabled());
             assertFalse(find(root, "Choose apps · Android/data", false).isEnabled());

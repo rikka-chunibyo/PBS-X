@@ -46,6 +46,14 @@ type encoderState struct {
 	parentItemIdx         int    // index in parent's items slice, -1 for root
 }
 
+func writeExactly(w io.Writer, data []byte) error {
+	n, err := w.Write(data)
+	if err == nil && n != len(data) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
 // NewEncoder creates a new pxar encoder writing to the given writers.
 // If payloadOut is non-nil, the archive is split (v2 format).
 // metadata describes the root directory. prelude is optional v2 prelude data.
@@ -60,7 +68,7 @@ func NewEncoder(output, payloadOut io.Writer, metadata *pxar.Metadata, prelude [
 		// Write payload start marker
 		var hdrBuf [format.HeaderSize]byte
 		format.HeaderWithContentSize(format.PXARPayloadStartMarker, 0).MarshalTo(hdrBuf[:])
-		if _, err := payloadOut.Write(hdrBuf[:]); err != nil {
+		if err := writeExactly(payloadOut, hdrBuf[:]); err != nil {
 			enc.err = err
 			return enc
 		}
@@ -300,11 +308,11 @@ func (e *Encoder) AddFile(metadata *pxar.Metadata, name string, content []byte) 
 
 		var hdrBuf [format.HeaderSize]byte
 		format.HeaderWithContentSize(format.PXARPayload, uint64(len(content))).MarshalTo(hdrBuf[:])
-		if _, err := e.payloadOut.Write(hdrBuf[:]); err != nil {
+		if err := writeExactly(e.payloadOut, hdrBuf[:]); err != nil {
 			e.err = err
 			return 0, err
 		}
-		if _, err := e.payloadOut.Write(content); err != nil {
+		if err := writeExactly(e.payloadOut, content); err != nil {
 			e.err = err
 			return 0, err
 		}
@@ -375,7 +383,7 @@ func (e *Encoder) CreateFile(metadata *pxar.Metadata, name string, size uint64) 
 
 		var hdrBuf [format.HeaderSize]byte
 		format.HeaderWithContentSize(format.PXARPayload, size).MarshalTo(hdrBuf[:])
-		if _, err := e.payloadOut.Write(hdrBuf[:]); err != nil {
+		if err := writeExactly(e.payloadOut, hdrBuf[:]); err != nil {
 			e.err = err
 			return nil, err
 		}
@@ -907,7 +915,7 @@ func (e *Encoder) Close() error {
 	if e.payloadOut != nil {
 		var hdrBuf [format.HeaderSize]byte
 		format.HeaderWithContentSize(format.PXARPayloadTailMarker, 0).MarshalTo(hdrBuf[:])
-		if _, err := e.payloadOut.Write(hdrBuf[:]); err != nil {
+		if err := writeExactly(e.payloadOut, hdrBuf[:]); err != nil {
 			e.state = e.state[:0]
 			e.finished = true
 			return err

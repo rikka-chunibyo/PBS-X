@@ -80,13 +80,21 @@ the development VM, hypervisor, or PBS server handling the user's backup.
   overlap behavior. Debug and instrumentation APK compilation, JVM tests and
   lint passed locally. Android FUSE-specific staging/no-replace/fresh-directory,
   inline MMS, independent app-source and schedule tests were added to CI;
-  instrumentation has not yet run for this branch.
+  the first CI emulator run exercised all eleven selected tests. Native staged
+  restore passed on Android 13/FUSE. Two new assertions failed: Android JSON
+  escapes `/` in SMIL text, and child controls inherit the disabled alpha from
+  their parent. These tests now inspect parsed JSON and effective alpha. Added
+  a twelfth test for durable/coalesced schedule occurrence behavior.
 - Added a bounded/versioned encoder checkpoint format that reconstructs nested
   directory state and the exact mid-file offset without replaying earlier
   source data. Byte-identical v1/v2 reconstruction tests pass. Failed outputs,
   malformed state, unknown/trailing fields and mismatched streams are rejected.
   This API is not wired into the production uploader. Server acknowledgment,
   durable client journal, walker state and recovery remain necessary.
+- Checkpoint testing also found unchecked short writes of split payload
+  headers/content. Those writes now reject short output, and a failed stream
+  cannot produce a checkpoint. Linux and Windows host-app CI passed for the
+  first development checkpoint; final follow-up checks are still required.
 
 ## Research references
 
@@ -97,6 +105,16 @@ the development VM, hypervisor, or PBS server handling the user's backup.
 - PBS technical overview: the client hashes source chunks locally and can use
   a previous snapshot's chunk list to avoid sending known chunks.
   https://pbs.proxmox.com/docs/technical-overview.html
+- Android provider import research: ordinary SMS/MMS provider writes require
+  the user-selected default SMS app; automatic contact aggregation is not a
+  complete duplicate-prevention strategy. Calendar supports a separate LOCAL
+  calendar, making isolated append-only imports a candidate. These documents do
+  not establish that arbitrary Shizuku/Samsung provider writes are safe. Keep
+  provider imports unavailable until fixture tests and explicit item selection,
+  idempotence, account mapping and rollback behavior are implemented.
+  https://developer.android.com/reference/android/provider/Telephony
+  https://developer.android.com/reference/android/provider/ContactsContract.RawContacts
+  https://developer.android.com/reference/android/provider/CalendarContract
 
 ## Remaining work
 

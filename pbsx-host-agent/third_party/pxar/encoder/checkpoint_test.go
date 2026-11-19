@@ -147,6 +147,26 @@ func (failingCheckpointWriter) Write(p []byte) (int, error) {
 	return len(p) / 2, errors.New("output failed")
 }
 
+type shortCheckpointWriter struct{}
+
+func (shortCheckpointWriter) Write(p []byte) (int, error) { return len(p) / 2, nil }
+
+func TestCheckpointRejectsShortPayloadWrites(t *testing.T) {
+	var meta, payload bytes.Buffer
+	e := NewEncoder(&meta, shortCheckpointWriter{}, dirMetadata(0755), nil)
+	if _, err := e.Checkpoint(); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("payload header short write hidden: %v", err)
+	}
+	e = NewEncoder(&meta, &payload, dirMetadata(0755), nil)
+	e.payloadOut = shortCheckpointWriter{}
+	if _, err := e.CreateFile(fileMetadata(0600, 1, 1), "bad", 4); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("file header short write hidden: %v", err)
+	}
+	if _, err := e.Checkpoint(); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("checkpoint accepted a short output: %v", err)
+	}
+}
+
 func TestCheckpointCannotHideFailedWritesOrOpenFile(t *testing.T) {
 	var meta, payload bytes.Buffer
 	e := NewEncoder(&meta, &payload, dirMetadata(0755), nil)

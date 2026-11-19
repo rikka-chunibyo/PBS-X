@@ -31,6 +31,33 @@ public class JobStoreTest {
   }
 
   @Test
+  public void pendingScheduleSurvivesReconfigurationAndCoalescesOnlyAfterCompletion()
+      throws Exception {
+    Context c = isolated();
+    BackupJob job = new BackupJob();
+    job.hours = 12;
+    long overdue = System.currentTimeMillis() - 86400000L;
+    c.getSharedPreferences("jobs-v1", 0)
+        .edit()
+        .putString(
+            "schedule_state",
+            new JSONObject()
+                .put(job.id, new JSONObject().put("signature", "interval/12").put("due", overdue))
+                .toString())
+        .commit();
+    assertEquals(overdue, ScheduleState.due(c, job, false));
+    job.hours = 24;
+    assertEquals(overdue, ScheduleState.due(c, job, false));
+    assertTrue(ScheduleState.isDue(c, job.id, overdue));
+    long next = ScheduleState.due(c, job, true);
+    assertTrue(next > System.currentTimeMillis());
+    assertFalse(ScheduleState.isDue(c, job.id, overdue));
+    assertEquals(next, ScheduleState.due(c, job, false));
+    ScheduleState.remove(c, job.id);
+    assertFalse(ScheduleState.isDue(c, job.id, next));
+  }
+
+  @Test
   public void backupIdentityIsIndependentOfJobLabelAndDeviceIdentity() throws Exception {
     Context c = isolated();
     Vault.save(c, new JSONObject().put("host_id", "test-phone").toString());

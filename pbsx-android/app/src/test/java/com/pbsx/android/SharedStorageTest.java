@@ -76,4 +76,25 @@ public class SharedStorageTest {
     } catch (IllegalArgumentException expected) {
     }
   }
+
+  @Test
+  public void restoreIncludesAndroidButKeepsTheSelectedProfileBoundary() throws Exception {
+    File root = temp.newFolder("profile"), other = temp.newFolder("other-profile");
+    File data = new File(root, "Android/data/com.example");
+    assertTrue(data.mkdirs());
+    assertEquals(root.getCanonicalFile(), SharedStorage.restoreRoot(root, "."));
+    assertEquals(
+        data.getCanonicalFile(), SharedStorage.restoreRoot(root, "Android/data/com.example"));
+    assertEquals("Android", SharedStorage.directories(root, ".", true)[0].getName());
+    assertEquals(0, SharedStorage.directories(root, ".").length);
+    Files.createSymbolicLink(new File(root, "outside").toPath(), other.toPath());
+    for (String path :
+        new String[] {"../other-profile", "/data/user/0", "Android/../outside", "outside"}) {
+      try {
+        SharedStorage.restoreRoot(root, path);
+        fail("Restore escaped profile: " + path);
+      } catch (IllegalArgumentException | SecurityException expected) {
+      }
+    }
+  }
 }

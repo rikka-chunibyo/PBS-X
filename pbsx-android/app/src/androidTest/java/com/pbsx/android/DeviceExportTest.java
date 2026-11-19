@@ -53,10 +53,16 @@ public final class DeviceExportTest {
     DeviceExport.write("mms", source, bytes);
     Map<String, byte[]> contents = unzip(bytes.toByteArray());
     String parts = new String(contents.get("parts.jsonl"), StandardCharsets.UTF_8);
-    assertTrue(parts.contains("<smil/>"));
-    assertTrue(parts.contains("MMS text 猫"));
-    assertTrue(parts.contains("inline-text"));
-    assertFalse(parts.contains("pbsx_attachment"));
+    String[] records = parts.trim().split("\n");
+    assertEquals(2, records.length);
+    JSONObject smil = new JSONObject(records[0]), text = new JSONObject(records[1]);
+    assertEquals("<smil/>", smil.getString("text"));
+    assertEquals("MMS text 猫", text.getString("text"));
+    for (JSONObject row : new JSONObject[] {smil, text}) {
+      assertEquals("inline-text", row.getString("pbsx_payload_state"));
+      assertFalse(row.has("pbsx_attachment"));
+      assertFalse(row.has("_data"));
+    }
   }
 
   private Context context() {
