@@ -123,3 +123,5 @@ The [2026-11-18 publication and audit](pbsx-publication-and-audit-2026-11-18.md)
 records desktop `0.7.3-preview`, Android `0.5.6-preview` and their verification.
 The [subsequent preview.2 publication](client-release-2026-11-18-preview-2.md)
 records desktop `0.7.4-preview` and Android `0.5.7-preview` with the directory-flush fix.
+The [preview.3 publication](client-release-2026-11-18-preview-3.md) adds Android
+`0.5.8-preview` with the Shizuku shared-folder picker, including Download.
