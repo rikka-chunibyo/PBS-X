@@ -125,3 +125,5 @@ The [subsequent preview.2 publication](client-release-2026-11-18-preview-2.md)
 records desktop `0.7.4-preview` and Android `0.5.7-preview` with the directory-flush fix.
 The [preview.3 publication](client-release-2026-11-18-preview-3.md) adds Android
 `0.5.8-preview` with the Shizuku shared-folder picker, including Download.
+The [preview.4 publication](client-release-2026-11-18-preview-4.md) updates Android
+to `0.5.9-preview`, defaulting normal folder labels to the selected folder name.
