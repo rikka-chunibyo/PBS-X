@@ -137,13 +137,36 @@ optimization, since document providers may report missing or unreliable mtimes.
 Deleting a file from the phone removes it from the next snapshot; earlier
 snapshots remain subject to PBS retention settings. There is no file syncing.
 
-Manual runs are the default. Each job can have an optional interval in whole
-hours (0 disables it) and charging requirement. Put directories in separate
-jobs to schedule them independently. Android chooses the exact execution time
-and can interrupt jobs. Wi-Fi-only is enabled per backup job; Settings controls
-Wi-Fi-only for browsing and restores. It includes native TCP socket binding
-to the selected Android network; network loss cancels an active operation.
-Enrollment itself is a setup request and is not gated by that setting.
+Manual runs are the default. Each job can use an interval in whole hours or
+selected weekdays and times, optionally in a fixed time zone. Directories can
+use separate jobs for independent schedules. Android may defer the requested
+time for charging, network availability or system limits. One overdue occurrence
+is retained per job; missed occurrences are coalesced after completion rather
+than accumulating a queue. Transfers run one at a time.
+
+Wi-Fi-only is enabled per backup job; Settings controls Wi-Fi-only for browsing
+and restores. Native TCP sockets bind to the selected Wi-Fi network. A backup
+pauses when Wi-Fi is lost; a restore cancels. Scheduled backups pause when Android
+stops them or charging/network requirements cease to be met, then resume the same
+saved run when retried. Enrollment is a setup request and is not gated by Wi-Fi-only.
+
+The development branch adds **Pause** in the active transfer and notification,
+plus **Resume** and **Cancel saved run** on jobs. Resuming keeps the original
+snapshot, sources, credentials and history entry. Job edits apply to the next
+run. Manual pause holds automatic scheduling until you resume. An interrupted
+file's saved prefix is checked locally; files completed before the checkpoint
+are not reread. A small amount of work since the last checkpoint may be repeated
+(default checkpoint interval: 64 MiB or 30 seconds).
+
+Resume requires the matching PBS-X server checkpoint extension. Older servers
+are rejected; the app never substitutes a new snapshot for a missing acknowledged
+checkpoint. Recovery records are encrypted with Android Keystore independently
+of optional backup encryption. Prepared device-export ZIPs stay in private app
+storage until the run completes or is cancelled. Settings exports include recovery
+secrets; imports hold pending runs and schedules, and cannot recreate missing
+source permissions or prepared ZIP files. Cancel removes only an unfinished run
+and keeps recovery information until server cleanup is confirmed. Completed
+snapshots are never deleted by cancellation.
 
 Jobs using the same datastore, namespace and **Backup ID** share a PBS snapshot
 history. Each snapshot contains only the sources selected by that run; nothing

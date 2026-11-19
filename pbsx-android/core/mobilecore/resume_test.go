@@ -1,9 +1,12 @@
 package mobilecore
 
 import (
+	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pbs-plus/pxar/datastore"
 )
@@ -82,5 +85,25 @@ func TestCancelCannotBeDowngradedToPause(t *testing.T) {
 	client.Pause()
 	if client.pauseRequested() || ctx.Err() == nil {
 		t.Fatal("cancel downgraded to pause")
+	}
+}
+
+func TestClosingUnfinishedDocumentDoesNotReadFromOpenPipe(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	document := &checkedDocument{file: reader, fs: &documentFS{ctx: context.Background()}, before: documentEntry{Size: 128}}
+	finished := make(chan error, 1)
+	go func() { finished <- document.Close() }()
+	select {
+	case err := <-finished:
+		if err == nil || !strings.Contains(err.Error(), "not fully consumed") {
+			t.Fatal("unfinished source was accepted", err)
+		}
+	case <-time.After(time.Second):
+		reader.Close()
+		t.Fatal("closing an unfinished source blocked on its open pipe")
 	}
 }

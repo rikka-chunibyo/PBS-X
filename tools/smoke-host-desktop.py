@@ -15,6 +15,9 @@ args = parser.parse_args()
 with tempfile.TemporaryDirectory(prefix='pbsx-desktop-smoke-') as settings:
     environment = {**os.environ, 'XDG_CONFIG_HOME': settings, 'FYNE_PLATFORM': 'x11', 'XDG_SESSION_TYPE': 'x11'}
     environment.pop('WAYLAND_DISPLAY', None)
+    # Probe the X server before starting GLFW. -noreset in the workflow keeps
+    # short-lived screenshot connections from resetting a display during startup.
+    ImageGrab.grab(xdisplay=os.environ['DISPLAY'])
     app = subprocess.Popen([str(args.binary.resolve()), '--demo'], env=environment)
     try:
         deadline = time.monotonic()+30

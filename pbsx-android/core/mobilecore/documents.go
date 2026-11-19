@@ -248,16 +248,22 @@ func (r *checkedDocument) Close() error {
 	if r.stop != nil {
 		defer r.stop()
 	}
-	// The encoder may read exactly size bytes without asking for EOF.
+	// Read verifies EOF and metadata when it reaches the advertised size.
+	// Do not read an unfinished pipe while closing a paused/failed traversal:
+	// its writer may remain open indefinitely. Empty files still need a probe.
 	var check error
 	if !r.checked {
-		var b [1]byte
-		_, err := r.Read(b[:])
-		if err != io.EOF {
-			check = err
-			if check == nil {
-				check = errors.New("file was not fully consumed")
+		if r.before.Size == 0 && r.read == 0 {
+			var b [1]byte
+			_, err := r.Read(b[:])
+			if err != io.EOF {
+				check = err
+				if check == nil {
+					check = errors.New("could not verify empty source EOF")
+				}
 			}
+		} else {
+			check = errors.New("file was not fully consumed or did not pass source validation")
 		}
 	}
 	return errors.Join(check, r.file.Close())

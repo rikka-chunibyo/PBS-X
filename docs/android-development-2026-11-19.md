@@ -243,8 +243,10 @@ corruption, history retention/job deletion, manual versus automatic scheduling
 holds, exact export-cache reuse/missing/changed-file refusal, and settings export/import
 including recovery secrets, import holds and credential edit protection. The Android 13
 workflow now requires at least seventeen tests. Local universal Go bindings, debug
-app/test compilation, Java unit tests and lint passed. The new instrumentation
-cases still require emulator execution; do not describe them as passed yet.
+app/test compilation, Java unit tests and lint passed. All seventeen tests passed on the Android 13 CI emulator for `ade5c6652`
+(run 44553186433), including the five new recovery cases. That run's optional
+report upload was refused by GitHub quota, while test execution and the workflow
+itself passed; the test output is retained in its Actions log.
 
 Before publication: finish interruption/constraint/UI regression checks, inspect
 all changed sources, run Android instrumentation and native checks, restore the
@@ -283,6 +285,23 @@ were made.
   removed after tests. Private fixture credentials were revoked and removed;
   running live cases again requires preparing a fresh fixture. Other stores,
   installed binaries, the phone and its PBS server were not changed.
+
+### Final review follow-up
+
+- An unfinished Android provider pipe could block in `checkedDocument.Close`
+  after an unrelated failure, because cleanup tried to read an extra byte before
+  closing. Cleanup now rejects an unconsumed nonempty source without reading it;
+  successful reads retain their existing EOF/metadata checks and empty sources
+  still require an EOF probe. A race-tested regression holds the pipe writer open
+  and verifies that Close returns promptly with an error.
+- Both lab VMs 103/104 were returned to their original stopped state after
+  confirming their identities and no running test/build tasks. VM 100, other
+  guests and the phone's backup server were untouched.
+- Native Windows unit/shared transport tests, bundle build, installer check and
+  headless CLI passed on `ade5c6652`. Linux race/UI/installer checks and bundle
+  build passed; its desktop smoke test hit an Xvfb display initialization failure.
+  Add `-noreset` and probe the X display before launching GLFW. Artifact uploads
+  still fail at GitHub's quota gate; do not report the whole workflow as passed.
 
 ## Research references
 

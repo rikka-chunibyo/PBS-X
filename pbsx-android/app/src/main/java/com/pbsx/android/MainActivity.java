@@ -386,7 +386,8 @@ public final class MainActivity extends Activity {
             "Saved run · "
                 + frozen.target()
                 + "\n"
-                + pending.optString("message", "Checkpoint retained"));
+                + pending.optString("message", "Checkpoint retained")
+                + "\nUses the saved sources and credentials; job edits apply to the next run.");
         if ("cancelling".equals(pending.optString("state")))
           Ui.button(
               actions,
