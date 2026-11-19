@@ -47,34 +47,13 @@ jobs:
           "$(go env GOPATH)/bin/gomobile" bind -target=android/arm64,android/amd64 -androidapi 26 -javapkg com.pbsx.core -o ../app/libs/mobilecore.aar ./mobilecore
       - name: Compile both app variants, run Java tests and lint
         run: bash ./gradlew --no-daemon --max-workers=2 --console=plain :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:lintRelease
-      # These two debug-signed APKs are short-lived instrumentation fixtures,
-      # never preview downloads. The pinned maintainer signer stays out of CI.
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: android-provider-test-apks
-          path: |
-            pbsx-android/app/build/outputs/apk/debug/app-debug.apk
-            pbsx-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-          retention-days: 1
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: always()
-        with:
-          name: android-check-reports
-          path: |
-            pbsx-android/app/build/reports
-            pbsx-android/app/build/test-results
-          retention-days: 14
-  provider:
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: android-provider-test-apks
-          path: fixtures
-      # The emulator uses a clean runner, without native compilation caches or
-      # an NDK download competing with its system image for disk space.
+      # Keep tests on this runner so artifact storage cannot block execution.
+      # Reclaim native build caches before installing the emulator image.
+      - name: Reclaim completed native build storage
+        run: |
+          bash ./gradlew --stop
+          rm -rf -- "$ANDROID_HOME/ndk" "$HOME/.gradle/caches" "$HOME/.cache/go-build" "$(go env GOPATH)/pkg/gomobile"
+          df -h .
       - name: Exercise SAF restores, shared-folder jobs and settings on Android 13
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-33;aosp_atd;x86_64'
@@ -113,8 +92,8 @@ jobs:
           done
           test "$booted" = 1
           "$adb" -s emulator-5554 shell input keyevent 82
-          "$adb" -s emulator-5554 install -r -t fixtures/debug/app-debug.apk
-          "$adb" -s emulator-5554 install -r -t fixtures/androidTest/debug/app-debug-androidTest.apk
+          "$adb" -s emulator-5554 install -r -t app/build/outputs/apk/debug/app-debug.apk
+          "$adb" -s emulator-5554 install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           "$adb" -s emulator-5554 shell am instrument -w -r -e class 'com.pbsx.android.PendingBackupsTest,com.pbsx.android.DocumentsTest,com.pbsx.android.LocalRestoreTest,com.pbsx.android.DeviceExportTest#inlineMmsTextDoesNotOpenStaleProviderFiles,com.pbsx.android.SharedFolderJobTest,com.pbsx.android.JobStoreTest#schedulesUpdateAndCancelIndependently,com.pbsx.android.JobStoreTest#pendingScheduleSurvivesReconfigurationAndCoalescesOnlyAfterCompletion,com.pbsx.android.KeyVaultTest#completeSettingsRoundTripIncludesJobsKeysPreferencesAndHistory,com.pbsx.android.NavigationTest#newJobsStartWithNoShizukuSelectionsAndDisableDependentControls' com.pbsx.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/pbsx-instrumentation.log"
           python3 - "$RUNNER_TEMP/pbsx-instrumentation.log" <<'PY'
           import pathlib, re, sys
@@ -125,9 +104,12 @@ jobs:
           PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
+        continue-on-error: true
         with:
-          name: android-provider-reports
+          name: android-check-reports
           path: |
+            pbsx-android/app/build/reports
+            pbsx-android/app/build/test-results
             ${{ runner.temp }}/pbsx-emulator.log
             ${{ runner.temp }}/pbsx-instrumentation.log
-          retention-days: 14
+          retention-days: 3

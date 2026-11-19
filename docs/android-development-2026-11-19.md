@@ -158,8 +158,9 @@ the development VM, hypervisor, or PBS server handling the user's backup.
   `/var/lib/pbsx-resume-fixture-20261119`, with a fixture marker and dedicated
   expiring datastore-scoped test user/token. Original config copies and test
   credentials are private in `/home/rikka/pbsx-resume-live-20261119` on VM 104.
-  The local credential file is ignored at
-  `artifacts/android-resume/private/fixture.json`; never print it.
+  The local credential file was ignored at
+  `artifacts/android-resume/private/fixture.json` and removed after cleanup;
+  never print fixture credentials.
 - A temporary systemd drop-in on VM 104 runs the test proxy from
   `/usr/local/lib/pbsx-resume-fixture-20261119/proxy`. Original installed binaries
   are untouched. `/run` is mounted noexec, so the initial staging attempt there
@@ -251,6 +252,37 @@ lab proxy, then build/sign release artifacts. This feature needs the matching ne
 PBS-X server extension; do not publish the Android client against an older server
 or silently fall back to restarting an ordinary backup. Provider imports remain
 unavailable pending safe, additive fixture-tested implementations.
+
+### CI artifact quota and fixture cleanup
+
+GitHub rejected artifact uploads after native Linux build/tests passed. The
+repository retained 8.75 GiB across 173 artifacts, including four duplicate CI
+ISO artifacts totaling 7.42 GiB. Those four CI copies were removed; their published
+GitHub release ISO assets and the public APT/download server were preserved.
+GitHub documents that storage accounting can take 6–12 hours to update and that
+removing files does not erase already accrued usage. No billing/budget changes
+were made.
+
+- Android instrumentation now runs on the build runner after reclaiming native
+  build-only caches/NDK storage. There is no required APK artifact handoff. Small
+  report upload is optional, but test failures remain mandatory. Debug fixtures
+  are not published as preview downloads.
+- Native Windows source preparation no longer requires a Linux artifact upload.
+  The Windows job fetches an immutable commit ZIP with its existing read-only
+  GitHub token, verifies the archive commit, and extracts only portable client
+  paths. Regression tests reject traversal, symlinks, Windows filename collisions,
+  wrong commits, reused destinations and forwarding auth on archive redirects.
+  The extractor was also exercised against this private repository's real ZIP.
+  Native release bundle uploads remain mandatory for publication.
+- ISO mirroring to the exact input GitHub release runs before the optional
+  duplicate CI upload, which now retains only one day. An artifact quota cannot
+  block a valid mirror or the coupled ISO/APT publisher. Client bundle retention
+  is reduced to three days; release assets are unaffected.
+- VM 104's installed proxy was restored and verified active. The marker-verified
+  synthetic datastore, its scoped user/token/ACLs and staged runtime binaries were
+  removed after tests. Private fixture credentials were revoked and removed;
+  running live cases again requires preparing a fresh fixture. Other stores,
+  installed binaries, the phone and its PBS server were not changed.
 
 ## Research references
 
