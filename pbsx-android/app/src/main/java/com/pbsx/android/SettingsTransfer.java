@@ -43,6 +43,7 @@ final class SettingsTransfer {
   private static String exportLocked(Context c) throws Exception {
     if (Operations.running())
       throw new Exception("Wait for the active transfer before exporting settings");
+    Vault.data(c); // Finish an interrupted import before capturing any settings section.
     JobStore.all(c);
     JSONObject preferences =
         new JSONObject()
@@ -223,6 +224,7 @@ final class SettingsTransfer {
       synchronized (JobStore.class) {
         Operations.changeSettings(
             () -> {
+              Vault.data(c);
               if (PendingBackups.all(c).length() != 0)
                 throw new Exception(
                     "Resume or cancel current pending backups before importing settings");

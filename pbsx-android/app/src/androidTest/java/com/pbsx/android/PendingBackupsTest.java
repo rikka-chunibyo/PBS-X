@@ -219,6 +219,40 @@ public class PendingBackupsTest {
     PendingBackups.forgetCache();
   }
 
+  @Test
+  public void scheduledRetryRecoversImportJournalBeforeChoosingNewRun() throws Exception {
+    Context c = isolated();
+    JSONObject run = run(c);
+    BackupJob job = BackupJob.from(run.getJSONObject("job"));
+    JSONObject preferences =
+        new JSONObject()
+            .put("settings", SettingsTransfer.preferences(Settings.prefs(c)))
+            .put("jobs-v1", SettingsTransfer.preferences(c.getSharedPreferences("jobs-v1", 0)));
+    JSONObject vault =
+        Vault.data(c)
+            .put("pending_import", preferences)
+            .put("pending_import_runs", new JSONArray().put(run));
+    Vault.store(c, vault);
+    Operations.Cancellation token = new Operations.Cancellation();
+    token.scheduled = true;
+    String result = Operations.runJob(c, job, null, null, 0, "[\".\"]", "fail", null, token);
+    assertTrue(result.contains("held"));
+    assertEquals(
+        run.getString("descriptor"), PendingBackups.get(c, job.id).getString("descriptor"));
+    assertEquals(1, JobStore.history(c).length());
+    assertFalse(Vault.data(c).has("pending_import"));
+    assertFalse(Operations.running());
+    PendingBackups.remove(c, job.id);
+    Settings.prefs(c).edit().putBoolean("imported_schedule_hold", true).commit();
+    Operations.Cancellation held = new Operations.Cancellation();
+    held.scheduled = true;
+    assertTrue(
+        Operations.runJob(c, job, null, null, 0, "[\".\"]", "fail", null, held).contains("held"));
+    assertEquals(1, JobStore.history(c).length());
+    ExportCache.remove(c.getFilesDir());
+    PendingBackups.forgetCache();
+  }
+
   private static class Exports extends PrivilegedFiles {
     int opened;
 

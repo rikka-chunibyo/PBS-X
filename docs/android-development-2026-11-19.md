@@ -303,6 +303,35 @@ were made.
   Add `-noreset` and probe the X display before launching GLFW. Artifact uploads
   still fail at GitHub's quota gate; do not report the whole workflow as passed.
 
+### Import serialization and last regression pass
+
+- Transfer ownership is now acquired before reading pending runs or connection
+  settings. Operations complete any interrupted vault import journal before
+  choosing resume versus new backup, reload saved backup jobs under that guard,
+  and recheck imported schedule holds. Cancel and settings import/export also
+  complete old import journals before reading or replacing recovery records.
+- An eighteenth Android instrumentation case stages an interrupted import and
+  verifies that a scheduled retry recovers/holds its existing run without creating
+  another history entry or attempting network transfer. A global import hold is
+  rechecked even when no pending run exists.
+- Android CI now runs the mobile Go module's race suite before building universal
+  JNI bindings, so source EOF, manifest/encryption, cancellation and recovery
+  descriptor regressions are automatic alongside the Java tests.
+- `b6dd08820` passed Android CI (44554873243; seventeen instrumentation tests).
+  Its Linux/Windows native test, build, installer/CLI and Linux desktop smoke
+  steps all passed (44554873180); only bundle uploads failed on GitHub quota.
+  The corrected desktop smoke also passed locally.
+- Retained build artifacts were reduced further by deleting 102 superseded
+  reproducible native bundles/source ZIPs/Android test APK sets. The newest two
+  bundles per OS, newest two test APK sets, newest portable source archive, all
+  diagnostic reports, all Actions logs and published release assets were kept.
+  Verified remaining artifact size: 105.6 MiB across 67 artifacts. Quota enforcement
+  may still lag; no billing changes or repeated quota-only reruns were performed.
+- Paused runs currently require their original effective API credential and
+  encryption key until resume/cancellation. Credential rotation/revocation during
+  a paused run needs a deliberate recovery flow; the app does not silently accept
+  another identity or throw away its recovery secrets.
+
 ## Research references
 
 - Android JobInfo.Builder setPeriodic: constraints unmet in the interval wait

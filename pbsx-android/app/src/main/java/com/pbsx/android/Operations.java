@@ -217,24 +217,33 @@ final class Operations {
       Progress progress,
       Cancellation cancellation)
       throws Exception {
-    JSONObject pending = destination == null ? PendingBackups.get(context, requestedJob.id) : null;
-    BackupJob job = pending == null ? requestedJob : BackupJob.from(pending.getJSONObject("job"));
-    job.validate(destination == null);
-    if (destination == null) KeyProfiles.validateJob(context, job);
     if (!running.compareAndSet(false, true)) throw new BusyException();
+    JSONObject pending = null;
+    BackupJob job = requestedJob;
     ConnectivityManager manager = context.getSystemService(ConnectivityManager.class);
     ConnectivityManager.NetworkCallback callback = null;
     active = cancellation;
-    activeName = destination == null ? job.name : "Restore files";
-    activeJobId = job.id;
+    activeName = destination == null ? requestedJob.name : "Restore files";
+    activeJobId = requestedJob.id;
     TransferState.begin(destination != null);
     String runId = null;
     try {
+      // Reserve the transfer before reading settings/pending state. Complete an
+      // interrupted settings import before deciding whether this is a new run.
+      Vault.data(context);
+      pending = destination == null ? PendingBackups.get(context, requestedJob.id) : null;
       if (destination == null
           && cancellation.scheduled
-          && pending != null
-          && !pending.optBoolean("automatic"))
+          && (Settings.prefs(context).getBoolean("imported_schedule_hold", false)
+              || (pending != null && !pending.optBoolean("automatic"))))
         return "Backup held until you resume or cancel its saved run";
+      job =
+          pending == null
+              ? (destination == null ? JobStore.get(context, requestedJob.id) : requestedJob)
+              : BackupJob.from(pending.getJSONObject("job"));
+      job.validate(destination == null);
+      if (destination == null) KeyProfiles.validateJob(context, job);
+      activeName = destination == null ? job.name : "Restore files";
       runId =
           pending == null
               ? JobStore.start(context, job, destination == null ? "backup" : "restore")
@@ -519,6 +528,7 @@ final class Operations {
   static String discardPending(Context c, String jobID) throws Exception {
     if (!running.compareAndSet(false, true)) throw new BusyException();
     try {
+      Vault.data(c);
       JSONObject run = PendingBackups.get(c, jobID);
       if (run == null) return "No pending backup";
       BackupJob job = BackupJob.from(run.getJSONObject("job"));
