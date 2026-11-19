@@ -72,6 +72,9 @@ final class Vault {
           "This test build uses a new vault format. Clear app storage and reconnect.");
     if (value.has("pending_import")) {
       SettingsTransfer.applyPreferences(c, value.getJSONObject("pending_import"));
+      if (value.has("pending_import_runs"))
+        PendingBackups.install(c, value.getJSONArray("pending_import_runs"));
+      value.remove("pending_import_runs");
       value.remove("pending_import");
       write(c, value.toString());
     }
@@ -82,9 +85,12 @@ final class Vault {
     write(c, value.toString());
   }
 
-  static synchronized void install(Context c, JSONObject value, JSONObject preferences)
-      throws Exception {
-    JSONObject next = new JSONObject(value.toString()).put("pending_import", preferences);
+  static synchronized void install(
+      Context c, JSONObject value, JSONObject preferences, JSONArray pending) throws Exception {
+    JSONObject next =
+        new JSONObject(value.toString())
+            .put("pending_import", preferences)
+            .put("pending_import_runs", pending);
     write(c, next.toString());
     data(c); // Encrypted import journal completes interrupted preference writes on next startup.
   }

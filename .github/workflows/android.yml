@@ -115,13 +115,13 @@ jobs:
           "$adb" -s emulator-5554 shell input keyevent 82
           "$adb" -s emulator-5554 install -r -t fixtures/debug/app-debug.apk
           "$adb" -s emulator-5554 install -r -t fixtures/androidTest/debug/app-debug-androidTest.apk
-          "$adb" -s emulator-5554 shell am instrument -w -r -e class 'com.pbsx.android.DocumentsTest,com.pbsx.android.LocalRestoreTest,com.pbsx.android.DeviceExportTest#inlineMmsTextDoesNotOpenStaleProviderFiles,com.pbsx.android.SharedFolderJobTest,com.pbsx.android.JobStoreTest#schedulesUpdateAndCancelIndependently,com.pbsx.android.JobStoreTest#pendingScheduleSurvivesReconfigurationAndCoalescesOnlyAfterCompletion,com.pbsx.android.KeyVaultTest#completeSettingsRoundTripIncludesJobsKeysPreferencesAndHistory,com.pbsx.android.NavigationTest#newJobsStartWithNoShizukuSelectionsAndDisableDependentControls' com.pbsx.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/pbsx-instrumentation.log"
+          "$adb" -s emulator-5554 shell am instrument -w -r -e class 'com.pbsx.android.PendingBackupsTest,com.pbsx.android.DocumentsTest,com.pbsx.android.LocalRestoreTest,com.pbsx.android.DeviceExportTest#inlineMmsTextDoesNotOpenStaleProviderFiles,com.pbsx.android.SharedFolderJobTest,com.pbsx.android.JobStoreTest#schedulesUpdateAndCancelIndependently,com.pbsx.android.JobStoreTest#pendingScheduleSurvivesReconfigurationAndCoalescesOnlyAfterCompletion,com.pbsx.android.KeyVaultTest#completeSettingsRoundTripIncludesJobsKeysPreferencesAndHistory,com.pbsx.android.NavigationTest#newJobsStartWithNoShizukuSelectionsAndDisableDependentControls' com.pbsx.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/pbsx-instrumentation.log"
           python3 - "$RUNNER_TEMP/pbsx-instrumentation.log" <<'PY'
           import pathlib, re, sys
           output = pathlib.Path(sys.argv[1]).read_text()
           match = re.search(r'OK \((\d+) tests?\)', output)
-          if not match or int(match[1]) < 12 or 'FAILURES!!!' in output or 'INSTRUMENTATION_FAILED' in output:
-              sys.exit('Android instrumentation did not report successful completion of all twelve tests')
+          if not match or int(match[1]) < 17 or 'FAILURES!!!' in output or 'INSTRUMENTATION_FAILED' in output:
+              sys.exit('Android instrumentation did not report successful completion of all seventeen tests')
           PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()

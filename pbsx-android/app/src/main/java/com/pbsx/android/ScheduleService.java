@@ -16,7 +16,15 @@ import java.util.Set;
 public final class ScheduleService extends JobService {
   private final Map<Integer, Operations.Cancellation> active = new HashMap<>();
 
-  static synchronized void configureAll(Context c) throws Exception {
+  static void configureAll(Context c) throws Exception {
+    synchronized (KeyProfiles.class) {
+      synchronized (JobStore.class) {
+        configureLocked(c);
+      }
+    }
+  }
+
+  private static void configureLocked(Context c) throws Exception {
     Vault.data(c);
     JobScheduler scheduler = c.getSystemService(JobScheduler.class);
     scheduler.cancel(72);
@@ -31,12 +39,17 @@ public final class ScheduleService extends JobService {
         ScheduleState.remove(c, j.id);
         continue;
       }
+      org.json.JSONObject run = PendingBackups.get(c, j.id);
+      if (run != null && !run.optBoolean("automatic")) continue;
+      BackupJob constraints = run == null ? j : BackupJob.from(run.getJSONObject("job"));
       long due = ScheduleState.due(c, j, false);
       wanted.add(j.schedulerId);
       String hash =
           android.util.Base64.encodeToString(
               java.security.MessageDigest.getInstance("SHA-256")
-                  .digest(j.json().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                  .digest(
+                      (j.json().toString() + (run == null ? "" : run.getString("history")))
+                          .getBytes(java.nio.charset.StandardCharsets.UTF_8)),
               android.util.Base64.NO_WRAP);
       JobInfo old = pending.get(j.schedulerId);
       if (old != null
@@ -51,9 +64,9 @@ public final class ScheduleService extends JobService {
               .setPersisted(true)
               .setMinimumLatency(Math.max(0, due - System.currentTimeMillis()))
               .setBackoffCriteria(30000, JobInfo.BACKOFF_POLICY_EXPONENTIAL)
-              .setRequiresCharging(j.charging)
+              .setRequiresCharging(constraints.charging)
               .setExtras(extras);
-      if (j.wifi && Build.VERSION.SDK_INT >= 28)
+      if (constraints.wifi && Build.VERSION.SDK_INT >= 28)
         b.setRequiredNetwork(
             new NetworkRequest.Builder()
                 .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
@@ -61,15 +74,22 @@ public final class ScheduleService extends JobService {
                 .build());
       else
         b.setRequiredNetworkType(
-            j.wifi ? JobInfo.NETWORK_TYPE_UNMETERED : JobInfo.NETWORK_TYPE_ANY);
+            constraints.wifi ? JobInfo.NETWORK_TYPE_UNMETERED : JobInfo.NETWORK_TYPE_ANY);
       if (scheduler.schedule(b.build()) != JobScheduler.RESULT_SUCCESS)
         throw new Exception("Android refused the schedule for " + j.name);
     }
     for (int id : pending.keySet()) if (!wanted.contains(id)) scheduler.cancel(id);
   }
 
-  private static synchronized void completed(Context c, String id, long occurrence)
-      throws Exception {
+  static void completed(Context c, String id, long occurrence) throws Exception {
+    synchronized (KeyProfiles.class) {
+      synchronized (JobStore.class) {
+        completedLocked(c, id, occurrence);
+      }
+    }
+  }
+
+  private static void completedLocked(Context c, String id, long occurrence) throws Exception {
     // Reload after the transfer: a deleted/disabled job must not regain a
     // schedule, and a stale callback must not advance a newer occurrence.
     for (BackupJob current : JobStore.all(c)) {
@@ -84,6 +104,8 @@ public final class ScheduleService extends JobService {
   @Override
   public boolean onStartJob(JobParameters params) {
     Operations.Cancellation token = new Operations.Cancellation();
+    token.scheduled = true;
+    token.occurrence = params.getExtras().getLong("due", 0);
     synchronized (active) {
       active.put(params.getJobId(), token);
     }
@@ -113,18 +135,24 @@ public final class ScheduleService extends JobService {
               } catch (Exception e) {
                 Settings.status(this, "Scheduled backup failed: " + e.getMessage());
               }
+              boolean owns;
               synchronized (active) {
-                if (active.get(params.getJobId()) == token) {
-                  active.remove(params.getJobId());
+                owns = active.get(params.getJobId()) == token;
+                if (owns) active.remove(params.getJobId());
+              }
+              if (owns) {
+                try {
+                  org.json.JSONObject pending =
+                      job == null ? null : PendingBackups.get(this, job.id);
+                  if (pending != null || token.paused())
+                    retry = pending == null || pending.optBoolean("automatic");
                   jobFinished(params, retry);
-                  if (!retry && job != null && job.scheduled()) {
-                    try {
-                      completed(this, job.id, params.getExtras().getLong("due", 0));
-                    } catch (Exception e) {
-                      Settings.status(
-                          this, "Could not schedule the next backup: " + e.getMessage());
-                    }
-                  }
+                  if (!retry && pending == null && job != null && job.scheduled())
+                    completed(this, job.id, params.getExtras().getLong("due", 0));
+                  else if (!retry) configureAll(this);
+                } catch (Exception e) {
+                  Settings.status(this, "Could not update schedule: " + e.getMessage());
+                  jobFinished(params, false);
                 }
               }
             },
@@ -137,7 +165,8 @@ public final class ScheduleService extends JobService {
   public boolean onStopJob(JobParameters params) {
     synchronized (active) {
       Operations.Cancellation token = active.remove(params.getJobId());
-      if (token != null) token.cancel();
+      if (token != null)
+        token.pause("Paused: Android stopped the scheduled job or its constraints changed", true);
     }
     return true;
   }

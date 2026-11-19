@@ -62,6 +62,7 @@ final class SettingsTransfer {
             .put("app_version", BuildConfig.VERSION_NAME)
             .put("exported_at", System.currentTimeMillis())
             .put("vault", Vault.data(c))
+            .put("pending_backups", PendingBackups.all(c))
             .put("preferences", preferences)
             .put("folder_permissions", permissions)
             .toString(2);
@@ -99,6 +100,17 @@ final class SettingsTransfer {
         throw new Exception("Invalid or duplicate job/schedule identity");
       histories.add(job);
     }
+    JSONArray pending =
+        PendingBackups.validate(
+            root.optJSONArray("pending_backups") == null
+                ? new JSONArray()
+                : root.getJSONArray("pending_backups"));
+    for (int i = 0; i < pending.length(); i++) {
+      BackupJob job = BackupJob.from(pending.getJSONObject(i).getJSONObject("job"));
+      if (!identities.contains(job.id)) throw new Exception("Pending backup has no saved job");
+      KeyProfiles.validateJob(vault, job);
+      histories.add(job);
+    }
     KeyProfiles.validateHistories(vault, histories);
     if (jobs.has("schedule_state"))
       ScheduleState.validate(stringPreference(jobs, "schedule_state", "{}"));
@@ -118,6 +130,13 @@ final class SettingsTransfer {
       run.getString("id");
       run.getString("state");
       run.getString("job_id");
+    }
+    for (int i = 0; i < pending.length(); i++) {
+      String expected = pending.getJSONObject(i).getString("history");
+      boolean found = false;
+      for (int j = 0; j < history.length(); j++)
+        if (expected.equals(history.getJSONObject(j).getString("id"))) found = true;
+      if (!found) throw new Exception("Pending backup activity entry is missing");
     }
     JSONObject settings = preferences.getJSONObject("settings");
     for (String flag :
@@ -204,7 +223,14 @@ final class SettingsTransfer {
       synchronized (JobStore.class) {
         Operations.changeSettings(
             () -> {
-              Vault.install(c, root.getJSONObject("vault"), preferences);
+              if (PendingBackups.all(c).length() != 0)
+                throw new Exception(
+                    "Resume or cancel current pending backups before importing settings");
+              JSONArray pending = root.optJSONArray("pending_backups");
+              if (pending == null) pending = new JSONArray();
+              for (int i = 0; i < pending.length(); i++)
+                pending.getJSONObject(i).put("automatic", false).put("state", "paused");
+              Vault.install(c, root.getJSONObject("vault"), preferences, pending);
               ScheduleService.configureAll(c);
             });
         JobStore.recover(c);

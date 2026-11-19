@@ -23,6 +23,9 @@ use crate::backup::VerifyWorker;
 
 use hyper::Response;
 
+mod resume;
+use resume::ResumeSession;
+
 #[derive(Copy, Clone, Serialize)]
 struct UploadStatistic {
     count: u64,
@@ -98,6 +101,7 @@ struct SharedBackupState {
     backup_lock_guards: BackupLockGuards,
     manifest: Option<BackupManifest>,
     uploaded_archives: HashMap<String, [u8; 32]>,
+    resume: Option<ResumeSession>,
 }
 
 pub struct BackupLockGuards {
@@ -179,6 +183,7 @@ impl BackupEnvironment {
             backup_lock_guards,
             manifest: None,
             uploaded_archives: HashMap::new(),
+            resume: None,
         };
 
         let backend = datastore.backend()?;
@@ -721,6 +726,9 @@ impl BackupEnvironment {
         let blob_csum = blob.csum();
 
         let is_manifest = *archive_name == *MANIFEST_BLOB_NAME;
+        if !is_manifest && self.state.lock().unwrap().resume.is_some() {
+            bail!("resumable document sessions use the dedicated continuation-state endpoint");
+        }
         if is_manifest {
             let manifest = BackupManifest::try_from(blob).map_err(|err| {
                 self.log(format!(
@@ -792,6 +800,9 @@ impl BackupEnvironment {
         let Some(mut manifest) = state.manifest.take() else {
             bail!("no backup manifest uploaded");
         };
+        if state.resume.is_some() {
+            self.validate_resume_manifest(&manifest)?;
+        }
 
         let stats = serde_json::to_value(state.backup_stat)?;
 
@@ -836,6 +847,9 @@ impl BackupEnvironment {
 
         // marks the backup as successful
         state.finished = BackupState::Finished;
+        if state.resume.is_some() {
+            self.cleanup_resume_files();
+        }
 
         // drop snapshot and group lock only here so any error above will lead to
         // the locks still being held in the env for the backup cleanup.

@@ -116,6 +116,13 @@ type UploadProgress struct {
 
 // BackupConfig holds parameters for a single backup operation.
 type BackupConfig struct {
+	// ResumeToken opts into PBS-X checkpoint recovery. It is a random 256-bit
+	// lowercase hex secret, sent in a header rather than a logged query string.
+	// Never log this field or serialize it into public manifests/notes.
+	ResumeToken string `json:"-"`
+	// DiscardResume authorizes cleanup without reading potentially corrupt
+	// checkpoint data. Only the explicit cancellation path may set it.
+	DiscardResume    bool `json:"-"`
 	PreviousBackup   *PreviousBackupRef
 	CryptConfig      *datastore.CryptConfig
 	BackupID         string

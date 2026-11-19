@@ -77,7 +77,7 @@ impl DynamicEntry {
 pub struct DynamicIndexReader {
     _file: File,
     pub size: usize,
-    index: Mmap<DynamicEntry>,
+    index: Option<Mmap<DynamicEntry>>,
     pub uuid: [u8; 16],
     pub ctime: i64,
     pub index_csum: [u8; 32],
@@ -92,7 +92,7 @@ impl DynamicIndexReader {
     }
 
     pub fn index(&self) -> &[DynamicEntry] {
-        &self.index
+        self.index.as_deref().unwrap_or_default()
     }
 
     pub fn new(mut file: std::fs::File) -> Result<Self, Error> {
@@ -125,14 +125,18 @@ impl DynamicIndexReader {
             bail!("got unexpected file size");
         }
 
-        let index = unsafe {
-            Mmap::map_fd(
-                &file,
-                header_size as u64,
-                index_count,
-                nix::sys::mman::ProtFlags::PROT_READ,
-                nix::sys::mman::MapFlags::MAP_PRIVATE,
-            )?
+        let index = if index_count == 0 {
+            None
+        } else {
+            Some(unsafe {
+                Mmap::map_fd(
+                    &file,
+                    header_size as u64,
+                    index_count,
+                    nix::sys::mman::ProtFlags::PROT_READ,
+                    nix::sys::mman::MapFlags::MAP_PRIVATE,
+                )?
+            })
         };
 
         Ok(Self {
@@ -147,18 +151,18 @@ impl DynamicIndexReader {
 
     #[inline]
     pub fn chunk_end(&self, pos: usize) -> u64 {
-        if pos >= self.index.len() {
+        if pos >= self.index().len() {
             panic!("chunk index out of range");
         }
-        self.index[pos].end()
+        self.index()[pos].end()
     }
 
     #[inline]
     fn chunk_digest(&self, pos: usize) -> &[u8; 32] {
-        if pos >= self.index.len() {
+        if pos >= self.index().len() {
             panic!("chunk index out of range");
         }
-        &self.index[pos].digest
+        &self.index()[pos].digest
     }
 
     pub fn binary_search(
@@ -189,11 +193,11 @@ impl DynamicIndexReader {
 
 impl IndexFile for DynamicIndexReader {
     fn index_count(&self) -> usize {
-        self.index.len()
+        self.index().len()
     }
 
     fn index_digest(&self, pos: usize) -> Option<&[u8; 32]> {
-        if pos >= self.index.len() {
+        if pos >= self.index().len() {
             None
         } else {
             Some(self.chunk_digest(pos))
@@ -201,10 +205,10 @@ impl IndexFile for DynamicIndexReader {
     }
 
     fn index_bytes(&self) -> u64 {
-        if self.index.is_empty() {
+        if self.index().is_empty() {
             0
         } else {
-            self.chunk_end(self.index.len() - 1)
+            self.chunk_end(self.index().len() - 1)
         }
     }
 
@@ -222,20 +226,20 @@ impl IndexFile for DynamicIndexReader {
     }
 
     fn chunk_info(&self, pos: usize) -> Option<ChunkReadInfo> {
-        if pos >= self.index.len() {
+        if pos >= self.index().len() {
             return None;
         }
         let start = if pos == 0 {
             0
         } else {
-            self.index[pos - 1].end()
+            self.index()[pos - 1].end()
         };
 
-        let end = self.index[pos].end();
+        let end = self.index()[pos].end();
 
         Some(ChunkReadInfo {
             range: start..end,
-            digest: self.index[pos].digest,
+            digest: self.index()[pos].digest,
         })
     }
 
@@ -248,7 +252,7 @@ impl IndexFile for DynamicIndexReader {
     }
 
     fn chunk_from_offset(&self, offset: u64) -> Option<(usize, u64)> {
-        let end_idx = self.index.len() - 1;
+        let end_idx = self.index().len().checked_sub(1)?;
         let end = self.chunk_end(end_idx);
         let found_idx = self.binary_search(0, 0, end_idx, end, offset);
         let found_idx = match found_idx {
@@ -351,6 +355,63 @@ impl DynamicIndexWriter {
         Ok(index_csum)
     }
 
+    /// Persist a valid, independently readable prefix without closing this
+    /// writer. The caller must hold the snapshot/chunk-store locks and pair all
+    /// stream prefixes with an atomically committed resume record before ACK.
+    /// This does not make an unfinished backup a completed snapshot.
+    pub fn checkpoint(&mut self, checkpoint: &Path) -> Result<([u8; 32], u64, usize), Error> {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        if self.closed {
+            bail!("cannot checkpoint a closed dynamic index");
+        }
+        if checkpoint.parent() != self.filename.parent()
+            || checkpoint == self.filename
+            || checkpoint == self.tmp_filename
+        {
+            bail!("checkpoint must be a distinct sibling of the active index");
+        }
+
+        self.writer.flush()?;
+        let name = checkpoint
+            .file_name()
+            .ok_or_else(|| format_err!("checkpoint has no filename"))?;
+        let temporary = checkpoint.with_file_name(format!(
+            ".{}.{}.tmp",
+            name.to_string_lossy(),
+            Uuid::generate()
+        ));
+        let result = (|| {
+            let mut output = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temporary)?;
+            // Open a separate file description: try_clone() would share the
+            // active writer's file offset and could corrupt subsequent appends.
+            let mut input = File::open(&self.tmp_filename)?;
+            std::io::copy(&mut input, &mut output)?;
+
+            let index = DynamicIndexReader::open(&temporary)?;
+            let (checksum, size) = index.compute_csum();
+            let count = index.index_count();
+            drop(index);
+            output.seek(SeekFrom::Start(
+                std::mem::offset_of!(DynamicIndexHeader, index_csum) as u64,
+            ))?;
+            output.write_all(&checksum)?;
+            output.sync_all()?;
+            drop(output);
+            std::fs::rename(&temporary, checkpoint)?;
+            File::open(checkpoint.parent().unwrap())?.sync_all()?;
+            Ok((checksum, size, count))
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result
+    }
+
     // fixme: rename to add_digest
     pub fn add_chunk(&mut self, offset: u64, digest: &[u8; 32]) -> Result<(), Error> {
         if self.closed {
@@ -369,6 +430,55 @@ impl DynamicIndexWriter {
 
         self.writer.write_all(&offset_le)?;
         self.writer.write_all(digest)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_keeps_writer_live_and_prefix_independent() -> Result<(), Error> {
+        let temporary = tempfile::tempdir()?;
+        let final_path = temporary.path().join("root.ppxar.didx");
+        let prefix_path = temporary.path().join("pbsx-resume-payload-a.didx");
+        let mut writer = DynamicIndexWriter::create(&final_path)?;
+        writer.add_chunk(17, &[1; 32])?;
+        let (checksum, size, count) = writer.checkpoint(&prefix_path)?;
+        assert_eq!((size, count), (17, 1));
+        let prefix = DynamicIndexReader::open(&prefix_path)?;
+        assert_eq!(prefix.index_csum, checksum);
+        assert_eq!(prefix.compute_csum(), (checksum, 17));
+        assert_eq!(prefix.index_digest(0), Some(&[1; 32]));
+        drop(prefix);
+
+        writer.add_chunk(42, &[2; 32])?;
+        let final_checksum = writer.close()?;
+        let complete = DynamicIndexReader::open(&final_path)?;
+        assert_eq!(complete.index_count(), 2);
+        assert_eq!(complete.compute_csum(), (final_checksum, 42));
+        let prefix = DynamicIndexReader::open(&prefix_path)?;
+        assert_eq!(prefix.compute_csum(), (checksum, 17));
+        assert_eq!(prefix.index_count(), 1);
+        assert!(writer.checkpoint(&prefix_path).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_empty_prefix_and_refuse_self_replacement() -> Result<(), Error> {
+        let temporary = tempfile::tempdir()?;
+        let final_path = temporary.path().join("root.mpxar.didx");
+        let prefix_path = temporary.path().join("pbsx-resume-metadata-a.didx");
+        let mut writer = DynamicIndexWriter::create(&final_path)?;
+        assert!(writer.checkpoint(&final_path).is_err());
+        let (checksum, size, count) = writer.checkpoint(&prefix_path)?;
+        assert_eq!((size, count), (0, 0));
+        let prefix = DynamicIndexReader::open(&prefix_path)?;
+        assert_eq!(prefix.compute_csum(), (checksum, 0));
+        writer.add_chunk(100, &[3; 32])?;
+        writer.close()?;
+        assert_eq!(DynamicIndexReader::open(&final_path)?.index_count(), 1);
         Ok(())
     }
 }

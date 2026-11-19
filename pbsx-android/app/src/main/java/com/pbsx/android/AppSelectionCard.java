@@ -109,7 +109,15 @@ final class AppSelectionCard {
     executor.execute(
         () -> {
           try (ShizukuBridge bridge = new ShizukuBridge(activity)) {
-            JSONArray inventory = new JSONArray(bridge.files().apps());
+            JSONArray entries =
+                new JSONArray(bridge.files().list("/@" + (kind.equals("apks") ? "apps" : kind)));
+            JSONArray inventory = new JSONArray();
+            for (int i = 0; i < entries.length(); i++) {
+              org.json.JSONObject entry = entries.getJSONObject(i);
+              String pkg = entry.getString("name");
+              if (entry.getBoolean("directory") && pkg.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+"))
+                inventory.put(pkg);
+            }
             if (inventory.length() > 500)
               throw new Exception("App picker supports at most 500 packages");
             String[] packages = new String[inventory.length()];

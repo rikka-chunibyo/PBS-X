@@ -96,6 +96,9 @@ final class KeyProfiles {
               ? job.encryptionKeyID
               : job.connectionID.isEmpty() ? selected(c) : job.connectionID))
         throw new Exception("Reassign jobs using this entry first");
+    for (BackupJob job : pendingJobs(c))
+      if (id.equals(kind.equals("keys") ? job.encryptionKeyID : job.connectionID))
+        throw new Exception("Resume or cancel pending backups using this entry first");
     JSONObject data = Vault.data(c);
     JSONArray values = data.getJSONArray(kind), out = new JSONArray();
     for (int i = 0; i < values.length(); i++)
@@ -111,7 +114,9 @@ final class KeyProfiles {
     JSONObject data = Vault.data(c);
     find(data, "connections", id);
     data.put("default_connection", id);
-    validateHistories(data, JobStore.all(c));
+    java.util.List<BackupJob> histories = JobStore.all(c);
+    histories.addAll(pendingJobs(c));
+    validateHistories(data, histories);
     Vault.store(c, data);
   }
 
@@ -127,14 +132,28 @@ final class KeyProfiles {
       throws Exception {
     if (Operations.running()) throw new Exception("Wait for the active transfer");
     Mobilecore.newClient(config.toString());
+    for (BackupJob job : pendingJobs(c))
+      if (id.equals(job.connectionID))
+        throw new Exception("Resume or cancel pending backups using this connection first");
     JSONObject data = Vault.data(c);
     find(data, "connections", id).put("config", config);
-    validateHistories(data, JobStore.all(c));
+    java.util.List<BackupJob> histories = JobStore.all(c);
+    histories.addAll(pendingJobs(c));
+    validateHistories(data, histories);
     Vault.store(c, data);
   }
 
+  private static java.util.List<BackupJob> pendingJobs(Context c) throws Exception {
+    java.util.List<BackupJob> out = new java.util.ArrayList<>();
+    JSONArray runs = PendingBackups.all(c);
+    for (int i = 0; i < runs.length(); i++)
+      out.add(BackupJob.from(runs.getJSONObject(i).getJSONObject("job")));
+    return out;
+  }
+
   static void validate(JSONObject vault) throws Exception {
-    if (vault.getInt("version") != 2 || vault.has("pending_import"))
+    if (vault.getInt("version") != 2
+        || (vault.has("pending_import") || vault.has("pending_import_runs")))
       throw new Exception("Unsupported vault format");
     HashSet<String> ids = new HashSet<>(), fps = new HashSet<>();
     for (String kind : new String[] {"connections", "keys"}) {
@@ -171,6 +190,7 @@ final class KeyProfiles {
     java.util.List<BackupJob> jobs = JobStore.all(c);
     jobs.removeIf(other -> other.id.equals(job.id));
     jobs.add(job);
+    jobs.addAll(pendingJobs(c));
     validateHistories(vault, jobs);
   }
 

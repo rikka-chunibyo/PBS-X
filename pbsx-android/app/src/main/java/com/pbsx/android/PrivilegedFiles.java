@@ -79,23 +79,13 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
         path =
             new File(sharedRoot(), "Android/" + kind).getPath() + path.substring(virtual.length());
     }
-    String dataRoot = new File(sharedRoot(), "Android/data").getPath();
-    String obbRoot = new File(sharedRoot(), "Android/obb").getPath();
-    if (!path.startsWith(dataRoot) && !path.startsWith(obbRoot))
-      throw new SecurityException("Source outside selected Shizuku roots");
-    File f = new File(path).getCanonicalFile();
-    String canonical = f.getPath();
-    boolean allowed = false;
-    for (String base : new String[] {dataRoot, obbRoot}) {
-      String root = new File(base).getCanonicalPath();
-      if (canonical.equals(root) || canonical.startsWith(root + "/")) allowed = true;
+    for (String kind : new String[] {"data", "obb"}) {
+      String base = new File(sharedRoot(), "Android/" + kind).getPath();
+      if (path.equals(base) || path.startsWith(base + "/"))
+        return SharedStorage.restoreRoot(
+            sharedRoot(), "Android/" + kind + path.substring(base.length()));
     }
-    if (!allowed) throw new SecurityException("Source escaped selected Shizuku root");
-    if (java.nio.file.Files.isSymbolicLink(new File(path).toPath()))
-      throw new Exception("Symlinks are not supported");
-    if (!f.exists() || !f.canRead())
-      throw new Exception("Shizuku cannot read this source on this Android version");
-    return f;
+    throw new SecurityException("Source outside selected Shizuku roots");
   }
 
   private File sharedRoot() {

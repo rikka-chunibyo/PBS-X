@@ -61,14 +61,17 @@ func init() {
 }
 
 type Client struct {
-	cfg     configuration
-	tls     *tls.Config
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	dialer  *net.Dialer
-	details ProgressDetails
-	crypt   *datastore.CryptConfig
-	keys    map[string]*datastore.CryptConfig
+	cfg       configuration
+	tls       *tls.Config
+	mu        sync.Mutex
+	cancel    context.CancelFunc
+	operation uint64
+	control   int // 0 running, 1 pause, 2 cancel
+	resumable bool
+	dialer    *net.Dialer
+	details   ProgressDetails
+	crypt     *datastore.CryptConfig
+	keys      map[string]*datastore.CryptConfig
 }
 
 type responseError struct{ status int }
@@ -186,7 +189,9 @@ func NewClient(configJSON string) (*Client, error) {
 	return &Client{cfg: c, tls: tlsConfig, crypt: crypt, keys: keys}, nil
 }
 
-func (c *Client) begin() (context.Context, func(), error) {
+func (c *Client) begin() (context.Context, func(), error) { return c.beginMode(false) }
+
+func (c *Client) beginMode(resumable bool) (context.Context, func(), error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.cancel != nil {
@@ -194,12 +199,15 @@ func (c *Client) begin() (context.Context, func(), error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
-	return ctx, func() { cancel(); c.mu.Lock(); c.cancel = nil; c.mu.Unlock() }, nil
+	c.operation++
+	c.control, c.resumable = 0, resumable
+	return ctx, func() { cancel(); c.mu.Lock(); c.cancel = nil; c.resumable = false; c.mu.Unlock() }, nil
 }
 func (c *Client) Cancel() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.cancel != nil {
+		c.control = 2
 		c.cancel()
 	}
 }

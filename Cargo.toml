@@ -279,6 +279,9 @@ pbsx-api-types.workspace = true
 proxmox-rrd.workspace = true
 proxmox-rrd-api-types.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 # Local path overrides
 # NOTE: You must run `cargo update` after changing this for it to take effect!
 [patch.crates-io]

@@ -19,6 +19,7 @@ use proxmox_router::{
 use proxmox_router::{http_err, list_subdirs_api_method};
 use proxmox_schema::*;
 use proxmox_sortable_macro::sortable;
+use proxmox_worker_task::WorkerTaskContext;
 
 use pbs_api_types::{
     ArchiveType, Authid, BACKUP_ARCHIVE_NAME_SCHEMA, BACKUP_ID_SCHEMA, BACKUP_NAMESPACE_SCHEMA,
@@ -55,6 +56,8 @@ pub const API_METHOD_UPGRADE_BACKUP: ApiMethod = ApiMethod::new(
             ("debug", true, &BooleanSchema::new("Enable verbose debug logging.").schema()),
             ("benchmark", true, &BooleanSchema::new("Job is a benchmark (do not keep data).").schema()),
             ("no-cache", true, &BooleanSchema::new("Disable local datastore cache for network storages").schema()),
+            ("pbsx-resume", true, &BooleanSchema::new("Enable PBS-X document backup checkpoints.").schema()),
+            ("pbsx-resume-discard", true, &BooleanSchema::new("Authorize discarding this incomplete checkpoint without loading its data.").schema()),
         ]),
     )
 ).access(
@@ -82,6 +85,24 @@ fn upgrade_to_backup_protocol(
         let debug = param["debug"].as_bool().unwrap_or(false);
         let benchmark = param["benchmark"].as_bool().unwrap_or(false);
         let no_cache = param["no-cache"].as_bool().unwrap_or(false);
+        // Keep the secret out of query strings/access logs. Normal sessions
+        // neither request this extension nor retain unfinished snapshots.
+        let resume_token = if param["pbsx-resume"].as_bool().unwrap_or(false) {
+            let token = parts
+                .headers
+                .get("pbsx-resume-token")
+                .ok_or_else(|| format_err!("missing resume token header"))?
+                .to_str()?
+                .to_owned();
+            BackupEnvironment::validate_resume_token(&token)?;
+            Some(token)
+        } else {
+            None
+        };
+        let discard_resume = param["pbsx-resume-discard"].as_bool().unwrap_or(false);
+        if discard_resume && resume_token.is_none() {
+            bail!("discard requires a resume token");
+        }
 
         let auth_id: Authid = rpcenv.get_auth_id().unwrap().parse()?;
 
@@ -106,6 +127,16 @@ fn upgrade_to_backup_protocol(
 
         let lookup = crate::tools::lookup_with(&store, Operation::Write);
         let datastore = DataStore::lookup_datastore(lookup)?;
+        if resume_token.is_some()
+            && (benchmark
+                || backup_dir_arg.ty() != BackupType::Host
+                || !matches!(
+                    datastore.backend()?,
+                    pbs_datastore::DatastoreBackend::Filesystem
+                ))
+        {
+            bail!("resumable document backups require a host group on a filesystem datastore");
+        }
 
         let protocols = parts
             .headers
@@ -194,9 +225,13 @@ fn upgrade_to_backup_protocol(
         };
 
         let backup_dir = backup_group.backup_dir(backup_dir_arg.time)?;
+        let resuming_existing = resume_token.is_some() && backup_dir.full_path().exists();
+        if discard_resume && !resuming_existing {
+            proxmox_router::http_bail!(NOT_FOUND, "incomplete checkpoint does not exist");
+        }
 
         let last_guard = if let Some(last) = &last_backup {
-            if backup_dir.backup_time() <= last.backup_dir.backup_time() {
+            if !resuming_existing && backup_dir.backup_time() <= last.backup_dir.backup_time() {
                 bail!("backup timestamp is older than last backup.");
             }
 
@@ -213,7 +248,13 @@ fn upgrade_to_backup_protocol(
         let (path, is_new, snap_guard) =
             datastore.create_locked_backup_dir(backup_dir.backup_ns(), backup_dir.as_ref())?;
         if !is_new {
-            bail!("backup directory already exists.");
+            if let Some(token) = &resume_token {
+                // Authorize before entering a worker: failure must never delete
+                // another client's paused snapshot in the error-cleanup path.
+                BackupEnvironment::authorize_resume(&backup_dir.full_path(), &auth_id, token)?;
+            } else {
+                bail!("backup directory already exists.");
+            }
         }
 
         WorkerTask::spawn(
@@ -242,6 +283,11 @@ fn upgrade_to_backup_protocol(
 
                 env.debug = debug;
                 env.last_backup = last_backup;
+                if !discard_resume {
+                    if let Some(token) = &resume_token {
+                        env.configure_resume(token, !is_new)?;
+                    }
+                }
 
                 let origin = match rpcenv.get_client_ip().map(|addr| addr.ip()) {
                     Some(ip) => format!(" from {ip}"),
@@ -330,6 +376,10 @@ fn upgrade_to_backup_protocol(
                     }
                     (Ok(_), Err(err)) => {
                         env.log(format!("backup ended and finish failed: {err}"));
+                        if env.retain_resume_checkpoint() && worker.check_abort().is_ok() {
+                            env.log("retaining unfinished checkpoint for this client's resume");
+                            return Err(err);
+                        }
                         env.log("removing unfinished backup");
                         proxmox_async::runtime::block_in_place(|| {
                             env.datastore.remove_backup_dir(
@@ -342,6 +392,10 @@ fn upgrade_to_backup_protocol(
                     }
                     (Err(err), Err(_)) => {
                         env.log(format!("backup failed: {err}"));
+                        if env.retain_resume_checkpoint() && worker.check_abort().is_ok() {
+                            env.log("retaining unfinished checkpoint for this client's resume");
+                            return Err(err);
+                        }
                         env.log("removing failed backup");
                         proxmox_async::runtime::block_in_place(|| {
                             env.datastore.remove_backup_dir(
@@ -416,6 +470,20 @@ const BACKUP_API_SUBDIRS: SubdirMap = &[
         &Router::new().get(&API_METHOD_GET_PREVIOUS_BACKUP_TIME),
     ),
     (
+        "resume",
+        &Router::new()
+            .get(&API_METHOD_RESUME_STATUS)
+            .post(&API_METHOD_RESUME_CHECKPOINT),
+    ),
+    (
+        "resume_download",
+        &Router::new().download(&API_METHOD_RESUME_DOWNLOAD),
+    ),
+    (
+        "resume_state",
+        &Router::new().upload(&API_METHOD_RESUME_STATE),
+    ),
+    (
         "speedtest",
         &Router::new().upload(&API_METHOD_UPLOAD_SPEEDTEST),
     ),
@@ -424,6 +492,139 @@ const BACKUP_API_SUBDIRS: SubdirMap = &[
 pub const BACKUP_API_ROUTER: Router = Router::new()
     .get(&list_subdirs_api_method!(BACKUP_API_SUBDIRS))
     .subdirs(BACKUP_API_SUBDIRS);
+
+const API_METHOD_RESUME_STATUS: ApiMethod = ApiMethod::new(
+    &ApiHandler::Sync(&resume_status),
+    &ObjectSchema::new("Get this session's PBS-X checkpoint.", &[]),
+);
+fn resume_status(
+    _param: Value,
+    _info: &ApiMethod,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<Value, Error> {
+    let env: &BackupEnvironment = rpcenv.as_ref();
+    env.resume_status()
+}
+
+const API_METHOD_RESUME_CHECKPOINT: ApiMethod = ApiMethod::new(
+    &ApiHandler::Sync(&resume_checkpoint),
+    &ObjectSchema::new(
+        "Commit acknowledged document stream prefixes.",
+        &[
+            (
+                "sequence",
+                false,
+                &IntegerSchema::new("Next checkpoint sequence.")
+                    .minimum(1)
+                    .schema(),
+            ),
+            (
+                "streams",
+                false,
+                &StringSchema::new("JSON expected stream prefixes.")
+                    .max_length(4096)
+                    .schema(),
+            ),
+        ],
+    ),
+);
+fn resume_checkpoint(
+    param: Value,
+    _info: &ApiMethod,
+    rpcenv: &mut dyn RpcEnvironment,
+) -> Result<Value, Error> {
+    let env: &BackupEnvironment = rpcenv.as_ref();
+    let sequence = param["sequence"]
+        .as_u64()
+        .ok_or_else(|| format_err!("invalid checkpoint sequence"))?;
+    let expected: Value = serde_json::from_str(required_string_param(&param, "streams")?)?;
+    env.checkpoint_resume(sequence, &expected)
+}
+
+const API_METHOD_RESUME_DOWNLOAD: ApiMethod = ApiMethod::new(
+    &ApiHandler::AsyncHttp(&resume_download),
+    &ObjectSchema::new(
+        "Download this authenticated session's checkpoint state or index.",
+        &[(
+            "name",
+            false,
+            &StringSchema::new("state or root archive index name.")
+                .max_length(64)
+                .schema(),
+        )],
+    ),
+);
+fn resume_download(
+    _parts: Parts,
+    _body: Incoming,
+    param: Value,
+    _info: &ApiMethod,
+    rpcenv: Box<dyn RpcEnvironment>,
+) -> ApiResponseFuture {
+    async move {
+        let env: &BackupEnvironment = rpcenv.as_ref();
+        let name = required_string_param(&param, "name")?;
+        let path = proxmox_async::runtime::block_in_place(|| env.resume_download_path(name))?;
+        crate::api2::helpers::create_download_response(path).await
+    }
+    .boxed()
+}
+
+const API_METHOD_RESUME_STATE: ApiMethod = ApiMethod::new(
+    &ApiHandler::AsyncHttp(&resume_state),
+    &ObjectSchema::new(
+        "Upload opaque encrypted continuation state.",
+        &[
+            (
+                "encoded-size",
+                false,
+                &IntegerSchema::new("Encrypted continuation bytes.")
+                    .minimum(32)
+                    .maximum(16 << 20)
+                    .schema(),
+            ),
+            (
+                "sequence",
+                false,
+                &IntegerSchema::new("Next checkpoint sequence.")
+                    .minimum(1)
+                    .schema(),
+            ),
+        ],
+    ),
+);
+fn resume_state(
+    _parts: Parts,
+    body: Incoming,
+    param: Value,
+    _info: &ApiMethod,
+    rpcenv: Box<dyn RpcEnvironment>,
+) -> ApiResponseFuture {
+    async move {
+        use http_body_util::BodyDataStream;
+        let env: &BackupEnvironment = rpcenv.as_ref();
+        let size = required_integer_param(&param, "encoded-size")? as usize;
+        let sequence = param["sequence"]
+            .as_u64()
+            .ok_or_else(|| format_err!("invalid continuation sequence"))?;
+        let mut stream = BodyDataStream::new(body);
+        let mut data = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if data.len() + chunk.len() > size {
+                bail!("continuation upload exceeds announced size");
+            }
+            data.extend_from_slice(&chunk);
+        }
+        if data.len() != size {
+            bail!("continuation upload is incomplete");
+        }
+        let result =
+            proxmox_async::runtime::block_in_place(|| env.upload_resume_state(sequence, &data));
+        Ok(env.format_response(result))
+    }
+    .boxed()
+}
 
 #[sortable]
 pub const API_METHOD_CREATE_DYNAMIC_INDEX: ApiMethod = ApiMethod::new(

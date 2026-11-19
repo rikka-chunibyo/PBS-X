@@ -52,7 +52,7 @@ final class AndroidDocuments implements RestoreOutput {
       Operations.Cancellation cancellation,
       ExportCache.Progress progress)
       throws Exception {
-    this(context, job, cancellation, progress, PrivilegedFiles.class);
+    this(context, job, cancellation, progress, PrivilegedFiles.class, null);
   }
 
   AndroidDocuments(
@@ -61,6 +61,17 @@ final class AndroidDocuments implements RestoreOutput {
       Operations.Cancellation cancellation,
       ExportCache.Progress progress,
       Class<?> service)
+      throws Exception {
+    this(context, job, cancellation, progress, service, null);
+  }
+
+  AndroidDocuments(
+      Context context,
+      BackupJob job,
+      Operations.Cancellation cancellation,
+      ExportCache.Progress progress,
+      Class<?> service,
+      JSONObject pending)
       throws Exception {
     output = null;
     job.validate(true);
@@ -104,7 +115,13 @@ final class AndroidDocuments implements RestoreOutput {
         if (job.data) privileged.put("Android-data", "/@data");
         if (job.obb) privileged.put("Android-obb", "/@obb");
         if (job.exports.length() > 0) {
-          cache = new ExportCache(context);
+          cache =
+              pending == null
+                  ? new ExportCache(context)
+                  : new ExportCache(
+                      context,
+                      pending.getString("history"),
+                      new JSONObject(pending.getString("descriptor")).getLong("confirmed") > 0);
           cache.prepare(opened.files(), job.exports, cancellation, progress);
         }
       }

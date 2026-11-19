@@ -78,6 +78,8 @@ final class JobStore {
   }
 
   static synchronized void delete(Context c, String id) throws Exception {
+    if (PendingBackups.get(c, id) != null)
+      throw new Exception("Resume or cancel this job's pending backup before deleting it");
     JSONArray out = new JSONArray();
     for (BackupJob j : all(c)) if (!j.id.equals(id)) out.put(j.json());
     if (!prefs(c).edit().putString("jobs", out.toString()).commit())
@@ -98,8 +100,20 @@ final class JobStore {
             .put("message", kind.equals("restore") ? "Preparing restore…" : "Preparing backup…");
     JSONArray old = new JSONArray(prefs(c).getString("history", "[]")),
         out = new JSONArray().put(run);
-    for (int i = 0; i < old.length() && i < 99; i++) out.put(old.get(i));
-    prefs(c).edit().putString("history", out.toString()).commit();
+    java.util.Set<String> retained = new java.util.HashSet<>();
+    JSONArray pending = PendingBackups.all(c);
+    for (int i = 0; i < pending.length(); i++)
+      retained.add(pending.getJSONObject(i).getString("history"));
+    int available = 99 - retained.size();
+    if (available < 0)
+      throw new Exception("Resume or cancel a pending backup before starting another transfer");
+    for (int i = 0; i < old.length(); i++) {
+      JSONObject previous = old.getJSONObject(i);
+      if (retained.contains(previous.optString("id"))) out.put(previous);
+      else if (available-- > 0) out.put(previous);
+    }
+    if (!prefs(c).edit().putString("history", out.toString()).commit())
+      throw new Exception("Could not save backup activity");
     return run.getString("id");
   }
 
@@ -116,6 +130,24 @@ final class JobStore {
       }
     }
     prefs(c).edit().putString("history", out.toString()).commit();
+  }
+
+  static synchronized void state(Context c, String id, String state, String message)
+      throws Exception {
+    JSONArray runs = history(c);
+    for (int i = 0; i < runs.length(); i++) {
+      JSONObject run = runs.getJSONObject(i);
+      if (id.equals(run.getString("id"))) {
+        run.put("state", state)
+            .put("message", message.length() > 4096 ? message.substring(0, 4096) : message);
+        if (state.equals("running")) run.remove("finished");
+        else if (state.equals("cancelled")) run.put("finished", System.currentTimeMillis());
+        if (!prefs(c).edit().putString("history", runs.toString()).commit())
+          throw new Exception("Could not save backup status");
+        return;
+      }
+    }
+    throw new Exception("Pending backup activity entry is missing");
   }
 
   static synchronized void progress(Context c, String id, String message) throws Exception {
@@ -141,6 +173,15 @@ final class JobStore {
     for (int i = 0; i < out.length(); i++) {
       JSONObject r = out.getJSONObject(i);
       if ("running".equals(r.optString("state"))) {
+        JSONObject pending = PendingBackups.get(c, r.optString("job_id"));
+        if (pending != null && r.optString("id").equals(pending.optString("history"))) {
+          r.put("state", "paused")
+              .put(
+                  "message",
+                  "Android stopped the app; saved backup will resume from its checkpoint");
+          changed = true;
+          continue;
+        }
         r.put("state", "interrupted")
             .put("finished", System.currentTimeMillis())
             .put(

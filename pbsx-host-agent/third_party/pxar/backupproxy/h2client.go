@@ -125,7 +125,29 @@ func (s *stream) release() {
 
 // ----- connection setup -----
 
+type ProtocolUpgradeError struct {
+	Status  int
+	Message string
+}
+
+func (e *ProtocolUpgradeError) Error() string {
+	return fmt.Sprintf("upgrade failed: HTTP %d: %s", e.Status, e.Message)
+}
+
 func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg BackupConfig, tlsConfig *tls.Config, skipTLS bool, dialer *net.Dialer) (*pbsH2Conn, error) {
+	if cfg.DiscardResume && cfg.ResumeToken == "" {
+		return nil, fmt.Errorf("discard requires a resume token")
+	}
+	if cfg.ResumeToken != "" {
+		if len(cfg.ResumeToken) != 64 {
+			return nil, fmt.Errorf("invalid resume token")
+		}
+		for _, b := range []byte(cfg.ResumeToken) {
+			if !((b >= '0' && b <= '9') || (b >= 'a' && b <= 'f')) {
+				return nil, fmt.Errorf("invalid resume token")
+			}
+		}
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse PBS URL: %w", err)
@@ -146,6 +168,14 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 	}
 	if cfg.Debug {
 		params.Set("debug", "1")
+	}
+	extraHeader := ""
+	if cfg.ResumeToken != "" {
+		params.Set("pbsx-resume", "1")
+		extraHeader = "PBSX-Resume-Token: " + cfg.ResumeToken + "\r\n"
+	}
+	if cfg.DiscardResume {
+		params.Set("pbsx-resume-discard", "1")
 	}
 	upgradePath := u.Path + "/backup?" + params.Encode()
 
@@ -175,8 +205,9 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 			"Host: %s\r\n"+
 			"Upgrade: proxmox-backup-protocol-v1\r\n"+
 			"Authorization: PBSAPIToken %s\r\n"+
+			"%s"+
 			"\r\n",
-		upgradePath, hostHeader, authToken,
+		upgradePath, hostHeader, authToken, extraHeader,
 	)
 	if _, err := conn.Write([]byte(upgradeReq)); err != nil {
 		conn.Close()
@@ -190,10 +221,10 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 		return nil, fmt.Errorf("read upgrade response: %w", err)
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
 		resp.Body.Close()
 		conn.Close()
-		return nil, fmt.Errorf("upgrade failed: HTTP %d: %s", resp.StatusCode, body)
+		return nil, &ProtocolUpgradeError{Status: resp.StatusCode, Message: string(body)}
 	}
 	resp.Body.Close()
 

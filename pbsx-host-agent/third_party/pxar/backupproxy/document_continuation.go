@@ -26,14 +26,41 @@ import (
 // server before this can be used for a resumable backup. It never finalizes a
 // snapshot, and its existence alone does not make the current uploader resumable.
 type DocumentContinuation struct {
-	source   ClientProvider
-	enc      *encoder.Encoder
-	state    documentWalkCheckpoint
-	fw       *encoder.FileWriter
-	reader   io.ReadCloser
-	prefix   hash.Hash
-	finished bool
-	failed   error
+	source           ClientProvider
+	enc              *encoder.Encoder
+	state            documentWalkCheckpoint
+	fw               *encoder.FileWriter
+	reader           io.ReadCloser
+	prefix           hash.Hash
+	finished         bool
+	failed           error
+	ProgressCallback func(DocumentProgress)
+}
+
+type DocumentProgress struct {
+	Stage     string
+	Path      string
+	Files     uint64
+	Bytes     uint64
+	FileBytes uint64
+	FileTotal int64
+}
+
+func (w *DocumentContinuation) Progress() DocumentProgress {
+	p := DocumentProgress{Stage: "Scanning folders", Files: w.state.Files, Bytes: w.state.Bytes, FileTotal: -1}
+	if f := w.state.File; f != nil {
+		p.Stage = "Backing up"
+		p.Path = f.Path
+		p.FileBytes = f.Offset
+		p.FileTotal = int64(f.Size)
+	} else if len(w.state.Frames) > 0 {
+		p.Path = w.state.Frames[len(w.state.Frames)-1].Path
+	}
+	return p
+}
+
+func (w *DocumentContinuation) OutputPositions() (uint64, uint64) {
+	return w.enc.MetadataPosition(), w.enc.PayloadPosition()
 }
 
 type documentFrame struct {
@@ -216,12 +243,22 @@ func (w *DocumentContinuation) metadata(ctx context.Context, name string, stat f
 
 func (w *DocumentContinuation) openCurrent(ctx context.Context) error {
 	f := w.state.File
+	report := func(validated uint64) {
+		if w.ProgressCallback != nil {
+			progress := w.Progress()
+			progress.Stage = "Checking saved file"
+			progress.FileBytes = validated
+			progress.FileTotal = int64(f.Offset)
+			w.ProgressCallback(progress)
+		}
+	}
+	report(0)
 	stat, err := w.source.Stat(ctx, f.Path)
 	if err != nil {
 		return err
 	}
 	if stat != f.Stat {
-		return errors.New("interrupted source file changed; discard this incomplete run before starting a new backup")
+		return fmt.Errorf("interrupted source file %q changed; cancel this incomplete run before starting a new backup", f.Path)
 	}
 	r, size, err := w.source.OpenFile(ctx, f.Path)
 	if err != nil {
@@ -233,13 +270,14 @@ func (w *DocumentContinuation) openCurrent(ctx context.Context) error {
 	}
 	if f.Offset > 0 {
 		current := sha256.New()
-		if _, err = io.CopyN(current, contextDocumentReader{ctx, r}, int64(f.Offset)); err != nil {
+		var validated uint64
+		if _, err = io.CopyN(current, contextDocumentReader{ctx: ctx, reader: r, read: func(count int) { validated += uint64(count); report(validated) }}, int64(f.Offset)); err != nil {
 			r.Close()
 			return err
 		}
 		if hex.EncodeToString(current.Sum(nil)) != f.Digest {
 			r.Close()
-			return errors.New("interrupted source file contents changed")
+			return fmt.Errorf("interrupted source file %q contents changed", f.Path)
 		}
 	}
 	w.reader = r
@@ -249,13 +287,18 @@ func (w *DocumentContinuation) openCurrent(ctx context.Context) error {
 type contextDocumentReader struct {
 	ctx    context.Context
 	reader io.Reader
+	read   func(int)
 }
 
 func (r contextDocumentReader) Read(p []byte) (int, error) {
 	if err := r.ctx.Err(); err != nil {
 		return 0, err
 	}
-	return r.reader.Read(p)
+	n, err := r.reader.Read(p)
+	if n > 0 && r.read != nil {
+		r.read(n)
+	}
+	return n, err
 }
 
 // Step processes at most one directory entry or 64 KiB of the current file.

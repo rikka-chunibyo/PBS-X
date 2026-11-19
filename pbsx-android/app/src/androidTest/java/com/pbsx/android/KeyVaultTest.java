@@ -20,7 +20,15 @@ public class KeyVaultTest {
   private Context isolated() {
     Context base = InstrumentationRegistry.getInstrumentation().getTargetContext();
     String prefix = "vault-fixture-" + UUID.randomUUID() + "-";
+    java.io.File privateFiles = new java.io.File(base.getFilesDir(), prefix);
+    if (!privateFiles.mkdirs())
+      throw new IllegalStateException("Cannot create fixture files directory");
     return new ContextWrapper(base) {
+      @Override
+      public java.io.File getFilesDir() {
+        return privateFiles;
+      }
+
       @Override
       public SharedPreferences getSharedPreferences(String name, int mode) {
         return base.getSharedPreferences(prefix + name, mode);

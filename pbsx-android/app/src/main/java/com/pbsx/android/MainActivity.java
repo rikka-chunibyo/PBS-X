@@ -262,6 +262,17 @@ public final class MainActivity extends Activity {
         transferBar.setContentDescription("Current file progress");
         running.addView(transferBar, new LinearLayout.LayoutParams(-1, Ui.dp(this, 12)));
         transferBarLabel = Ui.hint(running, "");
+        if (!TransferState.current().restore)
+          Ui.button(
+              running,
+              "Pause backup",
+              false,
+              v -> {
+                Operations.pause("Paused by you", false);
+                android.widget.Toast.makeText(
+                        this, "Saving checkpoint…", android.widget.Toast.LENGTH_SHORT)
+                    .show();
+              });
         Ui.button(running, "Cancel transfer", false, v -> Operations.cancel());
       }
       if (tab == 0) jobs(cfg);
@@ -367,7 +378,47 @@ public final class MainActivity extends Activity {
       if (Operations.running() && job.id.equals(Operations.activeJobId()))
         runningJobLabel = lastLabel;
       LinearLayout actions = Ui.row(this);
-      Ui.button(actions, "Back up", true, v -> run(job));
+      JSONObject pending = PendingBackups.get(this, job.id);
+      if (pending != null) {
+        BackupJob frozen = BackupJob.from(pending.getJSONObject("job"));
+        Ui.hint(
+            card,
+            "Saved run · "
+                + frozen.target()
+                + "\n"
+                + pending.optString("message", "Checkpoint retained"));
+        if ("cancelling".equals(pending.optString("state")))
+          Ui.button(
+              actions,
+              "Retry cancel",
+              true,
+              v ->
+                  startForegroundService(
+                      new Intent(this, BackupService.class)
+                          .setAction("discard")
+                          .putExtra("job_id", job.id)));
+        else Ui.button(actions, "Resume", true, v -> run(job));
+        Ui.button(
+            actions,
+            "Cancel saved run",
+            false,
+            v ->
+                new AlertDialog.Builder(this)
+                    .setTitle("Cancel unfinished backup?")
+                    .setMessage(
+                        "Remove this run's incomplete server snapshot and its local recovery data?"
+                            + " Completed backups are kept.")
+                    .setPositiveButton(
+                        "Cancel backup",
+                        (dialog, which) -> {
+                          startForegroundService(
+                              new Intent(this, BackupService.class)
+                                  .setAction("discard")
+                                  .putExtra("job_id", job.id));
+                        })
+                    .setNegativeButton("Keep", null)
+                    .show());
+      } else Ui.button(actions, "Back up", true, v -> run(job));
       Ui.button(actions, "Snapshots", false, v -> browse(job));
       card.addView(actions);
     }
