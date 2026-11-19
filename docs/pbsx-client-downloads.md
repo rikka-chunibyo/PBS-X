@@ -130,3 +130,6 @@ to `0.5.9-preview`, defaulting normal folder labels to the selected folder name.
 The [preview.5 publication](client-release-2026-11-18-preview-5.md) publishes
 Android `0.5.10-preview` and Windows/Linux `0.7.5-preview` with cumulative upload
 progress for ordinary, split and interleaved PBS archive uploads.
+The [2026-11-19 preview.1 publication](client-release-2026-11-19-preview-1.md)
+updates Android to `0.5.11-preview` with individually editable bulk Restore
+selections and an Invert selection action in the removal prompt.
