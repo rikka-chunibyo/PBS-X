@@ -168,6 +168,12 @@ func ResumeEncoder(output, payload io.Writer, raw []byte) (*Encoder, *FileWriter
 // FileProgress is the number of source bytes already encoded for this file.
 func (fw *FileWriter) FileProgress() uint64 { return fw.fileSize - fw.remaining }
 
+// FileSize is the full length recorded in the open archive entry.
+func (fw *FileWriter) FileSize() uint64 { return fw.fileSize }
+
+// DirectoryDepth includes the root directory.
+func (e *Encoder) DirectoryDepth() int { return len(e.state) }
+
 // MetadataPosition is the prefix length associated with Checkpoint.
 func (e *Encoder) MetadataPosition() uint64 {
 	if len(e.state) == 0 {

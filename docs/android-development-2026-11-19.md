@@ -95,6 +95,21 @@ the development VM, hypervisor, or PBS server handling the user's backup.
   headers/content. Those writes now reject short output, and a failed stream
   cannot produce a checkpoint. Linux and Windows host-app CI passed for the
   first development checkpoint; final follow-up checks are still required.
+- Follow-up development checkpoint `dc1ce5488`: Android build and all twelve
+  Android 13 instrumentation tests passed (44503343675). Linux/Windows checks
+  passed (44503343700), as did publication checks (44503343811). This is a
+  development branch validation, not a public release.
+- Added a separate document continuation producer with bounded serialized
+  traversal state. Tests discard the producer mid-file, roll output back to
+  the last checkpoint, reconstruct it and obtain byte-identical archives.
+  Completed files are not reopened and folders are not relisted. Only the
+  interrupted file's saved prefix is rehashed before continuing, so even
+  same-size/same-mtime edits to that prefix are rejected without appending data.
+- Added an experimental checkpoint-aware producer-side chunk writer. Checkpoint
+  flushes a partial chunk, waits for upload/dedup and server index acknowledgment,
+  then returns exact lengths/counts/index checksums. Tests cover restored-prefix
+  validation without retransmission, corrupt/mismatched prefixes and failed
+  appends. It is not connected to the production uploader or Android UI.
 
 ## Research references
 

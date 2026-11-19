@@ -290,7 +290,7 @@ func (s *pbsSession) addFileInfo(name string, size uint64, digest [32]byte) {
 	addFileInfo(&s.files, name, size, digest, string(s.config.CryptMode))
 }
 
-func (s *pbsSession) UploadArchive(ctx context.Context, name string, data io.Reader) (*UploadResult, error) {
+func (s *pbsSession) loadPrevious(name string) {
 	// Register previous chunks on the server so dynamicIndexAppend can reference them.
 	// downloadPrevious both downloads the index AND registers all chunk digests in
 	// the server's session registry. Without this, skipped (cached) chunks would be
@@ -319,6 +319,11 @@ func (s *pbsSession) UploadArchive(ctx context.Context, name string, data io.Rea
 		}
 	}
 	s.mu.Unlock()
+
+}
+
+func (s *pbsSession) UploadArchive(ctx context.Context, name string, data io.Reader) (*UploadResult, error) {
+	s.loadPrevious(name)
 
 	wid, err := s.proto.dynamicIndexCreate(name)
 	if err != nil {
