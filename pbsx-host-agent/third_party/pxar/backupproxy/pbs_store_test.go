@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/pbs-plus/pxar/buzhash"
@@ -16,6 +17,7 @@ import (
 
 // mockPBSProtocol implements pbsBackupProtocol for testing.
 type mockPBSProtocol struct {
+	mu       sync.Mutex
 	chunks   map[string][]byte // digest -> encoded chunk data
 	blobs    map[string][]byte // filename -> blob data
 	indexes  map[uint64]*mockIndex
@@ -46,6 +48,8 @@ func newMockPBSProtocol() *mockPBSProtocol {
 }
 
 func (m *mockPBSProtocol) dynamicIndexCreate(archiveName string) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	wid := m.nextWID
 	m.nextWID++
 	m.indexes[wid] = &mockIndex{archiveName: archiveName}
@@ -53,6 +57,8 @@ func (m *mockPBSProtocol) dynamicIndexCreate(archiveName string) (uint64, error)
 }
 
 func (m *mockPBSProtocol) dynamicChunkUpload(wid uint64, digest string, size, encodedSize int, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, exists := m.chunks[digest]; !exists {
 		// Copy: the real protocol serialises the bytes over the wire; the mock
 		// simulates a server-side store and must own an independent copy.
@@ -79,6 +85,8 @@ func (m *mockPBSProtocol) dynamicChunkUploadAsync(wid uint64, digest string, siz
 }
 
 func (m *mockPBSProtocol) dynamicIndexAppend(wid uint64, digests []string, offsets []uint64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if idx, ok := m.indexes[wid]; ok {
 		idx.appended = true
 		for i, d := range digests {
@@ -94,6 +102,8 @@ func (m *mockPBSProtocol) dynamicIndexAppend(wid uint64, digests []string, offse
 }
 
 func (m *mockPBSProtocol) dynamicIndexClose(wid uint64, chunkCount int, size uint64, csum string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if idx, ok := m.indexes[wid]; ok {
 		idx.closed = true
 	}

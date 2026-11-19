@@ -252,6 +252,8 @@ func (ps *PBSStore) StartSession(ctx context.Context, config BackupConfig) (Back
 // pbsSession implements BackupSession for PBS.
 type pbsSession struct {
 	mu          sync.Mutex
+	progressMu  sync.Mutex
+	progress    UploadProgress
 	proto       pbsBackupProtocol
 	store       *PBSStore
 	knownChunks map[[32]byte]bool
@@ -260,6 +262,25 @@ type pbsSession struct {
 	chunkCfg    buzhash.Config
 	compress    bool
 	closed      bool
+}
+
+// reportProgress combines concurrent split streams and successive archives.
+// Serialize delivery separately from session state so callbacks see monotonic
+// session-wide totals, without blocking unrelated state access.
+func (s *pbsSession) reportProgress(processed, uploaded uint64) {
+	callback := s.config.OnUploadProgress
+	if callback == nil {
+		return
+	}
+	s.progressMu.Lock()
+	defer s.progressMu.Unlock()
+	s.progress.ProcessedChunks++
+	s.progress.ProcessedBytes += processed
+	if uploaded > 0 {
+		s.progress.UploadedChunks++
+		s.progress.UploadedBytes += uploaded
+	}
+	callback(s.progress)
 }
 
 func (s *pbsSession) addFileInfo(name string, size uint64, digest [32]byte) {
@@ -354,11 +375,13 @@ func (s *pbsSession) UploadArchive(ctx context.Context, name string, data io.Rea
 		exists := s.knownChunks != nil && s.knownChunks[digest]
 		s.mu.Unlock()
 
+		var uploaded uint64
 		if !exists {
 			blobData, bp, err := borrowChunkBlob(chunk, s.compress, s.config.CryptConfig)
 			if err != nil {
 				return nil, err
 			}
+			uploaded = uint64(len(blobData))
 
 			err = s.proto.dynamicChunkUpload(wid, hexDigest, len(chunk), len(blobData), blobData)
 			datastore.PutBlobBuf(bp)
@@ -385,6 +408,7 @@ func (s *pbsSession) UploadArchive(ctx context.Context, name string, data io.Rea
 			digests = digests[:0]
 			offsets = offsets[:0]
 		}
+		s.reportProgress(uint64(len(chunk)), uploaded)
 	}
 
 	if _, err := idx.Finish(); err != nil {
@@ -500,7 +524,6 @@ type pbsPayloadSink struct {
 	batchDigests []string
 	batchOffsets []uint64
 	chunkCount   int
-	progress     UploadProgress
 
 	localKnown map[[32]byte]bool // producer-owned: dedup hit cache
 	hexBuf     [64]byte          // worker-owned: digest hex for server appends
@@ -562,15 +585,7 @@ func (s *pbsPayloadSink) appendOne(j *appendJob) error {
 			return err
 		}
 	}
-	s.progress.ProcessedChunks++
-	s.progress.ProcessedBytes += j.size
-	if j.uploadedSize > 0 {
-		s.progress.UploadedChunks++
-		s.progress.UploadedBytes += j.uploadedSize
-	}
-	if onProgress := s.session.config.OnUploadProgress; onProgress != nil {
-		onProgress(s.progress)
-	}
+	s.session.reportProgress(j.size, j.uploadedSize)
 	return nil
 }
 
