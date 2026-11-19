@@ -332,6 +332,34 @@ were made.
   a paused run needs a deliberate recovery flow; the app does not silently accept
   another identity or throw away its recovery secrets.
 
+### Final validation and paused snapshot retention
+
+- Android CI 44556359878 at `8fbb3e1d2` passed the mobile Go race suite, universal
+  bindings, debug/release builds, Java unit tests/lint and **18 Android 13
+  instrumentation tests**. The optional report upload still hit GitHub quota;
+  test results remain in the Actions log.
+- Final review found that ordinary PBS pruning removes older unfinished snapshots
+  once a newer completed snapshot exists. This could destroy another paused job's
+  checkpoint when jobs share a Backup ID. Pruning now keeps an unfinished snapshot
+  with a complete alternating metadata/payload/state slot, independent of newer
+  snapshots. Mixed/incomplete slots retain ordinary pruning behavior. Completed
+  snapshots, even with leftover continuation files, follow normal retention.
+  Explicit cancel/forget remains available; paused checkpoints do not expire
+  automatically and consume space until resumed/cancelled/explicitly removed.
+- Focused server validation on VM 103 passed all **8 prune integration cases**
+  (three new regressions, including both alternating slots) and **34 datastore
+  library cases**, with no ignored tests. Logs were copied to ignored local
+  `artifacts/android-resume/pbsx-resume-prune*-tests.log`. The earlier 50 server
+  library cases and four live plain/encrypted recovery/cleanup cases also passed.
+- The integration-test build linked unused CLI executables and approached the
+  builder's existing disk limit. Only newly generated unused executable pairs
+  and checksum-verified fixture proxy copies were reclaimed; source checkouts,
+  library/test caches, installed programs and the proxy cache were preserved.
+  Remaining free space was 2493 MiB. Check disk capacity before another full build.
+- Return VM 103 to stopped after this final check; VM 104 is already stopped with
+  the installed proxy restored and fixture datastore/credentials removed. VM 100
+  and the phone's server remain untouched.
+
 ## Research references
 
 - Android JobInfo.Builder setPeriodic: constraints unmet in the interval wait
@@ -354,9 +382,17 @@ were made.
 
 ## Remaining work
 
-Run Android instrumentation for MMS, scheduling, independent per-source app
-selections, privileged file restore and durable coordinated resume,
-including end-to-end Android lifecycle and constraint validation. Research safe
-provider imports and make only verified modes available. Run regressions, inspect final source state,
-build signed APKs, and document exact capabilities/limitations. Keep this file
-accurate as work proceeds; it is a repository work log, not a claim of shipment.
+The branch implementation and automated validation above are complete. Before
+publication, build/sign a new version of the Android app, publish the matching
+server checkpoint extension and updated offline ISO, and collect the required
+native bundles from successful CI after GitHub's artifact quota clears. Do not
+reuse old client/server version numbers or mask mandatory bundle-upload failures.
+No new version has been published by this development branch.
+
+Physical Samsung checks still needed: actual Shizuku authorization and protected
+folder restores, charging/Wi-Fi interruption/retry and foreground Pause/Resume
+controls. Only synthetic fixtures/emulator/lab data were changed during testing.
+Provider imports remain unavailable until safe additive/idempotent imports and
+item/account selection are implemented and verified; exported provider ZIPs can
+currently be restored as files. Credential rotation during a paused run also
+needs a deliberate recovery flow. These limits are not claims of shipment.

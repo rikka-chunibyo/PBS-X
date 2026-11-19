@@ -357,3 +357,62 @@ fn test_prune_future_timestamp() -> Result<(), Error> {
     assert_eq!(remove_list, expect);
     Ok(())
 }
+
+fn checkpoint_info(snapshot: &str, slot: &str, finished: bool) -> BackupInfo {
+    let mut info = create_info(snapshot, !finished);
+    info.files.extend([
+        format!("pbsx-resume-metadata-{slot}.didx"),
+        format!("pbsx-resume-payload-{slot}.didx"),
+        format!("pbsx-resume-state-{slot}.blob"),
+    ]);
+    info
+}
+
+#[test]
+fn paused_checkpoints_survive_newer_completed_shared_group_snapshots() {
+    let mut options = PruneJobOptions::default();
+    options.keep.keep_last = Some(1);
+    let list = vec![
+        checkpoint_info("host/phone/2019-11-15T09:00:00Z", "a", false),
+        checkpoint_info("host/phone/2019-11-15T10:00:00Z", "b", false),
+        create_info("host/phone/2019-11-15T11:00:00Z", true),
+        create_info("host/phone/2019-11-15T12:00:00Z", false),
+    ];
+    assert_eq!(
+        get_prune_list(list, false, &options),
+        vec![PathBuf::from("host/phone/2019-11-15T11:00:00Z")]
+    );
+}
+
+#[test]
+fn incomplete_or_mixed_checkpoint_slot_does_not_change_prune_policy() {
+    let mut options = PruneJobOptions::default();
+    options.keep.keep_last = Some(1);
+    for mixed in [false, true] {
+        let mut info = checkpoint_info("host/phone/2019-11-15T09:00:00Z", "a", false);
+        if mixed {
+            info.files[1] = "pbsx-resume-payload-b.didx".to_string();
+        } else {
+            info.files.pop();
+        }
+        let list = vec![info, create_info("host/phone/2019-11-15T12:00:00Z", false)];
+        assert_eq!(
+            get_prune_list(list, false, &options),
+            vec![PathBuf::from("host/phone/2019-11-15T09:00:00Z")]
+        );
+    }
+}
+
+#[test]
+fn completed_snapshot_with_leftover_checkpoint_files_obeys_retention() {
+    let mut options = PruneJobOptions::default();
+    options.keep.keep_last = Some(1);
+    let list = vec![
+        checkpoint_info("host/phone/2019-11-15T09:00:00Z", "a", true),
+        create_info("host/phone/2019-11-15T12:00:00Z", false),
+    ];
+    assert_eq!(
+        get_prune_list(list, false, &options),
+        vec![PathBuf::from("host/phone/2019-11-15T09:00:00Z")]
+    );
+}

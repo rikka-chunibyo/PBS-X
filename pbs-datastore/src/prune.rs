@@ -84,6 +84,21 @@ fn mark_selections<F: Fn(&BackupInfo) -> Result<String, Error>>(
     Ok(())
 }
 
+// A paused PBS-X run is independent of newer snapshots in the same group.
+// Keep its acknowledged prefix/state files until explicit cancel/forget. Match
+// a complete alternating slot, not an arbitrary lone file or completed snapshot.
+fn has_resume_checkpoint_files(info: &BackupInfo) -> bool {
+    ["a", "b"].iter().any(|slot| {
+        [
+            format!("pbsx-resume-metadata-{slot}.didx"),
+            format!("pbsx-resume-payload-{slot}.didx"),
+            format!("pbsx-resume-state-{slot}.blob"),
+        ]
+        .iter()
+        .all(|name| info.files.contains(name))
+    })
+}
+
 // Mark unfinished backup snapshots for removal, unless the newest and mark
 // all snapshots with a timestamp laying in the future as to be ignored.
 fn remove_incomplete_and_ignore_future(
@@ -102,6 +117,8 @@ fn remove_incomplete_and_ignore_future(
             // There is a new finished backup, so there is no need
             // to keep older unfinished backups.
             keep_unfinished = false;
+        } else if has_resume_checkpoint_files(info) {
+            mark.insert(info.backup_dir.relative_path(), PruneMark::KeepPartial);
         } else {
             let backup_id = info.backup_dir.relative_path();
             if keep_unfinished {
