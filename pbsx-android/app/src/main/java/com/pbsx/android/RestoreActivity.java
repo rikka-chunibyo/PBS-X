@@ -115,7 +115,7 @@ public final class RestoreActivity extends Activity {
   }
 
   interface Fetch {
-    String run(Client c) throws Exception;
+    String run(Client c, Operations.Cancellation token) throws Exception;
   }
 
   interface Result {
@@ -123,6 +123,11 @@ public final class RestoreActivity extends Activity {
   }
 
   private void fetch(String label, Fetch action, Result result) {
+    fetch(label, action, result, this::showError);
+  }
+
+  private void fetch(
+      String label, Fetch action, Result result, java.util.function.Consumer<String> failure) {
     final int ticket = ++generation;
     if (request != null) request.cancel();
     if (client != null) client.cancel();
@@ -141,7 +146,7 @@ public final class RestoreActivity extends Activity {
                 Operations.client(this, KeyProfiles.config(this, connectionID, "", false), token);
             client = c;
             token.check();
-            String response = action.run(c);
+            String response = action.run(c, token);
             runOnUiThread(
                 () -> {
                   if (ticket != generation || isDestroyed() || isFinishing()) return;
@@ -149,7 +154,7 @@ public final class RestoreActivity extends Activity {
                   try {
                     result.show(response);
                   } catch (Exception e) {
-                    showError(e.getMessage());
+                    failure.accept(e.getMessage());
                   }
                 });
           } catch (Exception e) {
@@ -157,7 +162,7 @@ public final class RestoreActivity extends Activity {
                 () -> {
                   if (ticket != generation || isDestroyed() || isFinishing()) return;
                   loading = false;
-                  showError(e.getMessage());
+                  failure.accept(e.getMessage());
                 });
           }
         });
@@ -166,7 +171,7 @@ public final class RestoreActivity extends Activity {
   private void loadSnapshots() {
     fetch(
         "Loading snapshots",
-        c -> c.listGroupSnapshots(store, namespace, sourceType, source),
+        (c, token) -> c.listGroupSnapshots(store, namespace, sourceType, source),
         value -> {
           JSONArray all = new JSONObject(value).getJSONArray("data");
           ArrayList<JSONObject> list = new ArrayList<>();
@@ -277,7 +282,8 @@ public final class RestoreActivity extends Activity {
     stage = 2;
     fetch(
         "Opening folder",
-        c -> c.listGroupArchive(store, namespace, sourceType, source, snapshot, path, start, 200),
+        (c, token) ->
+            c.listGroupArchive(store, namespace, sourceType, source, snapshot, path, start, 200),
         value -> {
           JSONObject result = new JSONObject(value);
           entries = result.getJSONArray("entries");
@@ -301,12 +307,14 @@ public final class RestoreActivity extends Activity {
     if (!relative.equals(".")) Ui.button(top, "↑ Parent folder", false, v -> up());
     Ui.button(
         top,
-        "Select this folder",
+        total == 0 ? "Select empty folder" : "Select all",
         false,
         v -> {
           try {
-            selectPath(relative);
-            renderDirectory();
+            if (total == 0) {
+              selectPath(relative);
+              renderDirectory();
+            } else selectAll();
           } catch (Exception e) {
             message(e.getMessage());
           }
@@ -387,6 +395,64 @@ public final class RestoreActivity extends Activity {
     return false;
   }
 
+  private void selectAll() throws Exception {
+    if (offset == 0 && entries.length() == total) {
+      selectEntries(entries);
+      renderDirectory();
+      return;
+    }
+    String folder = relative;
+    long expected = total;
+    fetch(
+        "Selecting files and folders",
+        (c, token) -> {
+          JSONArray all = new JSONArray();
+          for (long start = 0; start < expected; ) {
+            token.check();
+            JSONObject result =
+                new JSONObject(
+                    c.listGroupArchive(
+                        store, namespace, sourceType, source, snapshot, folder, start, 200));
+            JSONArray batch = result.getJSONArray("entries");
+            if (result.getLong("total") != expected || batch.length() == 0)
+              throw new Exception("Folder listing changed; reopen it and retry");
+            for (int i = 0; i < batch.length(); i++) {
+              JSONObject item = batch.getJSONObject(i);
+              if (item.getBoolean("supported")) all.put(item);
+              if (all.length() > 1000)
+                throw new Exception(
+                    "Select up to 1,000 paths at a time, or select this folder from its parent.");
+            }
+            start += batch.length();
+          }
+          return all.toString();
+        },
+        value -> {
+          selectEntries(new JSONArray(value));
+          renderDirectory();
+        },
+        error -> {
+          renderDirectory();
+          message(error);
+        });
+  }
+
+  private void selectEntries(JSONArray items) throws Exception {
+    TreeSet<String> before = new TreeSet<>(selected);
+    try {
+      // Expand a formerly selected whole folder into its individual children.
+      selected.remove(relative);
+      for (int i = 0; i < items.length(); i++) {
+        JSONObject item = items.getJSONObject(i);
+        if (item.getBoolean("supported")) selectPath(item.getString("path"));
+      }
+    } catch (Exception e) {
+      selected.clear();
+      selected.addAll(before);
+      throw e;
+    }
+  }
+
   private void selectPath(String path) throws Exception {
     if (parentSelected(path)) return;
     TreeSet<String> before = new TreeSet<>(selected);
@@ -421,23 +487,36 @@ public final class RestoreActivity extends Activity {
     }
     String[] paths = selected.toArray(new String[0]);
     boolean[] remove = new boolean[paths.length];
-    new AlertDialog.Builder(this)
-        .setTitle("Remove from selection")
-        .setMultiChoiceItems(paths, remove, (d, index, value) -> remove[index] = value)
-        .setNegativeButton("Keep selection", null)
-        .setPositiveButton(
-            "Remove selected",
-            (d, w) -> {
-              for (int i = 0; i < paths.length; i++) if (remove[i]) selected.remove(paths[i]);
-              renderDirectory();
-            })
-        .setNeutralButton(
-            "Clear all",
-            (d, w) -> {
-              selected.clear();
-              renderDirectory();
-            })
-        .show();
+    AlertDialog dialog =
+        new AlertDialog.Builder(this)
+            .setTitle("Remove from selection")
+            .setMultiChoiceItems(paths, remove, (d, index, value) -> remove[index] = value)
+            .setNegativeButton("Invert selection", null)
+            .setPositiveButton(
+                "Remove selected",
+                (d, w) -> {
+                  for (int i = 0; i < paths.length; i++) if (remove[i]) selected.remove(paths[i]);
+                  renderDirectory();
+                })
+            .setNeutralButton(
+                "Clear all",
+                (d, w) -> {
+                  selected.clear();
+                  renderDirectory();
+                })
+            .create();
+    dialog.setOnShowListener(
+        d ->
+            dialog
+                .getButton(AlertDialog.BUTTON_NEGATIVE)
+                .setOnClickListener(
+                    v -> {
+                      for (int i = 0; i < remove.length; i++) {
+                        remove[i] = !remove[i];
+                        dialog.getListView().setItemChecked(i, remove[i]);
+                      }
+                    }));
+    dialog.show();
   }
 
   private void options() {
