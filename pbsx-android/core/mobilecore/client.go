@@ -409,6 +409,7 @@ func (c *Client) backupNamed(store, namespace, backupID, jobID, jobName string, 
 	}
 	defer done()
 	stamp := time.Now().Unix()
+	previous, previousErr := c.previousForBackup(ctx, store, namespace, backupID, stamp)
 	report := newTransferReporter(ctx, c.details)
 	defer report.close()
 	client := backupproxy.NewLocalClient(&documentFS{docs: docs, ctx: ctx, report: report})
@@ -417,7 +418,7 @@ func (c *Client) backupNamed(store, namespace, backupID, jobID, jobName string, 
 	if c.crypt != nil {
 		mode = datastore.CryptModeEncrypt
 	}
-	_, err = server.RunBackupWithMode(ctx, ".", backupproxy.BackupConfig{CryptMode: mode, CryptConfig: c.crypt, BackupType: datastore.BackupHost, BackupID: backupID, Namespace: namespace, BackupTime: stamp, ChunkConfig: buzhash.DefaultConfig(), DetectionMode: backupproxy.DetectionData, Compress: true, StrictMetadata: true, OnUploadProgress: func(p backupproxy.UploadProgress) {
+	_, err = server.RunBackupWithMode(ctx, ".", backupproxy.BackupConfig{PreviousBackup: previous, CryptMode: mode, CryptConfig: c.crypt, BackupType: datastore.BackupHost, BackupID: backupID, Namespace: namespace, BackupTime: stamp, ChunkConfig: buzhash.DefaultConfig(), DetectionMode: backupproxy.DetectionData, Compress: true, StrictMetadata: true, OnUploadProgress: func(p backupproxy.UploadProgress) {
 		report.uploaded(int64(p.UploadedBytes))
 		if progress != nil {
 			progress.Update("Uploading", int64(p.UploadedChunks), int64(p.UploadedBytes))
@@ -427,6 +428,9 @@ func (c *Client) backupNamed(store, namespace, backupID, jobID, jobName string, 
 		return backupResult{}, backupFailure(err, c.cfg.HostID, store, namespace)
 	}
 	result := backupResult{Snapshot: fmt.Sprintf("host/%s/%s", backupID, time.Unix(stamp, 0).UTC().Format("2006-01-02T15:04:05Z"))}
+	if previousErr != nil {
+		result.Warning = "Could not inspect the previous snapshot; this run used a full upload"
+	}
 	if jobID != "" {
 		report.phase("Saving snapshot notes", "", -1)
 		values := map[string]any{"backup-type": "host", "backup-id": backupID, "backup-time": stamp, "notes": "PBS-X Android: " + jobName + "\nJob ID: " + jobID}
@@ -435,7 +439,10 @@ func (c *Client) backupNamed(store, namespace, backupID, jobID, jobName string, 
 		}
 		body, _ := json.Marshal(values)
 		if _, err := c.request(ctx, "PUT", "/admin/datastore/"+url.PathEscape(store)+"/notes", body, true); err != nil {
-			result.Warning = "Snapshot saved; job label could not be attached"
+			if result.Warning != "" {
+				result.Warning += "; "
+			}
+			result.Warning += "Snapshot saved; job label could not be attached"
 		}
 	}
 	return result, nil

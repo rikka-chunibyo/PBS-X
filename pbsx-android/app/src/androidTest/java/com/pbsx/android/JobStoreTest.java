@@ -250,20 +250,27 @@ public class JobStoreTest {
       assertNotNull(first);
       assertTrue(first.isPersisted());
       assertTrue(first.isRequireCharging());
-      assertEquals(12 * 3600000L, first.getIntervalMillis());
+      assertFalse(first.isPeriodic());
+      assertTrue(first.getMinLatencyMillis() <= 12 * 3600000L);
+      assertTrue(first.getMinLatencyMillis() > 11 * 3600000L);
+      long due = first.getExtras().getLong("due");
       assertEquals(photos.id, first.getExtras().getString("job_id"));
       assertTrue(first.getRequiredNetwork().hasTransport(NetworkCapabilities.TRANSPORT_WIFI));
       assertFalse(scheduler.getPendingJob(docs.schedulerId).isRequireCharging());
-      assertEquals(48 * 3600000L, scheduler.getPendingJob(docs.schedulerId).getIntervalMillis());
+      assertFalse(scheduler.getPendingJob(docs.schedulerId).isPeriodic());
+      assertTrue(scheduler.getPendingJob(docs.schedulerId).getMinLatencyMillis() > 47 * 3600000L);
       assertNull(scheduler.getPendingJob(manual.schedulerId));
       String hash = first.getExtras().getString("config_hash");
       ScheduleService.configureAll(c);
       assertEquals(
           hash, scheduler.getPendingJob(photos.schedulerId).getExtras().getString("config_hash"));
+      assertEquals(due, scheduler.getPendingJob(photos.schedulerId).getExtras().getLong("due"));
       photos.hours = 24;
       JobStore.save(c, photos);
       ScheduleService.configureAll(c);
-      assertEquals(24 * 3600000L, scheduler.getPendingJob(photos.schedulerId).getIntervalMillis());
+      assertTrue(
+          scheduler.getPendingJob(photos.schedulerId).getMinLatencyMillis() <= 24 * 3600000L);
+      assertTrue(scheduler.getPendingJob(photos.schedulerId).getMinLatencyMillis() > 23 * 3600000L);
       assertNotEquals(
           hash, scheduler.getPendingJob(photos.schedulerId).getExtras().getString("config_hash"));
       photos.hours = 0;

@@ -13,10 +13,11 @@ import java.util.Collections;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Read-only Shizuku UserService. No arbitrary command or filesystem API. */
+/** Shizuku sources and explicitly selected staged restore destinations. */
 public class PrivilegedFiles extends IPrivilegedFiles.Stub {
   private final int owner;
   private boolean exporting;
+  private volatile com.pbsx.core.mobilecore.LocalRestore destination;
 
   public PrivilegedFiles(Context context) {
     owner = context.getApplicationInfo().uid;
@@ -51,11 +52,12 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
       throw new IllegalArgumentException("Invalid package name");
   }
 
-  private static File apk(String pkg, String name) throws Exception {
+  private File apk(String pkg, String name) throws Exception {
     packageName(pkg);
     if (!name.matches("[0-9]+\\.apk")) throw new Exception("Invalid APK name");
     int index = Integer.parseInt(name.substring(0, name.length() - 4));
-    ArrayList<String> paths = command("/system/bin/pm", "path", pkg);
+    ArrayList<String> paths =
+        command("/system/bin/pm", "path", "--user", String.valueOf(owner / 100000), pkg);
     if (index < 0 || index >= paths.size() || !paths.get(index).startsWith("package:"))
       throw new Exception("APK no longer exists");
     File f = new File(paths.get(index).substring(8)).getCanonicalFile();
@@ -71,14 +73,20 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
   private File allowed(String path) throws Exception {
     if (path.startsWith("/@shared/"))
       return SharedStorage.resolve(sharedRoot(), path.substring("/@shared/".length()), false);
-    if (!path.startsWith("/storage/emulated/0/Android/data")
-        && !path.startsWith("/storage/emulated/0/Android/obb"))
+    for (String kind : new String[] {"data", "obb"}) {
+      String virtual = "/@" + kind;
+      if (path.equals(virtual) || path.startsWith(virtual + "/"))
+        path =
+            new File(sharedRoot(), "Android/" + kind).getPath() + path.substring(virtual.length());
+    }
+    String dataRoot = new File(sharedRoot(), "Android/data").getPath();
+    String obbRoot = new File(sharedRoot(), "Android/obb").getPath();
+    if (!path.startsWith(dataRoot) && !path.startsWith(obbRoot))
       throw new SecurityException("Source outside selected Shizuku roots");
     File f = new File(path).getCanonicalFile();
     String canonical = f.getPath();
     boolean allowed = false;
-    for (String base :
-        new String[] {"/storage/emulated/0/Android/data", "/storage/emulated/0/Android/obb"}) {
+    for (String base : new String[] {dataRoot, obbRoot}) {
       String root = new File(base).getCanonicalPath();
       if (canonical.equals(root) || canonical.startsWith(root + "/")) allowed = true;
     }
@@ -145,6 +153,7 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
   public String stat(String path) throws RemoteException {
     authorize();
     try {
+      if (destination != null) return destination.statJSON(path);
       String[] v = virtual(path);
       if (v != null) {
         if (v.length < 3) return directory(v[v.length - 1]).toString();
@@ -161,11 +170,19 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
   public String list(String path) throws RemoteException {
     authorize();
     try {
+      if (destination != null) return destination.listJSON(path);
       JSONArray out = new JSONArray();
       String[] v = virtual(path);
       if (v != null) {
         if (v.length == 1) {
-          ArrayList<String> packages = command("/system/bin/pm", "list", "packages", "-3");
+          ArrayList<String> packages =
+              command(
+                  "/system/bin/pm",
+                  "list",
+                  "packages",
+                  "-3",
+                  "--user",
+                  String.valueOf(owner / 100000));
           Collections.sort(packages);
           for (String p : packages)
             if (p.startsWith("package:")) {
@@ -175,7 +192,8 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
             }
         } else if (v.length == 2) {
           packageName(v[1]);
-          ArrayList<String> paths = command("/system/bin/pm", "path", v[1]);
+          ArrayList<String> paths =
+              command("/system/bin/pm", "path", "--user", String.valueOf(owner / 100000), v[1]);
           if (paths.isEmpty()) throw new Exception("Selected app is no longer installed");
           for (int i = 0; i < paths.size(); i++) out.put(entry(apk(v[1], i + ".apk"), i + ".apk"));
         } else throw new Exception("Not a directory");
@@ -197,6 +215,8 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
   public ParcelFileDescriptor openRead(String path) throws RemoteException {
     authorize();
     try {
+      if (destination != null)
+        return ParcelFileDescriptor.adoptFd((int) destination.openRead(path));
       String[] v = virtual(path);
       File file = v != null && v.length == 3 ? apk(v[1], v[2]) : allowed(path);
       if (!file.isFile()) throw new Exception("Not a regular file");
@@ -216,7 +236,10 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
               "/system/bin/pm", "list", "packages", "-3", "--user", String.valueOf(owner / 100000)))
         if (line.startsWith("package:")) apps.add(line.substring(8));
       for (String root :
-          new String[] {"/storage/emulated/0/Android/data", "/storage/emulated/0/Android/obb"}) {
+          new String[] {
+            new File(sharedRoot(), "Android/data").getPath(),
+            new File(sharedRoot(), "Android/obb").getPath()
+          }) {
         if (!new File(root).exists() || !new File(root).canRead()) continue;
         File base = allowed(root);
         File[] children = base.listFiles();
@@ -239,6 +262,107 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
 
   protected DeviceExport.Source exportSource() throws Exception {
     return new ShellProviderSource(owner / 100000);
+  }
+
+  @Override
+  public synchronized void beginRestore(String root, String fresh) {
+    authorize();
+    if (destination != null)
+      throw new IllegalStateException("Restore destination is already selected");
+    com.pbsx.core.mobilecore.LocalRestore opened = null;
+    try {
+      File folder = SharedStorage.restoreRoot(sharedRoot(), root);
+      if (!folder.isDirectory() || !folder.canWrite())
+        throw new Exception("Shizuku cannot write this restore folder");
+      opened = com.pbsx.core.mobilecore.Mobilecore.newLocalRestore(folder.getPath());
+      if (!fresh.isEmpty()) {
+        if (Paths.parts(fresh).length != 1)
+          throw new Exception("Invalid fresh restore folder name");
+        com.pbsx.core.mobilecore.LocalRestore child = opened.newDirectory(fresh);
+        com.pbsx.core.mobilecore.LocalRestore parent = opened;
+        opened = child;
+        parent.close();
+      }
+      destination = opened;
+    } catch (Exception e) {
+      if (opened != null)
+        try {
+          opened.close();
+        } catch (Exception ignored) {
+        }
+      throw error(e);
+    }
+  }
+
+  private com.pbsx.core.mobilecore.LocalRestore destination() {
+    if (destination == null) throw new IllegalStateException("Select a restore destination first");
+    return destination;
+  }
+
+  @Override
+  public String inspect(String path) {
+    authorize();
+    try {
+      return destination().inspectJSON(path);
+    } catch (Exception e) {
+      throw error(e);
+    }
+  }
+
+  @Override
+  public void makeDirectory(String path) {
+    authorize();
+    try {
+      destination().makeDirectory(path);
+    } catch (Exception e) {
+      throw error(e);
+    }
+  }
+
+  @Override
+  public ParcelFileDescriptor openWrite(String path) {
+    authorize();
+    try {
+      return ParcelFileDescriptor.adoptFd((int) destination().openWrite(path));
+    } catch (Exception e) {
+      throw error(e);
+    }
+  }
+
+  @Override
+  public void commitFile(String temporary, String path, boolean replace) {
+    authorize();
+    try {
+      destination().commitFile(temporary, path, replace);
+    } catch (Exception e) {
+      throw error(e);
+    }
+  }
+
+  @Override
+  public void deleteStaged(String path) {
+    authorize();
+    try {
+      destination().deleteFile(path);
+    } catch (Exception e) {
+      throw error(e);
+    }
+  }
+
+  @Override
+  public String restoreFolders(String relative) {
+    authorize();
+    try {
+      JSONArray folders = new JSONArray();
+      for (File folder : SharedStorage.directories(sharedRoot(), relative, true))
+        folders.put(directory(folder.getName()));
+      String json = folders.toString();
+      if (json.length() > 350000)
+        throw new Exception("Folder list exceeds safe Binder message size");
+      return json;
+    } catch (Exception e) {
+      throw error(e);
+    }
   }
 
   @Override
@@ -315,6 +439,11 @@ public class PrivilegedFiles extends IPrivilegedFiles.Stub {
     int caller = Binder.getCallingUid();
     if (caller != owner && caller != android.os.Process.myUid())
       throw new SecurityException("Wrong caller");
+    if (destination != null)
+      try {
+        destination.close();
+      } catch (Exception ignored) {
+      }
     System.exit(0);
   }
 }

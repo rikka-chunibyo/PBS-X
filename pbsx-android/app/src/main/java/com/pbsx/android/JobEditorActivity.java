@@ -13,14 +13,15 @@ import org.json.JSONObject;
 public final class JobEditorActivity extends Activity {
   private BackupJob job;
   private EditText name, store, namespace, backupID, hours;
-  private CheckBox wifi, charging, shizuku, apks, data, obb;
-  private CheckBox allApps;
+  private CheckBox wifi, charging, shizuku;
+  private CheckBox calendar;
+  private EditText scheduleTimes, scheduleZone;
+  private LinearLayout calendarOptions;
+  private final CheckBox[] scheduleDays = new CheckBox[7];
   private final CheckBox[] exportOptions = new CheckBox[DeviceExport.CATEGORIES.size()];
   private final java.util.concurrent.ExecutorService executor =
       java.util.concurrent.Executors.newSingleThreadExecutor();
-  private TextView appSummary;
-  private Button chooseApps;
-  private boolean choosingApps;
+  private final AppSelectionCard[] appCards = new AppSelectionCard[3];
   private LinearLayout folders, shizukuFolders;
   private Button addShizukuFolder;
   private Button connection, encryption;
@@ -39,6 +40,11 @@ public final class JobEditorActivity extends Activity {
         job.shizukuFolders =
             new JSONArray(state.getString("shizuku_folders", job.shizukuFolders.toString()));
         job.packages = new JSONArray(state.getString("packages", job.packages.toString()));
+        job.appSelections =
+            new JSONObject(state.getString("app_selections", job.appSelections.toString()));
+        job.apks = state.getBoolean("apks", job.apks);
+        job.data = state.getBoolean("data", job.data);
+        job.obb = state.getBoolean("obb", job.obb);
       }
       LinearLayout root = Ui.screen(this, id == null ? "New backup job" : "Edit backup job"),
           page = Ui.scroll(root);
@@ -81,12 +87,30 @@ public final class JobEditorActivity extends Activity {
       hours =
           Ui.input(options, "Run every … hours · 0 means manual", String.valueOf(job.hours), false);
       hours.setInputType(InputType.TYPE_CLASS_NUMBER);
+      calendar = Ui.check(options, "Use specific times and weekdays", job.calendar);
+      calendarOptions = Ui.column(this);
+      options.addView(calendarOptions);
+      scheduleTimes =
+          Ui.input(
+              calendarOptions, "Daily times · 24-hour, comma-separated", job.scheduleTimes, false);
+      String[] weekdays = {
+        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
+      };
+      for (int i = 0; i < weekdays.length; i++)
+        scheduleDays[i] =
+            Ui.check(calendarOptions, weekdays[i], (job.scheduleDays & (1 << i)) != 0);
+      scheduleZone =
+          Ui.input(
+              calendarOptions, "Time zone · blank follows the device", job.scheduleZone, false);
+      calendar.setOnCheckedChangeListener((button, checked) -> updateScheduleControls());
+      updateScheduleControls();
       wifi = Ui.check(options, "Wi-Fi only", job.wifi);
       charging = Ui.check(options, "Require charging for scheduled runs", job.charging);
       Ui.hint(
           options,
-          "Android chooses the exact time. Each job has its own schedule; transfers run one at a"
-              + " time.");
+          "Scheduled times are earliest start times; Android may defer them until charging and"
+              + " Wi-Fi requirements are met. Each job keeps one pending occurrence and transfers"
+              + " run one at a time. Local times adjust for daylight saving.");
       LinearLayout extra = Ui.card(page);
       Ui.text(extra, "Optional Shizuku sources", 18, Ui.TEXT);
       shizuku = Ui.check(extra, "Enable Shizuku for this job", job.shizuku);
@@ -105,18 +129,12 @@ public final class JobEditorActivity extends Activity {
               false,
               v -> new ShizukuFolderPicker(this, executor, path -> nameFolder(null, path)).show());
       renderShizukuFolders();
-      apks = Ui.check(extra, "Installed application APKs", job.apks);
-      data = Ui.check(extra, "Android/data", job.data);
-      obb = Ui.check(extra, "Android/obb", job.obb);
-      allApps = Ui.check(extra, "All apps and external app folders", job.allApps);
-      Ui.hint(
-          extra,
-          "All apps includes third-party APKs and all external app folders. Choose apps to limit"
-              + " these three sources together.");
-      appSummary = Ui.hint(extra, "Selected apps: " + job.packages.length());
-      chooseApps = Ui.button(extra, "Choose apps", false, v -> chooseApps());
-      updateShizukuControls();
+      appCards[0] =
+          new AppSelectionCard(this, page, job, "apks", "Installed application APKs", executor);
+      appCards[1] = new AppSelectionCard(this, page, job, "data", "Android/data", executor);
+      appCards[2] = new AppSelectionCard(this, page, job, "obb", "Android/obb", executor);
       shizuku.setOnCheckedChangeListener((button, checked) -> updateShizukuControls());
+      extra = Ui.card(page);
       Ui.text(extra, "Device data exports", 18, Ui.TEXT);
       for (int i = 0; i < exportOptions.length; i++) {
         String category = DeviceExport.CATEGORIES.get(i);
@@ -166,13 +184,15 @@ public final class JobEditorActivity extends Activity {
         namespace.setText(state.getString("namespace", job.namespace));
         backupID.setText(state.getString("backup_id", job.backupID(this)));
         hours.setText(state.getString("hours", String.valueOf(job.hours)));
+        calendar.setChecked(state.getBoolean("calendar", job.calendar));
+        scheduleTimes.setText(state.getString("schedule_times", job.scheduleTimes));
+        scheduleZone.setText(state.getString("schedule_zone", job.scheduleZone));
+        for (int i = 0; i < scheduleDays.length; i++)
+          scheduleDays[i].setChecked(
+              (state.getInt("schedule_days", job.scheduleDays) & (1 << i)) != 0);
         wifi.setChecked(state.getBoolean("wifi", job.wifi));
         charging.setChecked(state.getBoolean("charging", job.charging));
         shizuku.setChecked(state.getBoolean("shizuku", job.shizuku));
-        apks.setChecked(state.getBoolean("apks", job.apks));
-        data.setChecked(state.getBoolean("data", job.data));
-        obb.setChecked(state.getBoolean("obb", job.obb));
-        allApps.setChecked(state.getBoolean("all_apps", job.allApps));
         for (int i = 0; i < exportOptions.length; i++)
           exportOptions[i].setChecked(
               state.getBoolean("export_" + i, exportOptions[i].isChecked()));
@@ -185,9 +205,7 @@ public final class JobEditorActivity extends Activity {
 
   private void updateShizukuControls() {
     boolean enabled = shizuku.isChecked();
-    for (android.view.View option : new android.view.View[] {apks, data, obb, allApps, appSummary})
-      shizukuControl(option, enabled);
-    shizukuControl(chooseApps, enabled && !choosingApps);
+    for (AppSelectionCard card : appCards) if (card != null) card.setEnabled(enabled);
     shizukuControl(addShizukuFolder, enabled);
     if (shizukuFolders != null) {
       for (int i = 0; i < shizukuFolders.getChildCount(); i++) {
@@ -200,6 +218,15 @@ public final class JobEditorActivity extends Activity {
       }
     }
     for (CheckBox option : exportOptions) shizukuControl(option, enabled);
+  }
+
+  private void updateScheduleControls() {
+    boolean enabled = calendar.isChecked();
+    calendarOptions.setVisibility(enabled ? android.view.View.VISIBLE : android.view.View.GONE);
+    shizukuControl(hours, !enabled);
+    shizukuControl(scheduleTimes, enabled);
+    shizukuControl(scheduleZone, enabled);
+    for (CheckBox day : scheduleDays) shizukuControl(day, enabled);
   }
 
   private static void shizukuControl(android.view.View option, boolean enabled) {
@@ -253,67 +280,6 @@ public final class JobEditorActivity extends Activity {
     } catch (Exception e) {
       error(e);
     }
-  }
-
-  private void chooseApps() {
-    if (choosingApps) return;
-    choosingApps = true;
-    updateShizukuControls();
-    executor.execute(
-        () -> {
-          try (ShizukuBridge bridge = new ShizukuBridge(this)) {
-            JSONArray inventory = new JSONArray(bridge.files().apps());
-            if (inventory.length() > 500)
-              throw new Exception("App picker supports at most 500 apps");
-            String[] packages = new String[inventory.length()],
-                labels = new String[inventory.length()];
-            boolean[] checked = new boolean[inventory.length()];
-            for (int i = 0; i < packages.length; i++) {
-              packages[i] = inventory.getString(i);
-              labels[i] = packages[i];
-              try {
-                android.content.pm.PackageManager pm = getPackageManager();
-                labels[i] =
-                    pm.getApplicationLabel(pm.getApplicationInfo(packages[i], 0))
-                        + "\n"
-                        + packages[i];
-              } catch (Exception ignored) {
-              }
-              for (int j = 0; j < job.packages.length(); j++)
-                if (packages[i].equals(job.packages.getString(j))) checked[i] = true;
-            }
-            runOnUiThread(
-                () -> {
-                  if (isDestroyed() || isFinishing()) return;
-                  choosingApps = false;
-                  updateShizukuControls();
-                  new AlertDialog.Builder(this)
-                      .setTitle("Choose apps and app folders")
-                      .setMultiChoiceItems(
-                          labels, checked, (dialog, which, value) -> checked[which] = value)
-                      .setNegativeButton("Cancel", null)
-                      .setPositiveButton(
-                          "Use selected",
-                          (dialog, which) -> {
-                            job.packages = new JSONArray();
-                            for (int i = 0; i < checked.length; i++)
-                              if (checked[i]) job.packages.put(packages[i]);
-                            allApps.setChecked(false);
-                            appSummary.setText("Selected apps: " + job.packages.length());
-                          })
-                      .show();
-                });
-          } catch (Exception e) {
-            runOnUiThread(
-                () -> {
-                  if (!isDestroyed() && !isFinishing()) {
-                    choosingApps = false;
-                    updateShizukuControls();
-                    error(e);
-                  }
-                });
-          }
-        });
   }
 
   @Override
@@ -513,13 +479,16 @@ public final class JobEditorActivity extends Activity {
       job.backupID = backupID.getText().toString();
       if (job.backupID.trim().isEmpty()) throw new Exception("Enter a Backup ID");
       job.hours = Integer.parseInt(hours.getText().toString());
+      job.calendar = calendar.isChecked();
+      job.scheduleTimes = scheduleTimes.getText().toString().trim();
+      job.scheduleZone = scheduleZone.getText().toString().trim();
+      job.scheduleDays = 0;
+      for (int i = 0; i < scheduleDays.length; i++)
+        if (scheduleDays[i].isChecked()) job.scheduleDays |= 1 << i;
       job.wifi = wifi.isChecked();
       job.charging = charging.isChecked();
       job.shizuku = shizuku.isChecked();
-      job.apks = apks.isChecked();
-      job.data = data.isChecked();
-      job.obb = obb.isChecked();
-      job.allApps = allApps.isChecked();
+      for (AppSelectionCard card : appCards) card.save();
       job.exports = new JSONArray();
       for (int i = 0; i < exportOptions.length; i++)
         if (exportOptions[i].isChecked()) job.exports.put(DeviceExport.CATEGORIES.get(i));
@@ -554,13 +523,23 @@ public final class JobEditorActivity extends Activity {
     out.putString("connection_id", job.connectionID);
     out.putString("encryption_key_id", job.encryptionKeyID);
     out.putString("hours", hours.getText().toString());
+    out.putBoolean("calendar", calendar.isChecked());
+    out.putString("schedule_times", scheduleTimes.getText().toString());
+    out.putString("schedule_zone", scheduleZone.getText().toString());
+    int days = 0;
+    for (int i = 0; i < scheduleDays.length; i++) if (scheduleDays[i].isChecked()) days |= 1 << i;
+    out.putInt("schedule_days", days);
     out.putBoolean("wifi", wifi.isChecked());
     out.putBoolean("charging", charging.isChecked());
     out.putBoolean("shizuku", shizuku.isChecked());
-    out.putBoolean("apks", apks.isChecked());
-    out.putBoolean("data", data.isChecked());
-    out.putBoolean("obb", obb.isChecked());
-    out.putBoolean("all_apps", allApps.isChecked());
+    out.putBoolean("apks", job.apks);
+    out.putBoolean("data", job.data);
+    out.putBoolean("obb", job.obb);
+    try {
+      for (AppSelectionCard card : appCards) if (card != null) card.save();
+      out.putString("app_selections", job.appSelections.toString());
+    } catch (Exception ignored) {
+    }
     out.putString("packages", job.packages.toString());
     for (int i = 0; i < exportOptions.length; i++)
       out.putBoolean("export_" + i, exportOptions[i].isChecked());

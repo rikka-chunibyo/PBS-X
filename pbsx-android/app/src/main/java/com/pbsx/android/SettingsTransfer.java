@@ -100,6 +100,8 @@ final class SettingsTransfer {
       histories.add(job);
     }
     KeyProfiles.validateHistories(vault, histories);
+    if (jobs.has("schedule_state"))
+      ScheduleState.validate(stringPreference(jobs, "schedule_state", "{}"));
     if (jobs.has("next_scheduler_id")) {
       JSONObject next = jobs.getJSONObject("next_scheduler_id");
       if (!next.getString("type").equals("int"))

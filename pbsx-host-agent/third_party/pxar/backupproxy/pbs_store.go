@@ -251,17 +251,18 @@ func (ps *PBSStore) StartSession(ctx context.Context, config BackupConfig) (Back
 
 // pbsSession implements BackupSession for PBS.
 type pbsSession struct {
-	mu          sync.Mutex
-	progressMu  sync.Mutex
-	progress    UploadProgress
-	proto       pbsBackupProtocol
-	store       *PBSStore
-	knownChunks map[[32]byte]bool
-	files       []datastore.BackupFileInfo
-	config      BackupConfig
-	chunkCfg    buzhash.Config
-	compress    bool
-	closed      bool
+	mu             sync.Mutex
+	progressMu     sync.Mutex
+	progress       UploadProgress
+	proto          pbsBackupProtocol
+	store          *PBSStore
+	knownChunks    map[[32]byte]bool
+	previousLoaded map[string]bool
+	files          []datastore.BackupFileInfo
+	config         BackupConfig
+	chunkCfg       buzhash.Config
+	compress       bool
+	closed         bool
 }
 
 // reportProgress combines concurrent split streams and successive archives.
@@ -297,31 +298,21 @@ func (s *pbsSession) UploadArchive(ctx context.Context, name string, data io.Rea
 	s.mu.Lock()
 	if s.knownChunks == nil {
 		s.knownChunks = make(map[[32]byte]bool)
-
-		if s.config.PreviousBackup != nil && !s.config.IgnoreNewerPrevious {
-			prev := s.config.PreviousBackup
-
-			// Register previous chunks server-side via the backup protocol.
-			if prevData, err := s.proto.downloadPrevious(name); err == nil {
-				if idx, err := datastore.ParseDynamicIndex(prevData); err == nil {
-					for i := 0; i < idx.Count(); i++ {
-						if info, ok := idx.ChunkInfo(i); ok {
-							s.knownChunks[info.Digest] = true
-						}
-					}
-				}
-			} else {
-				// Fallback: use reader protocol if backup protocol's previous
-				// endpoint is unavailable (e.g., first backup in new namespace).
-				// In this case all chunks will be uploaded fresh.
-				data, err := s.store.ReadPreviousArchive(ctx, prev.BackupType, prev.BackupID, prev.BackupTime, prev.Namespace, name)
-				if err == nil {
-					if idx, err := datastore.ParseDynamicIndex(data); err == nil {
-						for i := 0; i < idx.Count(); i++ {
-							if info, ok := idx.ChunkInfo(i); ok {
-								s.knownChunks[info.Digest] = true
-							}
-						}
+	}
+	if s.previousLoaded == nil {
+		s.previousLoaded = make(map[string]bool)
+	}
+	if !s.previousLoaded[name] && s.config.PreviousBackup != nil && !s.config.IgnoreNewerPrevious {
+		s.previousLoaded[name] = true
+		// Every split archive has its own index. Loading just the first one
+		// makes reuse depend on whether metadata or payload wins the race.
+		// Only trust chunks registered by this backup session's previous
+		// endpoint; a reader download alone does not register them for append.
+		if raw, err := s.proto.downloadPrevious(name); err == nil {
+			if idx, err := datastore.ParseDynamicIndex(raw); err == nil {
+				for i := 0; i < idx.Count(); i++ {
+					if info, ok := idx.ChunkInfo(i); ok {
+						s.knownChunks[info.Digest] = true
 					}
 				}
 			}

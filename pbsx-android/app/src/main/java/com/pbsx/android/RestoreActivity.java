@@ -572,18 +572,39 @@ public final class RestoreActivity extends Activity {
         .setTitle("Restore options")
         .setView(Ui.wrapped(form))
         .setNegativeButton("Cancel", null)
-        .setPositiveButton(
-            "Choose destination",
-            (d, w) -> {
-              startActivityForResult(
-                  new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-                      .addFlags(
-                          Intent.FLAG_GRANT_READ_URI_PERMISSION
-                              | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                              | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-                              | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION),
-                  101);
+        .setPositiveButton("Choose destination", (d, w) -> chooseDestination())
+        .show();
+  }
+
+  private void chooseDestination() {
+    new AlertDialog.Builder(this)
+        .setTitle("Restore destination")
+        .setItems(
+            new String[] {"Android folder picker", "Folder via Shizuku"},
+            (dialog, index) -> {
+              if (index == 0) {
+                startActivityForResult(
+                    new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                        .addFlags(
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                                | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION),
+                    101);
+              } else {
+                new ShizukuFolderPicker(
+                        this,
+                        executor,
+                        path ->
+                            review(
+                                Uri.fromParts("pbsx-shizuku", path, null),
+                                (path.equals(".") ? "Internal shared storage" : "/" + path)
+                                    + " via Shizuku"),
+                        true)
+                    .show();
+              }
             })
+        .setNegativeButton("Cancel", null)
         .show();
   }
 

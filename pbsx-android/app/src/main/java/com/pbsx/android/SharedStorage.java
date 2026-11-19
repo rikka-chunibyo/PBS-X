@@ -8,6 +8,10 @@ import java.util.Comparator;
 /** Profile-relative shared folders, never app-private storage or arbitrary filesystem paths. */
 final class SharedStorage {
   static void validate(String path, boolean root) {
+    validate(path, root, false);
+  }
+
+  private static void validate(String path, boolean root, boolean restore) {
     if (root && path.equals(".")) return;
     if (path.isEmpty() || path.length() > 4096 || path.indexOf('\\') >= 0)
       throw new IllegalArgumentException("Choose a shared-storage folder");
@@ -18,13 +22,22 @@ final class SharedStorage {
         if (Character.isISOControl(part.charAt(i)))
           throw new IllegalArgumentException("Invalid shared-storage folder name");
     }
-    if (path.equals("Android") || path.startsWith("Android/"))
+    if (!restore && (path.equals("Android") || path.startsWith("Android/")))
       throw new IllegalArgumentException(
           "Use the Android/data and Android/obb options for app folders");
   }
 
   static File resolve(File root, String path, boolean browseRoot) throws Exception {
-    validate(path, browseRoot);
+    return resolve(root, path, browseRoot, false);
+  }
+
+  static File restoreRoot(File root, String path) throws Exception {
+    return resolve(root, path, true, true);
+  }
+
+  private static File resolve(File root, String path, boolean browseRoot, boolean restore)
+      throws Exception {
+    validate(path, browseRoot, restore);
     File base = root.getCanonicalFile();
     File file = base;
     if (!path.equals("."))
@@ -42,11 +55,15 @@ final class SharedStorage {
   }
 
   static File[] directories(File root, String path) throws Exception {
-    File[] children = resolve(root, path, true).listFiles();
+    return directories(root, path, false);
+  }
+
+  static File[] directories(File root, String path, boolean restore) throws Exception {
+    File[] children = resolve(root, path, true, restore).listFiles();
     if (children == null) throw new IllegalArgumentException("Shizuku cannot list this folder");
     ArrayList<File> result = new ArrayList<>();
     for (File child : children) {
-      if (path.equals(".") && child.getName().equals("Android")) continue;
+      if (!restore && path.equals(".") && child.getName().equals("Android")) continue;
       if (child.isDirectory() && !Files.isSymbolicLink(child.toPath())) result.add(child);
     }
     result.sort(Comparator.comparing(File::getName, String.CASE_INSENSITIVE_ORDER));

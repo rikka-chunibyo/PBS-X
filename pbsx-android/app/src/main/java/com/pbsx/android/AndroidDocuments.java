@@ -3,22 +3,21 @@ package com.pbsx.android;
 import android.content.Context;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
-import com.pbsx.core.mobilecore.Documents;
 import java.io.File;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-final class AndroidDocuments implements Documents, AutoCloseable {
+final class AndroidDocuments implements RestoreOutput {
   private final Map<String, DocumentTree> trees = new LinkedHashMap<>();
   private final Map<String, String> privileged = new LinkedHashMap<>();
   private final ShizukuBridge bridge;
   private final DocumentTree output;
   private final ExportCache exports;
-  private final java.util.Set<String> selected = new java.util.HashSet<>();
+  private final Map<String, java.util.Set<String>> selected = new LinkedHashMap<>();
   private final java.util.Set<String> sharedFolders = new java.util.HashSet<>();
-  private boolean allApps = true;
+  private final java.util.Set<String> allApps = new java.util.HashSet<>();
 
   AndroidDocuments(
       Context context,
@@ -65,8 +64,15 @@ final class AndroidDocuments implements Documents, AutoCloseable {
       throws Exception {
     output = null;
     job.validate(true);
-    allApps = job.allApps;
-    for (int i = 0; i < job.packages.length(); i++) selected.add(job.packages.getString(i));
+    String[] kinds = {"apks", "data", "obb"},
+        labels = {"Installed-APKs", "Android-data", "Android-obb"};
+    for (int i = 0; i < kinds.length; i++) {
+      if (job.appAll(kinds[i])) allApps.add(labels[i]);
+      java.util.Set<String> apps = new java.util.HashSet<>();
+      JSONArray packages = job.appPackages(kinds[i]);
+      for (int j = 0; j < packages.length(); j++) apps.add(packages.getString(j));
+      selected.put(labels[i], apps);
+    }
     ShizukuBridge opened = null;
     ExportCache cache = null;
     try {
@@ -95,8 +101,8 @@ final class AndroidDocuments implements Documents, AutoCloseable {
           sharedFolders.add(label);
         }
         if (job.apks) privileged.put("Installed-APKs", "/@apps");
-        if (job.data) privileged.put("Android-data", "/storage/emulated/0/Android/data");
-        if (job.obb) privileged.put("Android-obb", "/storage/emulated/0/Android/obb");
+        if (job.data) privileged.put("Android-data", "/@data");
+        if (job.obb) privileged.put("Android-obb", "/@obb");
         if (job.exports.length() > 0) {
           cache = new ExportCache(context);
           cache.prepare(opened.files(), job.exports, cancellation, progress);
@@ -135,9 +141,12 @@ final class AndroidDocuments implements Documents, AutoCloseable {
 
   private String privilegedPath(String path) {
     String base = privileged.get(label(path));
-    if (!allApps && !sharedFolders.contains(label(path)) && !child(path).equals(".")) {
+    if (!allApps.contains(label(path))
+        && !sharedFolders.contains(label(path))
+        && !child(path).equals(".")) {
       String pkg = child(path).split("/", 2)[0];
-      if (!selected.contains(pkg)) throw new SecurityException("App is not selected for this job");
+      if (!selected.get(label(path)).contains(pkg))
+        throw new SecurityException("App is not selected for this source");
     }
     return child(path).equals(".") ? base : base + "/" + child(path);
   }
@@ -203,18 +212,22 @@ final class AndroidDocuments implements Documents, AutoCloseable {
       return out.toString();
     }
     if (privileged.containsKey(label(path))) {
-      if (!allApps && child(path).equals(".") && label(path).equals("Installed-APKs")) {
+      if (!allApps.contains(label(path))
+          && child(path).equals(".")
+          && label(path).equals("Installed-APKs")) {
         JSONArray out = new JSONArray();
-        for (String pkg : new java.util.TreeSet<>(selected))
+        for (String pkg : new java.util.TreeSet<>(selected.get(label(path))))
           out.put(new JSONObject(bridge.files().stat("/@apps/" + pkg)).put("name", pkg));
         return out.toString();
       }
       JSONArray all = new JSONArray(bridge.files().list(privilegedPath(path)));
-      if (allApps || sharedFolders.contains(label(path)) || !child(path).equals("."))
-        return all.toString();
+      if (allApps.contains(label(path))
+          || sharedFolders.contains(label(path))
+          || !child(path).equals(".")) return all.toString();
       JSONArray filtered = new JSONArray();
       for (int i = 0; i < all.length(); i++)
-        if (selected.contains(all.getJSONObject(i).getString("name"))) filtered.put(all.get(i));
+        if (selected.get(label(path)).contains(all.getJSONObject(i).getString("name")))
+          filtered.put(all.get(i));
       return filtered.toString();
     }
     return tree(path).list(child(path)).toString();

@@ -12,9 +12,13 @@ final class BackupJob {
   JSONArray sources = new JSONArray();
   JSONArray shizukuFolders = new JSONArray();
   int hours = 0, schedulerId = 0;
+  boolean calendar = false;
+  int scheduleDays = 127;
+  String scheduleTimes = "02:00", scheduleZone = "";
   boolean wifi = true, charging = true, shizuku = false, apks = false, data = false, obb = false;
   boolean allApps = false;
   JSONArray packages = new JSONArray(), exports = new JSONArray();
+  JSONObject appSelections = new JSONObject();
 
   JSONObject json() throws Exception {
     return new JSONObject()
@@ -28,6 +32,10 @@ final class BackupJob {
         .put("sources", sources)
         .put("shizuku_folders", shizukuFolders)
         .put("hours", hours)
+        .put("calendar", calendar)
+        .put("schedule_days", scheduleDays)
+        .put("schedule_times", scheduleTimes)
+        .put("schedule_zone", scheduleZone)
         .put("scheduler_id", schedulerId)
         .put("wifi", wifi)
         .put("charging", charging)
@@ -37,6 +45,7 @@ final class BackupJob {
         .put("obb", obb)
         .put("all_apps", allApps)
         .put("packages", packages)
+        .put("app_selections", appSelections)
         .put("exports", exports);
   }
 
@@ -66,6 +75,17 @@ final class BackupJob {
                 ? "[]"
                 : value.getJSONArray("shizuku_folders").toString());
     j.hours = value.optInt("hours", 0);
+    if (value.has("calendar") && !(value.opt("calendar") instanceof Boolean))
+      throw new Exception("Invalid calendar schedule mode");
+    if (value.has("schedule_days") && !(value.opt("schedule_days") instanceof Integer))
+      throw new Exception("Invalid schedule weekdays");
+    for (String field : new String[] {"schedule_times", "schedule_zone"})
+      if (value.has(field) && !(value.opt(field) instanceof String))
+        throw new Exception("Invalid saved schedule");
+    j.calendar = value.optBoolean("calendar", false);
+    j.scheduleDays = value.optInt("schedule_days", 127);
+    j.scheduleTimes = value.optString("schedule_times", "02:00");
+    j.scheduleZone = value.optString("schedule_zone", "");
     j.schedulerId = value.optInt("scheduler_id", 0);
     j.wifi = value.optBoolean("wifi", true);
     j.charging = value.optBoolean("charging", true);
@@ -84,6 +104,13 @@ final class BackupJob {
             value.optJSONArray("exports") == null
                 ? "[]"
                 : value.getJSONArray("exports").toString());
+    if (value.has("app_selections") && !(value.opt("app_selections") instanceof JSONObject))
+      throw new Exception("Invalid per-source app selection");
+    j.appSelections =
+        new JSONObject(
+            value.optJSONObject("app_selections") == null
+                ? "{}"
+                : value.getJSONObject("app_selections").toString());
     j.validate(false);
     return j;
   }
@@ -105,6 +132,12 @@ final class BackupJob {
       throw new Exception("Enter a valid datastore name");
     if (!namespace.isEmpty()) Paths.parts(namespace);
     if (hours < 0 || hours > 720) throw new Exception("Schedule interval must be 0–720 hours");
+    if (scheduleTimes.length() > 100 || scheduleZone.length() > 100)
+      throw new Exception("Invalid saved schedule");
+    CalendarSchedule.times(scheduleTimes);
+    if (!scheduleZone.isEmpty()) java.time.ZoneId.of(scheduleZone);
+    if (scheduleDays < 0 || scheduleDays > 127 || (calendar && scheduleDays == 0))
+      throw new Exception("Choose at least one schedule weekday");
     java.util.HashSet<String> selectedApps = new java.util.HashSet<>(),
         selectedExports = new java.util.HashSet<>();
     if (packages.length() > 500) throw new Exception("Select at most 500 apps");
@@ -119,8 +152,31 @@ final class BackupJob {
       if (!DeviceExport.CATEGORIES.contains(category) || !selectedExports.add(category))
         throw new Exception("Invalid or duplicate device export");
     }
-    if (runnable && shizuku && (apks || data || obb) && !allApps && packages.length() == 0)
-      throw new Exception("Choose apps or enable All apps");
+    java.util.Iterator<String> appKinds = appSelections.keys();
+    while (appKinds.hasNext()) {
+      String kind = appKinds.next();
+      if (!java.util.Arrays.asList("apks", "data", "obb").contains(kind))
+        throw new Exception("Invalid app source selection");
+      JSONObject selection = appSelections.getJSONObject(kind);
+      if (selection.length() != 2
+          || !(selection.opt("all") instanceof Boolean)
+          || !(selection.opt("packages") instanceof JSONArray))
+        throw new Exception("Invalid app source selection");
+      JSONArray apps = selection.getJSONArray("packages");
+      java.util.HashSet<String> unique = new java.util.HashSet<>();
+      if (apps.length() > 500) throw new Exception("Select at most 500 apps per source");
+      for (int i = 0; i < apps.length(); i++) {
+        String pkg = apps.getString(i);
+        if (pkg.length() > 255
+            || !pkg.matches("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")
+            || !unique.add(pkg)) throw new Exception("Invalid or duplicate app selection");
+      }
+    }
+    for (String kind : new String[] {"apks", "data", "obb"}) {
+      boolean enabled = kind.equals("apks") ? apks : kind.equals("data") ? data : obb;
+      if (runnable && shizuku && enabled && !appAll(kind) && appPackages(kind).length() == 0)
+        throw new Exception("Choose apps for " + kind + " or enable its All apps option");
+    }
     java.util.HashSet<String> labels = new java.util.HashSet<>(), uris = new java.util.HashSet<>();
     if (shizukuFolders.length() > 100) throw new Exception("Select at most 100 Shizuku folders");
     java.util.HashSet<String> sharedPaths = new java.util.HashSet<>();
@@ -193,7 +249,47 @@ final class BackupJob {
   }
 
   String schedule() {
-    return hours == 0 ? "Manual" : "Every " + hours + "h" + (charging ? " · charging" : "");
+    if (!scheduled()) return "Manual";
+    return (calendar ? scheduleTimes + " · " + weekdays() : "Every " + hours + "h")
+        + (charging ? " · charging" : "")
+        + (calendar && !scheduleZone.isEmpty() ? " · " + scheduleZone : "");
+  }
+
+  boolean scheduled() {
+    return calendar || hours > 0;
+  }
+
+  boolean appAll(String kind) throws Exception {
+    return appSelections.has(kind) ? appSelections.getJSONObject(kind).getBoolean("all") : allApps;
+  }
+
+  JSONArray appPackages(String kind) throws Exception {
+    return appSelections.has(kind)
+        ? appSelections.getJSONObject(kind).getJSONArray("packages")
+        : packages;
+  }
+
+  void appSelection(String kind, boolean all, JSONArray apps) throws Exception {
+    appSelections.put(
+        kind, new JSONObject().put("all", all).put("packages", new JSONArray(apps.toString())));
+  }
+
+  String weekdays() {
+    if (scheduleDays == 127) return "Every day";
+    StringBuilder out = new StringBuilder();
+    String[] labels = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+    for (int i = 0; i < labels.length; i++)
+      if ((scheduleDays & (1 << i)) != 0) {
+        if (out.length() > 0) out.append(", ");
+        out.append(labels[i]);
+      }
+    return out.toString();
+  }
+
+  long nextDue(long after) {
+    return calendar
+        ? CalendarSchedule.next(after, scheduleZone, scheduleDays, scheduleTimes)
+        : Math.addExact(after, hours * 3600000L);
   }
 
   int sourceCount() {

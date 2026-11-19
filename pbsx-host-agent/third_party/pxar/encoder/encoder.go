@@ -29,6 +29,7 @@ type Encoder struct {
 	gbTail     []format.GoodbyeItem
 	version    format.FormatVersion
 	finished   bool
+	activeFile *FileWriter
 
 	hdrScratch  [format.HeaderSize]byte
 	statScratch [40]byte
@@ -269,8 +270,8 @@ func (e *Encoder) encodeFilename(name string) error {
 
 // AddFile adds a complete file to the archive.
 func (e *Encoder) AddFile(metadata *pxar.Metadata, name string, content []byte) (LinkOffset, error) {
-	if e.err != nil {
-		return 0, e.err
+	if err := e.ready(); err != nil {
+		return 0, err
 	}
 	fileOffset := e.currentState().writePosition
 
@@ -341,6 +342,9 @@ func (e *Encoder) CreateFile(metadata *pxar.Metadata, name string, size uint64) 
 	if e.err != nil {
 		return nil, e.err
 	}
+	if e.finished || e.activeFile != nil {
+		return nil, fmt.Errorf("encoder is finished or a file is still open")
+	}
 	fileOffset := e.currentState().writePosition
 
 	if err := e.encodeFilename(name); err != nil {
@@ -382,12 +386,14 @@ func (e *Encoder) CreateFile(metadata *pxar.Metadata, name string, size uint64) 
 		}
 	}
 
-	return &FileWriter{
+	fw := &FileWriter{
 		enc:         e,
 		goodbyeItem: format.GoodbyeItem{Hash: format.HashFilename(unsafe.Slice(unsafe.StringData(name), len(name))), Offset: fileOffset},
 		remaining:   size,
 		fileSize:    size,
-	}, nil
+	}
+	e.activeFile = fw
+	return fw, nil
 }
 
 // FileWriter writes file content to a pxar archive.
@@ -405,6 +411,12 @@ func (fw *FileWriter) FileOffset() LinkOffset {
 
 // Write writes data to the file.
 func (fw *FileWriter) Write(data []byte) (int, error) {
+	if fw.enc.err != nil {
+		return 0, fw.enc.err
+	}
+	if fw.enc.activeFile != fw {
+		return 0, fmt.Errorf("file writer is closed")
+	}
 	if uint64(len(data)) > fw.remaining {
 		return 0, fmt.Errorf("attempted to write more than allocated")
 	}
@@ -423,7 +435,11 @@ func (fw *FileWriter) Write(data []byte) (int, error) {
 			s.writePosition += uint64(n)
 		}
 	}
+	if err == nil && n != len(data) {
+		err = io.ErrShortWrite
+	}
 	if err != nil {
+		fw.enc.err = err
 		return n, err
 	}
 	fw.remaining -= uint64(n)
@@ -432,36 +448,18 @@ func (fw *FileWriter) Write(data []byte) (int, error) {
 
 // WriteAll writes all data to the file.
 func (fw *FileWriter) WriteAll(data []byte) error {
-	if uint64(len(data)) > fw.remaining {
-		return fmt.Errorf("attempted to write more than allocated")
-	}
-	var n int
-	var err error
-	if fw.enc.payloadOut != nil {
-		n, err = fw.enc.payloadOut.Write(data)
-		if err == nil {
-			s := fw.enc.currentState()
-			s.payloadWritePos += uint64(n)
-		}
-	} else {
-		n, err = fw.enc.output.Write(data)
-		if err == nil {
-			s := fw.enc.currentState()
-			s.writePosition += uint64(n)
-		}
-	}
-	if err != nil {
-		return err
-	}
-	if n != len(data) {
-		return io.ErrShortWrite
-	}
-	fw.remaining -= uint64(len(data))
-	return nil
+	_, err := fw.Write(data)
+	return err
 }
 
 // Close finalizes the file entry.
 func (fw *FileWriter) Close() error {
+	if fw.enc.err != nil {
+		return fw.enc.err
+	}
+	if fw.enc.activeFile != fw {
+		return fmt.Errorf("file writer is closed")
+	}
 	if fw.remaining != 0 {
 		return fmt.Errorf("incomplete file: %d bytes remaining", fw.remaining)
 	}
@@ -477,13 +475,14 @@ func (fw *FileWriter) Close() error {
 		fw.goodbyeItem.Size = metaSize
 	}
 	s.items = append(s.items, fw.goodbyeItem)
+	fw.enc.activeFile = nil
 	return nil
 }
 
 // AddSymlink adds a symbolic link.
 func (e *Encoder) AddSymlink(metadata *pxar.Metadata, name string, target string) error {
-	if e.err != nil {
-		return e.err
+	if err := e.ready(); err != nil {
+		return err
 	}
 	fileOffset := e.currentState().writePosition
 
@@ -521,8 +520,8 @@ func (e *Encoder) AddSymlink(metadata *pxar.Metadata, name string, target string
 
 // AddHardlink adds a hard link.
 func (e *Encoder) AddHardlink(name string, target string, targetOffset LinkOffset) error {
-	if e.err != nil {
-		return e.err
+	if err := e.ready(); err != nil {
+		return err
 	}
 	currentOffset := e.currentState().writePosition
 	if currentOffset <= uint64(targetOffset) {
@@ -567,8 +566,8 @@ func (e *Encoder) AddHardlink(name string, target string, targetOffset LinkOffse
 
 // AddDevice adds a device node.
 func (e *Encoder) AddDevice(metadata *pxar.Metadata, name string, device format.Device) error {
-	if e.err != nil {
-		return e.err
+	if err := e.ready(); err != nil {
+		return err
 	}
 	if !metadata.IsDevice() {
 		return fmt.Errorf("device metadata must have device mode flag")
@@ -603,8 +602,8 @@ func (e *Encoder) AddDevice(metadata *pxar.Metadata, name string, device format.
 
 // AddFIFO adds a named pipe.
 func (e *Encoder) AddFIFO(metadata *pxar.Metadata, name string) error {
-	if e.err != nil {
-		return e.err
+	if err := e.ready(); err != nil {
+		return err
 	}
 	if !metadata.IsFIFO() {
 		return fmt.Errorf("FIFO metadata must have FIFO mode flag")
@@ -614,8 +613,8 @@ func (e *Encoder) AddFIFO(metadata *pxar.Metadata, name string) error {
 
 // AddSocket adds a named socket.
 func (e *Encoder) AddSocket(metadata *pxar.Metadata, name string) error {
-	if e.err != nil {
-		return e.err
+	if err := e.ready(); err != nil {
+		return err
 	}
 	if !metadata.IsSocket() {
 		return fmt.Errorf("socket metadata must have socket mode flag")
@@ -644,8 +643,8 @@ func (e *Encoder) addSimpleEntry(metadata *pxar.Metadata, name string) error {
 
 // CreateDirectory pushes a new directory onto the stack.
 func (e *Encoder) CreateDirectory(name string, metadata *pxar.Metadata) error {
-	if e.err != nil {
-		return e.err
+	if err := e.ready(); err != nil {
+		return err
 	}
 	if !metadata.IsDir() {
 		return fmt.Errorf("directory metadata must have directory mode flag")
@@ -688,6 +687,9 @@ func (e *Encoder) CreateDirectory(name string, metadata *pxar.Metadata) error {
 func (e *Encoder) Finish() error {
 	if e.err != nil {
 		return e.err
+	}
+	if e.activeFile != nil {
+		return fmt.Errorf("cannot finish directory with an open file")
 	}
 	if len(e.state) <= 1 {
 		return fmt.Errorf("no directory to finish")
@@ -786,8 +788,8 @@ func (e *Encoder) buildGoodbyeTable() []byte {
 // The caller is responsible for ensuring the original payload chunks are available
 // in the datastore (either via injection or dedup).
 func (e *Encoder) AddPayloadRef(metadata *pxar.Metadata, name string, fileSize uint64, payloadOffset uint64) (LinkOffset, error) {
-	if e.err != nil {
-		return 0, e.err
+	if err := e.ready(); err != nil {
+		return 0, err
 	}
 	if e.payloadOut == nil {
 		return 0, fmt.Errorf("AddPayloadRef requires split archive (v2 format)")
@@ -867,8 +869,8 @@ func (e *Encoder) PayloadPosition() uint64 {
 // This is used with AddPayloadRef to track the virtual payload size
 // without actually writing payload data.
 func (e *Encoder) Advance(size uint64) error {
-	if e.err != nil {
-		return e.err
+	if err := e.ready(); err != nil {
+		return err
 	}
 	e.currentState().payloadWritePos += size
 	return nil
@@ -878,6 +880,9 @@ func (e *Encoder) Advance(size uint64) error {
 func (e *Encoder) Close() error {
 	if e.finished {
 		return fmt.Errorf("encoder already finished")
+	}
+	if e.activeFile != nil {
+		return fmt.Errorf("cannot close archive with an open file")
 	}
 	if e.err != nil {
 		e.state = e.state[:0]

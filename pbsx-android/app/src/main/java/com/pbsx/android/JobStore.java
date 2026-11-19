@@ -82,6 +82,7 @@ final class JobStore {
     for (BackupJob j : all(c)) if (!j.id.equals(id)) out.put(j.json());
     if (!prefs(c).edit().putString("jobs", out.toString()).commit())
       throw new Exception("Could not remove job");
+    ScheduleState.remove(c, id);
   }
 
   static synchronized String start(Context c, BackupJob job, String kind) throws Exception {

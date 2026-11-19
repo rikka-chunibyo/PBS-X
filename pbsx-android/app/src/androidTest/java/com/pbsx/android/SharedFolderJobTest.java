@@ -11,6 +11,33 @@ import org.junit.runner.RunWith;
 @RunWith(AndroidJUnit4.class)
 public class SharedFolderJobTest {
   @Test
+  public void appFiltersAreIndependentAndLegacyChoicesArePreserved() throws Exception {
+    BackupJob job = new BackupJob();
+    job.shizuku = true;
+    job.apks = true;
+    job.data = true;
+    job.packages.put("com.example.legacy");
+    assertEquals("com.example.legacy", job.appPackages("data").getString(0));
+    job.appSelection("apks", false, new JSONArray().put("com.example.installer"));
+    job.appSelection("data", false, new JSONArray().put("com.example.files"));
+    job.validate(true);
+    BackupJob saved = BackupJob.from(job.json());
+    assertEquals("com.example.installer", saved.appPackages("apks").getString(0));
+    assertEquals("com.example.files", saved.appPackages("data").getString(0));
+    assertEquals("com.example.legacy", saved.appPackages("obb").getString(0));
+    saved.appSelection("apks", true, new JSONArray());
+    assertTrue(saved.appAll("apks"));
+    assertFalse(saved.appAll("data"));
+    assertEquals("com.example.files", saved.appPackages("data").getString(0));
+    saved.appSelections.put("unknown", new JSONObject());
+    try {
+      saved.validate(false);
+      fail("unknown app source accepted");
+    } catch (Exception expected) {
+    }
+  }
+
+  @Test
   public void folderOnlyJobsRoundTripWithoutSelectingAppsOrExports() throws Exception {
     BackupJob job = new BackupJob();
     assertEquals(0, job.shizukuFolders.length());

@@ -30,6 +30,35 @@ import rikka.shizuku.Shizuku;
 
 @RunWith(AndroidJUnit4.class)
 public final class DeviceExportTest {
+  @Test
+  public void inlineMmsTextDoesNotOpenStaleProviderFiles() throws Exception {
+    DeviceExport.Source source =
+        new DeviceExport.Source() {
+          public Cursor query(Uri uri, String[] projection, String sort) {
+            MatrixCursor c = new MatrixCursor(new String[] {"_id", "mid", "ct", "_data", "text"});
+            if (uri.toString().equals("content://mms/part")) {
+              c.addRow(new Object[] {1L, 5L, "application/smil", "/missing/smil", "<smil/>"});
+              c.addRow(new Object[] {2L, 5L, "text/plain", "/missing/text", "MMS text 猫"});
+            }
+            return c;
+          }
+
+          public InputStream open(Uri uri) {
+            throw new AssertionError("Inline MMS part was opened as a file: " + uri);
+          }
+
+          public void close() {}
+        };
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    DeviceExport.write("mms", source, bytes);
+    Map<String, byte[]> contents = unzip(bytes.toByteArray());
+    String parts = new String(contents.get("parts.jsonl"), StandardCharsets.UTF_8);
+    assertTrue(parts.contains("<smil/>"));
+    assertTrue(parts.contains("MMS text 猫"));
+    assertTrue(parts.contains("inline-text"));
+    assertFalse(parts.contains("pbsx_attachment"));
+  }
+
   private Context context() {
     Assume.assumeTrue(android.os.Build.VERSION.SDK_INT >= 31);
     Assume.assumeTrue(Shizuku.pingBinder());

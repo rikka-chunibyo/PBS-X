@@ -19,8 +19,15 @@ final class ShizukuFolderPicker {
   private String path = ".";
   private boolean closed;
   private int generation;
+  private final boolean restore;
 
   ShizukuFolderPicker(Activity activity, ExecutorService executor, Consumer<String> selected) {
+    this(activity, executor, selected, false);
+  }
+
+  ShizukuFolderPicker(
+      Activity activity, ExecutorService executor, Consumer<String> selected, boolean restore) {
+    this.restore = restore;
     this.activity = activity;
     this.executor = executor;
     this.selected = selected;
@@ -75,7 +82,9 @@ final class ShizukuFolderPicker {
           JSONArray folders = null;
           Exception failure = null;
           try (ShizukuBridge bridge = new ShizukuBridge(activity)) {
-            folders = new JSONArray(bridge.files().folders(next));
+            folders =
+                new JSONArray(
+                    restore ? bridge.files().restoreFolders(next) : bridge.files().folders(next));
           } catch (Exception e) {
             failure = e;
           }
@@ -99,7 +108,9 @@ final class ShizukuFolderPicker {
                   return;
                 }
                 path = next;
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(!path.equals("."));
+                dialog
+                    .getButton(AlertDialog.BUTTON_POSITIVE)
+                    .setEnabled(restore || !path.equals("."));
                 dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(!path.equals("."));
                 if (result.length() == 0)
                   Ui.hint(entries, "No subfolders. You can select this folder.");

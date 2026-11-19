@@ -335,7 +335,9 @@ public class NavigationTest {
             labels.add("Installed application APKs");
             labels.add("Android/data");
             labels.add("Android/obb");
-            labels.add("All apps and external app folders");
+            labels.add("All APKs");
+            labels.add("All Android/data folders");
+            labels.add("All Android/obb folders");
             java.util.Collections.addAll(labels, DeviceExport.LABELS);
             for (String label : labels) {
               android.widget.CheckBox box = (android.widget.CheckBox) find(root, label, false);
@@ -344,7 +346,9 @@ public class NavigationTest {
               assertFalse(label, box.isEnabled());
               assertEquals(label, 0.4f, box.getAlpha(), 0.01f);
             }
-            assertFalse(find(root, "Choose apps", false).isEnabled());
+            assertFalse(find(root, "Choose apps · APKs", false).isEnabled());
+            assertFalse(find(root, "Choose apps · Android/data", false).isEnabled());
+            assertFalse(find(root, "Choose apps · Android/obb", false).isEnabled());
             assertFalse(find(root, "+ Add folder via Shizuku", false).isEnabled());
           });
       click(editor, "Enable Shizuku for this job");
@@ -356,8 +360,6 @@ public class NavigationTest {
                   "Installed application APKs",
                   "Android/data",
                   "Android/obb",
-                  "All apps and external app folders",
-                  "Choose apps",
                   "+ Add folder via Shizuku"
                 }) {
               View control = find(root, label, false);
@@ -366,6 +368,13 @@ public class NavigationTest {
             }
             for (String label : DeviceExport.LABELS)
               assertTrue(label, find(root, label, false).isEnabled());
+          });
+      click(editor, "Installed application APKs");
+      instrumentation.runOnMainSync(
+          () -> {
+            View root = screen.findViewById(android.R.id.content);
+            assertTrue(find(root, "Choose apps · APKs", false).isEnabled());
+            assertFalse(find(root, "Choose apps · Android/data", false).isEnabled());
           });
       click(editor, "SMS messages");
       click(editor, "Enable Shizuku for this job");
@@ -421,14 +430,14 @@ public class NavigationTest {
                   .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
       click(editor, "Contacts");
       click(editor, "Call history");
-      click(editor, "Choose apps");
+      click(editor, "Choose apps · APKs");
       AtomicReference<View> options = new AtomicReference<>();
       long deadline = System.currentTimeMillis() + 15000;
       do {
         instrumentation.runOnMainSync(
             () -> {
               for (View window : android.view.inspector.WindowInspector.getGlobalWindowViews())
-                if (find(window, "Choose apps and app folders", false) != null) options.set(window);
+                if (find(window, "Choose APKs", false) != null) options.set(window);
             });
         if (options.get() == null) Thread.sleep(50);
       } while (options.get() == null && System.currentTimeMillis() < deadline);
@@ -443,7 +452,7 @@ public class NavigationTest {
         if (attached.get()) Thread.sleep(50);
       } while (attached.get() && System.currentTimeMillis() < deadline);
       assertFalse("App picker did not close", attached.get());
-      waitFor(editor, "Selected apps: 1", false);
+      waitFor(editor, "Selected APKs: 1", false);
       View title = waitFor(editor, "Optional Shizuku sources", false);
       instrumentation.runOnMainSync(
           () -> {

@@ -240,11 +240,22 @@ final class Operations {
         TransferState.phase("Preparing restore destination");
         publish.run();
         String folder = "PBS-X-restore-" + System.currentTimeMillis();
-        DocumentTree parent =
-            new DocumentTree(context.getContentResolver(), Uri.parse(destination));
-        DocumentTree output = mode.equals("fail") ? parent.freshRestoreDirectory(folder) : parent;
+        Uri target = Uri.parse(destination);
+        RestoreOutput output;
+        if ("pbsx-shizuku".equals(target.getScheme())) {
+          output =
+              new PrivilegedDocuments(
+                  context, target.getSchemeSpecificPart(), mode.equals("fail") ? folder : "");
+        } else {
+          if (!"content".equals(target.getScheme()))
+            throw new Exception("Invalid restore destination");
+          DocumentTree parent = new DocumentTree(context.getContentResolver(), target);
+          output =
+              new AndroidDocuments(
+                  mode.equals("fail") ? parent.freshRestoreDirectory(folder) : parent);
+        }
         String result;
-        try (AndroidDocuments docs = new AndroidDocuments(output)) {
+        try (RestoreOutput docs = output) {
           org.json.JSONObject stats =
               new org.json.JSONObject(
                   client.restoreGroupSelected(

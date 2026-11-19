@@ -257,13 +257,28 @@ final class DeviceExport {
         if (++rows > MAX_ROWS) throw new Exception("Too many MMS parts");
         if (hasPayload(parts)) {
           long id = id(parts, "_id");
-          attachment("attachments/" + id + ".bin", "content://mms/part/" + id);
+          try {
+            attachment("attachments/" + id + ".bin", "content://mms/part/" + id);
+          } catch (Exception e) {
+            throw new Exception(
+                "MMS attachment part "
+                    + id
+                    + " is unavailable. Its provider record exists but its file could not be read: "
+                    + e.getMessage(),
+                e);
+          }
         }
       }
     }
   }
 
   private static boolean hasPayload(Cursor parts) {
+    int text = parts.getColumnIndex("text"), type = parts.getColumnIndex("ct");
+    if (text >= 0 && !parts.isNull(text) && type >= 0 && !parts.isNull(type)) {
+      String mime = parts.getString(type).toLowerCase(java.util.Locale.ROOT);
+      // Samsung may retain stale paths on inline text and SMIL parts.
+      if (mime.startsWith("text/") || mime.equals("application/smil")) return false;
+    }
     int data = parts.getColumnIndex("_data");
     return data >= 0 && !parts.isNull(data) && !parts.getString(data).isEmpty();
   }
