@@ -80,3 +80,34 @@ Provisioning scripts and logs are under ignored
 password. No hypervisor or development VM was restarted; only the newly created
 guest was rebooted. Host configuration changes were limited to the new VM and
 enabling VM-disk content on the requested storage pool.
+
+## PBS-X update — 2026-11-20
+
+Updated the server, client and file-restore trio from `4.2.9-1+pbsx2` to
+**`4.2.9-1+pbsx3`** through the configured signed APT feed. Repository support
+remains `1.0.3`. APT's reviewed plan contained only these three upgrades, with
+no package additions or removals. No guest or hypervisor reboot was needed.
+
+Before updating, both PBS and native transfer queues were idle. Verified
+previous-version packages were retained for rollback, and the installed APT
+protection hook stopped services, archived protected state and restored services
+after installation. The recovery marker cleared and `dpkg --audit` is clean.
+
+Post-update checks verified:
+
+- Existing namespace/snapshot identities are identical to the pre-update list.
+- Datastore, user and ACL configuration, credentials and TLS certificate/key
+  bytes are unchanged.
+- The backup filesystem still uses UUID
+  `c764a867-5740-4d62-ba11-1c10adb34e24` at `/mnt/datastore/backups`.
+- Both PBS services and the APT recovery timer are active.
+- External login-realm HTTPS access succeeds with the existing certificate as
+  trust anchor; the version endpoint correctly requires authentication.
+- The authenticated version API identifies server source
+  `e2517ed9fe6cbef2b8b8a7c47b750c0d4ddf526e`.
+
+Protected server state is retained at
+`/var/backups/pbsx-apt-20261120-043930-swe2fr3n/server-state.tar`.
+Verified `+pbsx2` rollback packages, the update plan/log and private before/after
+validation records are under `/var/backups/pbsx-update-20261120-pbsx3/`.
+The update did not create, restore, verify-scan or delete user backup data.
