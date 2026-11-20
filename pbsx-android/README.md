@@ -62,8 +62,8 @@ administrator-entered snapshot notes are also plaintext.
 
 The 0.5.13 source includes the privacy fix that stops encrypted jobs from
 attaching their job labels/IDs as plaintext PBS snapshot notes. Labels remain in
-the app's local job settings/history. This fix is not in the published
-`0.5.12-preview` APK yet, and does not remove notes from older snapshots.
+the app's local job settings/history. Older `0.5.12-preview` APKs send those
+notes; updating the app does not remove notes from older snapshots.
 
 ## Try it
 

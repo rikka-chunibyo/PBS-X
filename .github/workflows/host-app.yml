@@ -9,7 +9,7 @@ on:
       version:
         description: 'Client semantic version'
         required: true
-        default: '0.7.6-preview'
+        default: '0.7.7-preview'
         type: string
       release_tag:
         description: 'Existing draft pbsx-client-build-* release for verified output transport'
@@ -52,7 +52,7 @@ jobs:
           python3 packaging/pbsx-repository/test_apt_guard.py
       - name: Build matched Linux preview bundle
         env:
-          PBSX_VERSION: ${{ inputs.version || '0.7.6-preview' }}
+          PBSX_VERSION: ${{ inputs.version || '0.7.7-preview' }}
         run: python3 tools/build-host-app.py --os linux --version "$PBSX_VERSION" --output artifacts/host-app-linux
       - name: Verify bundle and headless CLI
         run: |
@@ -113,7 +113,7 @@ jobs:
         run: go test -timeout 5m ./datastore ./transfer ./backupproxy
       - name: Build matched Windows preview bundle
         env:
-          PBSX_VERSION: ${{ inputs.version || '0.7.6-preview' }}
+          PBSX_VERSION: ${{ inputs.version || '0.7.7-preview' }}
         run: python tools/build-host-app.py --os windows --version "$env:PBSX_VERSION" --output artifacts/host-app-windows
       - name: Check installer and headless CLI
         shell: pwsh
