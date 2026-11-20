@@ -221,3 +221,36 @@ inline-text export fixes and durable encrypted pause/retry recovery. Provider
 exports restore as files; safe imports into Android's live provider databases
 remain deferred. Physical Samsung authorization/restores and charging/network
 interruption testing are still needed. Windows binaries remain unsigned.
+
+
+## Task controls and exclusions preview — 2026-11-20
+
+Published [preview.2](https://github.com/rikka-chunibyo/PBS-X/releases/tag/pbsx-clients-2026.11.20-preview.2)
+at https://pbsx.rikka.ca/downloads/: Android **0.5.13-preview**, code 22, and
+Windows/Linux desktop, agent and CLI **0.7.7-preview**. Both builds identify
+source `98b673827a3de9ea68dd0def021afbd00819f7ad`. Android retains the established
+signing certificate and requires server `4.2.9-1+pbsx3` or later.
+
+[Native run 44796732698](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44796732698)
+passed both platform test/build/installer checks, Linux races and graphical smoke,
+and mandatory release-asset transport. The publisher verified run/source/attempt
+provenance, executable architecture and file hashes before preparing the bundle.
+[Android run 44796621183](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44796621183)
+passed Go races, universal bindings, both app variants, unit/lint checks and all
+**24 Android 13 instrumentation tests**. The local signed APK independently
+passed both variants, 18 unit cases per variant, lint, signature, ABI, 16 KiB
+alignment, non-debuggable and clean-source checks.
+
+Android now uses task-level Pause/Resume controls, removes paused notifications,
+finishes genuine failures as terminal tasks with safe cleanup before replacement,
+and supports per-job file/directory exclusion patterns. Encrypted jobs no longer
+send job labels/IDs as plaintext snapshot notes. See
+[task and exclusion validation](android-task-exclusions-validation.md) for behavior,
+source identity compatibility and remaining metadata visibility.
+
+All three app payloads, `release.json` and `SHA256SUMS` were downloaded from both
+public HTTPS and GitHub and matched the immutable prepared sizes/hashes. The
+release is a visible prerelease; latest metadata, entry redirect, current version
+listing and minimum-server note were checked. Previous releases remain available.
+Native build transport stays private/draft; signing keys stayed off CI. Server
+APT/ISO contents and physical phones were not changed by this client publication.

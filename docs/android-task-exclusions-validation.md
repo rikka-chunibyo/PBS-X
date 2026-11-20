@@ -1,9 +1,10 @@
 # Android task controls and backup exclusions — 2026-11-20
 
 Built and tested **0.5.13-preview**, code **22**, on branch
-`pbsx-android-task-excludes`. This is a local signed APK, not a public release;
-public downloads still select 0.5.12. The build includes the preceding encrypted
-snapshot-note privacy fix.
+`pbsx-android-task-excludes`. Published in
+[client preview.2](https://github.com/rikka-chunibyo/PBS-X/releases/tag/pbsx-clients-2026.11.20-preview.2)
+at https://pbsx.rikka.ca/downloads/ alongside desktop/CLI `0.7.7-preview`.
+The build includes the preceding encrypted snapshot-note privacy fix.
 
 ## Behavior
 
@@ -70,8 +71,15 @@ is restored after each UI/service fixture. No physical phone, datastore or
 hypervisor was changed for this work. The local Device panel reported no
 available Android emulator, so device execution used the hosted test runner.
 
-APK: `pbsx-android/artifacts/pbsx-android-preview.apk`, 27,032,603 bytes.
-SHA256: `28f5f0eb3ba4fe39dab88cbfc88e0c22d886d963fcfebfa59593e880192b1249`.
+The final publication source is `98b673827a3de9ea68dd0def021afbd00819f7ad`,
+which adds release documentation and native version defaults to the tested code.
+[Android run 44796621183](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44796621183)
+passed all 24 instrumentation cases again. The APK was rebuilt and verified from
+that clean source; all five client assets were downloaded and hash/size-verified
+from both public HTTPS and GitHub after activation.
+
+APK: `pbsx-android/artifacts/pbsx-android-preview.apk`, 27,032,611 bytes.
+SHA256: `6176e3f13c22c139b6aa9036bc65663e89eaec2018107532ab3f4ac877b16abd`.
 Signing certificate remains
 `d6f35fc4fc34b6acd83b2b2e3fd26f928339df400d1b9e256fab0181e5b3cab7`.
 The build records clean source and the exact Android/shared-core input trees.
