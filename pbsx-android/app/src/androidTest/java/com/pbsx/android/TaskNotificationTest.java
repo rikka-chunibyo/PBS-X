@@ -62,7 +62,10 @@ public class TaskNotificationTest {
       do {
         JSONObject pending = PendingBackups.get(c, job.id);
         paused =
-            pending != null && "paused".equals(pending.optString("state")) && !Operations.running();
+            pending != null
+                && "paused".equals(pending.optString("state"))
+                && !Operations.running()
+                && !BackupService.busy();
         notification = false;
         for (android.service.notification.StatusBarNotification n :
             c.getSystemService(NotificationManager.class).getActiveNotifications())

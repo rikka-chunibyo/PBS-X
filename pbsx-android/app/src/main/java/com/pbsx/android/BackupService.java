@@ -9,9 +9,17 @@ import android.content.Intent;
 import android.os.IBinder;
 
 public final class BackupService extends Service {
+  private static volatile BackupService owner;
   private Operations.Cancellation cancellation;
   private static final int ID = 71;
   private volatile boolean working;
+  private int lastStartId;
+
+  static boolean busy() {
+    BackupService service = owner;
+    return service != null && service.working;
+  }
+
   private volatile long lastUpdate;
   private final android.os.Handler handler =
       new android.os.Handler(android.os.Looper.getMainLooper());
@@ -82,6 +90,7 @@ public final class BackupService extends Service {
 
   @Override
   public int onStartCommand(Intent intent, int flags, int startId) {
+    lastStartId = startId;
     if (intent == null) {
       stopSelf();
       return START_NOT_STICKY;
@@ -99,8 +108,10 @@ public final class BackupService extends Service {
       return START_NOT_STICKY;
     }
     if (working) return START_NOT_STICKY;
+    owner = this;
     working = true;
     cancellation = new Operations.Cancellation();
+    final Operations.Cancellation token = cancellation;
     startForeground(ID, notification("Preparing transfer…"));
     handler.post(refreshNotification);
     Settings.status(this, "Operation running…");
@@ -132,6 +143,7 @@ public final class BackupService extends Service {
                               ? "fail"
                               : intent.getStringExtra("mode"),
                           (stage, files, bytes) -> {
+                            if (!Operations.isActive(token)) return;
                             long now = System.currentTimeMillis();
                             if (now - lastUpdate > 1000) {
                               lastUpdate = now;
@@ -140,22 +152,31 @@ public final class BackupService extends Service {
                                   .notify(ID, notification(progress));
                             }
                           },
-                          cancellation);
+                          token);
               } catch (Exception e) {
                 result = "Failed: " + e.getMessage();
               }
-              working = false;
-              handler.removeCallbacks(refreshNotification);
-              Settings.status(this, result);
               try {
                 ScheduleService.configureAll(this);
               } catch (Exception e) {
-                Settings.status(this, result + " · Could not update schedules: " + e.getMessage());
+                result += " · Could not update schedules: " + e.getMessage();
               }
-              stopForeground(STOP_FOREGROUND_REMOVE);
-              if (cancellation.paused()) getSystemService(NotificationManager.class).cancel(ID);
-              else getSystemService(NotificationManager.class).notify(ID, notification(result));
-              stopSelf();
+              final String finished = result;
+              // Serialize cleanup with onStartCommand. A stale worker must not
+              // remove a newly resumed task's notification or stop its service.
+              handler.post(
+                  () -> {
+                    if (owner != this || cancellation != token) return;
+                    working = false;
+                    handler.removeCallbacks(refreshNotification);
+                    Settings.status(this, finished);
+                    stopForeground(STOP_FOREGROUND_REMOVE);
+                    if (token.paused()) getSystemService(NotificationManager.class).cancel(ID);
+                    else
+                      getSystemService(NotificationManager.class)
+                          .notify(ID, notification(finished));
+                    stopSelf(lastStartId);
+                  });
             },
             "pbsx-operation")
         .start();
@@ -180,6 +201,7 @@ public final class BackupService extends Service {
       if (TransferState.current().restore) cancellation.cancel();
       else cancellation.pause("Paused: Android stopped the transfer service", false);
     }
+    if (owner == this) owner = null;
     super.onDestroy();
   }
 

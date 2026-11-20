@@ -177,7 +177,8 @@ public final class MainActivity extends Activity {
         history.getJSONObject(i).remove("message");
     return 31L * p.getString("jobs", "").hashCode()
         + history.toString().hashCode()
-        + (Operations.running() ? 1 : 0);
+        + (Operations.running() ? 1 : 0)
+        + (BackupService.busy() ? 2 : 0);
   }
 
   private void updateProgress() {
@@ -312,9 +313,9 @@ public final class MainActivity extends Activity {
           "Resumes the same snapshot using this task's saved sources and credentials. Job edits"
               + " apply to the next task.");
       Button resume = Ui.button(card, "Resume backup", true, v -> run(frozen));
-      resume.setEnabled(!Operations.running());
+      resume.setEnabled(!Operations.running() && !BackupService.busy());
       Button cancel = Ui.button(card, "Cancel task", false, v -> discardTask(frozen.id));
-      cancel.setEnabled(!Operations.running());
+      cancel.setEnabled(!Operations.running() && !BackupService.busy());
     }
   }
 
@@ -429,7 +430,8 @@ public final class MainActivity extends Activity {
       LinearLayout actions = Ui.row(this);
       JSONObject pending = PendingBackups.get(this, job.id);
       Button backup = Ui.button(actions, "Back up", true, v -> run(job));
-      backup.setEnabled(!Operations.running() && !PendingBackups.canResume(pending));
+      backup.setEnabled(
+          !Operations.running() && !BackupService.busy() && !PendingBackups.canResume(pending));
       if (PendingBackups.canResume(pending))
         Ui.hint(
             card, "This job has a task above. Resume or cancel that task before starting another.");
@@ -494,7 +496,7 @@ public final class MainActivity extends Activity {
             "Unfinished data will be cleared automatically before the next backup of this job.");
         Button clear =
             Ui.button(card, "Clear task", false, v -> discardTask(r.optString("job_id")));
-        clear.setEnabled(!Operations.running());
+        clear.setEnabled(!Operations.running() && !BackupService.busy());
       }
     }
   }
@@ -627,7 +629,7 @@ public final class MainActivity extends Activity {
   private void run(BackupJob job) {
     try {
       if (busy) throw new Exception("Connection setup is still running");
-      if (Operations.running())
+      if (Operations.running() || BackupService.busy())
         throw new Exception("Wait for the current transfer or cancel it first");
       if (Vault.load(this).isEmpty()) {
         tab = 3;
