@@ -45,7 +45,8 @@ def asset_names(system):
 
 def release(repository, tag):
     validate_tag(tag)
-    return json.loads(run(['gh', 'api', 'repos/'+repository+'/releases/tags/'+tag]))
+    view=json.loads(run(['gh','release','view',tag,'--repo',repository,'--json','apiUrl']))
+    return json.loads(run(['gh','api',view['apiUrl']]))
 
 
 def checked_release(info, commit, writing=False):
