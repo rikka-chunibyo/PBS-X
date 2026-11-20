@@ -35,19 +35,27 @@ public class TaskNotificationTest {
       BackupJob job = BackupJob.from(task.getJSONObject("job"));
       // Hold preparation until both service commands have run on the main
       // thread. This exercises Pause even before the Go client is attached.
-      synchronized (Vault.class) {
-        c.startForegroundService(
-            new Intent(c, BackupService.class).putExtra("job_config", job.json().toString()));
-        c.startService(new Intent(c, BackupService.class).setAction("pause"));
-        instrumentation.waitForIdleSync();
-        long started = System.currentTimeMillis() + 5000;
-        while (!Operations.running() && System.currentTimeMillis() < started) Thread.sleep(20);
-        assertTrue("Transfer worker did not start", Operations.running());
-        boolean posted = false;
-        for (android.service.notification.StatusBarNotification n :
-            c.getSystemService(NotificationManager.class).getActiveNotifications())
-          if (n.getId() == 71) posted = true;
-        assertTrue("Foreground notification was never posted", posted);
+      instrumentation
+          .getUiAutomation()
+          .adoptShellPermissionIdentity(
+              "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND");
+      try {
+        synchronized (Vault.class) {
+          c.startForegroundService(
+              new Intent(c, BackupService.class).putExtra("job_config", job.json().toString()));
+          c.startService(new Intent(c, BackupService.class).setAction("pause"));
+          instrumentation.waitForIdleSync();
+          long started = System.currentTimeMillis() + 5000;
+          while (!Operations.running() && System.currentTimeMillis() < started) Thread.sleep(20);
+          assertTrue("Transfer worker did not start", Operations.running());
+          boolean posted = false;
+          for (android.service.notification.StatusBarNotification n :
+              c.getSystemService(NotificationManager.class).getActiveNotifications())
+            if (n.getId() == 71) posted = true;
+          assertTrue("Foreground notification was never posted", posted);
+        }
+      } finally {
+        instrumentation.getUiAutomation().dropShellPermissionIdentity();
       }
       long end = System.currentTimeMillis() + 10000;
       boolean paused = false, notification = true;
@@ -67,10 +75,8 @@ public class TaskNotificationTest {
       assertEquals(1, JobStore.history(c).length());
     } finally {
       c.stopService(new Intent(c, BackupService.class));
-      if (!granted)
-        instrumentation
-            .getUiAutomation()
-            .revokeRuntimePermission(c.getPackageName(), Manifest.permission.POST_NOTIFICATIONS);
+      // Revoking this permission can kill the instrumentation process. This
+      // fixture runs on a disposable test emulator; leave the grant in place.
     }
   }
 }
