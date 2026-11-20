@@ -37,6 +37,27 @@ public class CalendarScheduleTest {
   }
 
   @Test
+  public void comparesActualInstantsWhenGapShiftsTimesOutOfOrder() {
+    assertEquals(
+        stamp("2026-03-08T07:00:00Z"),
+        CalendarSchedule.next(
+            stamp("2026-03-08T00:00:00Z"), "America/Toronto", 127, "02:30,03:00"));
+    assertEquals(
+        stamp("2026-03-08T07:30:00Z"),
+        CalendarSchedule.next(
+            stamp("2026-03-08T07:00:00Z"), "America/Toronto", 127, "02:30,03:00"));
+    assertEquals(
+        stamp("2026-03-08T07:15:00Z"),
+        CalendarSchedule.next(
+            stamp("2026-03-08T00:00:00Z"), "America/Toronto", 127, "02:45,03:15,03:30"));
+    // Two wall times shifted to the same instant still form one occurrence.
+    assertEquals(
+        stamp("2026-03-09T06:30:00Z"),
+        CalendarSchedule.next(
+            stamp("2026-03-08T07:30:00Z"), "America/Toronto", 127, "02:30,03:30"));
+  }
+
+  @Test
   public void rejectsInvalidAndUnboundedSchedules() {
     for (String times :
         new String[] {

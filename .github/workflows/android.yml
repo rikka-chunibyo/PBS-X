@@ -95,13 +95,30 @@ jobs:
           "$adb" -s emulator-5554 shell input keyevent 82
           "$adb" -s emulator-5554 install -r -t app/build/outputs/apk/debug/app-debug.apk
           "$adb" -s emulator-5554 install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-          "$adb" -s emulator-5554 shell am instrument -w -r -e class 'com.pbsx.android.PendingBackupsTest,com.pbsx.android.TaskNotificationTest,com.pbsx.android.NavigationTest#pausedTasksOwnResumeAndFailedJobsCanStartAgain,com.pbsx.android.DocumentsTest,com.pbsx.android.LocalRestoreTest,com.pbsx.android.DeviceExportTest#inlineMmsTextDoesNotOpenStaleProviderFiles,com.pbsx.android.SharedFolderJobTest,com.pbsx.android.JobStoreTest#schedulesUpdateAndCancelIndependently,com.pbsx.android.JobStoreTest#pendingScheduleSurvivesReconfigurationAndCoalescesOnlyAfterCompletion,com.pbsx.android.KeyVaultTest#completeSettingsRoundTripIncludesJobsKeysPreferencesAndHistory,com.pbsx.android.NavigationTest#newJobsStartWithNoShizukuSelectionsAndDisableDependentControls' com.pbsx.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/pbsx-instrumentation.log"
+          test_classes=(
+            com.pbsx.android.PendingBackupsTest
+            com.pbsx.android.TaskNotificationTest
+            'com.pbsx.android.NavigationTest#pausedTasksOwnResumeAndFailedJobsCanStartAgain'
+            com.pbsx.android.DocumentsTest
+            com.pbsx.android.LocalRestoreTest
+            'com.pbsx.android.DeviceExportTest#inlineMmsTextDoesNotOpenStaleProviderFiles'
+            com.pbsx.android.SharedFolderJobTest
+            'com.pbsx.android.JobStoreTest#schedulesUpdateAndCancelIndependently'
+            'com.pbsx.android.JobStoreTest#pendingScheduleSurvivesReconfigurationAndCoalescesOnlyAfterCompletion'
+            com.pbsx.android.KeyVaultTest
+            com.pbsx.android.SettingsSafetyTest
+            com.pbsx.android.AuditFixesTest
+            'com.pbsx.android.NavigationTest#newJobsStartWithNoShizukuSelectionsAndDisableDependentControls'
+          )
+          printf -v test_selection '%s,' "${test_classes[@]}"
+          "$adb" -s emulator-5554 shell am instrument -w -r -e class "${test_selection%,}" com.pbsx.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/pbsx-instrumentation.log"
           python3 - "$RUNNER_TEMP/pbsx-instrumentation.log" <<'PY'
           import pathlib, re, sys
           output = pathlib.Path(sys.argv[1]).read_text()
           match = re.search(r'OK \((\d+) tests?\)', output)
-          if not match or int(match[1]) < 24 or 'FAILURES!!!' in output or 'INSTRUMENTATION_FAILED' in output:
-              sys.exit('Android instrumentation did not report successful completion of all twenty-four tests')
+          completed = len(re.findall(r'^INSTRUMENTATION_STATUS_CODE: 0\r?$', output, re.MULTILINE))
+          if not match or int(match[1]) < 40 or completed != int(match[1]) or 'FAILURES!!!' in output or 'INSTRUMENTATION_FAILED' in output:
+              sys.exit('Android instrumentation must successfully complete all forty tests without skips')
           PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()

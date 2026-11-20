@@ -30,12 +30,16 @@ final class CalendarSchedule {
     for (int offset = 0; offset <= 7; offset++) {
       LocalDate date = start.toLocalDate().plusDays(offset);
       if ((days & (1 << (date.getDayOfWeek().getValue() - 1))) == 0) continue;
+      long earliest = Long.MAX_VALUE;
       for (LocalTime time : candidates) {
         // atZone shifts nonexistent spring-forward times to valid local time;
         // overlap times use the earlier offset and run only once that day.
         long due = date.atTime(time).atZone(id).toInstant().toEpochMilli();
-        if (due > after) return due;
+        // Gap adjustment can reorder wall times (02:30 -> 03:30, while
+        // 03:00 stays 03:00). Compare instants before choosing the occurrence.
+        if (due > after) earliest = Math.min(earliest, due);
       }
+      if (earliest != Long.MAX_VALUE) return earliest;
     }
     throw new IllegalArgumentException("No next schedule occurrence");
   }

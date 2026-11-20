@@ -122,16 +122,21 @@ final class JobStore {
   static synchronized void finish(Context c, String id, boolean success, String message)
       throws Exception {
     JSONArray out = new JSONArray(prefs(c).getString("history", "[]"));
+    boolean found = false;
     for (int i = 0; i < out.length(); i++) {
       JSONObject r = out.getJSONObject(i);
       if (id.equals(r.getString("id"))) {
         r.put("state", success ? "success" : "failed")
             .put("finished", System.currentTimeMillis())
             .put("message", message.length() > 4096 ? message.substring(0, 4096) : message);
+        found = true;
         break;
       }
     }
-    prefs(c).edit().putString("history", out.toString()).commit();
+    if (!found) throw new Exception("Backup activity entry is missing");
+    // The caller may erase the checkpoint only after completion is durable.
+    if (!prefs(c).edit().putString("history", out.toString()).commit())
+      throw new Exception("Could not save backup activity");
   }
 
   static synchronized void state(Context c, String id, String state, String message)
@@ -203,6 +208,7 @@ final class JobStore {
         changed = true;
       }
     }
-    if (changed) prefs(c).edit().putString("history", out.toString()).commit();
+    if (changed && !prefs(c).edit().putString("history", out.toString()).commit())
+      throw new Exception("Could not save recovered activity");
   }
 }

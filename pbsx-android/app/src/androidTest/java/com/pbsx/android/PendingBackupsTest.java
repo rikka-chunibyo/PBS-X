@@ -130,6 +130,113 @@ public class PendingBackupsTest {
     return new String(new char[count]).replace("\0", value);
   }
 
+  private Context refusingPreferenceWrites(Context base) {
+    return new ContextWrapper(base) {
+      @Override
+      public SharedPreferences getSharedPreferences(String name, int mode) {
+        SharedPreferences prefs = base.getSharedPreferences(name, mode);
+        return (SharedPreferences)
+            java.lang.reflect.Proxy.newProxyInstance(
+                SharedPreferences.class.getClassLoader(),
+                new Class<?>[] {SharedPreferences.class},
+                (proxy, method, args) -> {
+                  if (!method.getName().equals("edit")) return method.invoke(prefs, args);
+                  SharedPreferences.Editor editor = prefs.edit();
+                  return java.lang.reflect.Proxy.newProxyInstance(
+                      SharedPreferences.Editor.class.getClassLoader(),
+                      new Class<?>[] {SharedPreferences.Editor.class},
+                      (editProxy, editMethod, editArgs) -> {
+                        if (editMethod.getName().equals("commit")) return false;
+                        Object result = editMethod.invoke(editor, editArgs);
+                        return result == editor ? editProxy : result;
+                      });
+                });
+      }
+    };
+  }
+
+  @Test
+  public void completionAndRecoveryRefuseUnsavedActivityAndKeepCheckpoint() throws Exception {
+    Context c = isolated();
+    JSONObject task = run(c);
+    String jobID = task.getJSONObject("job").getString("id");
+    PendingBackups.put(c, task);
+    Context failing = refusingPreferenceWrites(c);
+    try {
+      try {
+        JobStore.finish(failing, task.getString("history"), true, "Synthetic completed backup");
+        fail("Completion silently accepted an unsuccessful durable write");
+      } catch (Exception expected) {
+        assertTrue(expected.getMessage().contains("save backup activity"));
+      }
+      try {
+        JobStore.recover(failing);
+        fail("Recovery silently accepted an unsuccessful durable write");
+      } catch (Exception expected) {
+        assertTrue(expected.getMessage().contains("save recovered activity"));
+      }
+      assertEquals(
+          task.getString("descriptor"), PendingBackups.get(c, jobID).getString("descriptor"));
+      // Missing activity is also a failure, so finishBackup cannot erase the
+      // only recovery descriptor after an interrupted or damaged settings write.
+      try {
+        JobStore.finish(c, UUID.randomUUID().toString(), true, "Unknown activity");
+        fail("Completion accepted an absent activity entry");
+      } catch (Exception expected) {
+        assertTrue(expected.getMessage().contains("activity entry is missing"));
+      }
+      JobStore.finish(c, task.getString("history"), true, "Durably completed");
+      assertEquals("success", JobStore.history(c).getJSONObject(0).getString("state"));
+      assertTrue(JobStore.history(c).getJSONObject(0).has("finished"));
+    } finally {
+      ExportCache.remove(c.getFilesDir());
+      PendingBackups.forgetCache();
+    }
+  }
+
+  @Test
+  public void importedActivityCannotAliasAnotherTaskOrRestore() throws Exception {
+    Context c = isolated();
+    KeyProfiles.addConnection(
+        c,
+        "Fixture",
+        new JSONObject()
+            .put("server", "https://fixture.invalid:8007")
+            .put("host_id", "test-phone")
+            .put("fingerprint", repeat("ab", 32))
+            .put("auth_id", "fixture@pbs!resume")
+            .put("secret", "synthetic-secret")
+            .toString());
+    JSONObject task = run(c);
+    PendingBackups.put(c, task);
+    String original = SettingsTransfer.exportJSON(c);
+    try {
+      for (int i = 0; i < 3; i++) {
+        JSONObject changed = new JSONObject(original);
+        JSONObject field =
+            changed.getJSONObject("preferences").getJSONObject("jobs-v1").getJSONObject("history");
+        JSONArray history = new JSONArray(field.getString("value"));
+        if (i == 0) history.put(new JSONObject(history.getJSONObject(0).toString()));
+        else if (i == 1) history.getJSONObject(0).put("job_id", "another-job");
+        else history.getJSONObject(0).put("kind", "restore");
+        field.put("value", history.toString());
+        try {
+          SettingsTransfer.validate(changed.toString());
+          fail("Accepted mismatched or duplicate task history: " + i);
+        } catch (Exception expected) {
+          assertTrue(expected.getMessage(), expected.getMessage().contains("activity"));
+        }
+      }
+      assertEquals(original, SettingsTransfer.validate(original).toString(2));
+      assertEquals(
+          task.getString("history"),
+          PendingBackups.get(c, task.getJSONObject("job").getString("id")).getString("history"));
+    } finally {
+      ExportCache.remove(c.getFilesDir());
+      PendingBackups.forgetCache();
+    }
+  }
+
   @Test
   public void encryptedRecordSurvivesReloadAndDetectsDamage() throws Exception {
     Context c = isolated();

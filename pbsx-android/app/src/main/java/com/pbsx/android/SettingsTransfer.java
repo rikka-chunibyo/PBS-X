@@ -126,18 +126,21 @@ final class SettingsTransfer {
     } else if (list.length() > 0) throw new Exception("Missing next schedule identity");
     JSONArray history = new JSONArray(stringPreference(jobs, "history", "[]"));
     if (history.length() > 100) throw new Exception("Activity history exceeds 100 entries");
+    java.util.Map<String, JSONObject> activity = new java.util.HashMap<>();
     for (int i = 0; i < history.length(); i++) {
       JSONObject run = history.getJSONObject(i);
-      run.getString("id");
+      if (activity.put(run.getString("id"), run) != null)
+        throw new Exception("Duplicate activity identity");
       run.getString("state");
       run.getString("job_id");
     }
     for (int i = 0; i < pending.length(); i++) {
-      String expected = pending.getJSONObject(i).getString("history");
-      boolean found = false;
-      for (int j = 0; j < history.length(); j++)
-        if (expected.equals(history.getJSONObject(j).getString("id"))) found = true;
-      if (!found) throw new Exception("Pending backup activity entry is missing");
+      JSONObject task = pending.getJSONObject(i);
+      JSONObject run = activity.get(task.getString("history"));
+      if (run == null) throw new Exception("Pending backup activity entry is missing");
+      if (!task.getJSONObject("job").getString("id").equals(run.getString("job_id"))
+          || !"backup".equals(run.optString("kind")))
+        throw new Exception("Pending backup activity belongs to a different task");
     }
     JSONObject settings = preferences.getJSONObject("settings");
     for (String flag :
