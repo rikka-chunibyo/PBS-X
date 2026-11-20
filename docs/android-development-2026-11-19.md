@@ -382,12 +382,14 @@ were made.
 
 ## Remaining work
 
-The branch implementation and automated validation above are complete. Before
-publication, build/sign a new version of the Android app, publish the matching
-server checkpoint extension and updated offline ISO, and collect the required
-native bundles from successful CI after GitHub's artifact quota clears. Do not
-reuse old client/server version numbers or mask mandatory bundle-upload failures.
-No new version has been published by this development branch.
+The implementation is published as Android `0.5.12-preview` (code 21), native
+clients `0.7.6-preview` and server `4.2.9-1+pbsx3`, with a matching offline ISO.
+Update the server before updating Android. Checked mandatory release assets now
+provide a source/run/hash-verified transport while GitHub Actions artifact quota
+accounting remains restrictive; the complete native release workflow passed.
+See [the publication report](server-pbsx3-publication.md) and
+[client release validation](client-release-validation.md#resumable-client-preview--2026-11-20)
+for exact builds and live packaged-server validation.
 
 Physical Samsung checks still needed: actual Shizuku authorization and protected
 folder restores, charging/Wi-Fi interruption/retry and foreground Pause/Resume
@@ -395,4 +397,4 @@ controls. Only synthetic fixtures/emulator/lab data were changed during testing.
 Provider imports remain unavailable until safe additive/idempotent imports and
 item/account selection are implemented and verified; exported provider ZIPs can
 currently be restored as files. Credential rotation during a paused run also
-needs a deliberate recovery flow. These limits are not claims of shipment.
+needs a deliberate recovery flow. These limits apply to the published preview.

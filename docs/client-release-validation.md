@@ -187,3 +187,37 @@ The corresponding [server update `4.2.9-1+pbsx2`](server-pbsx2-publication.md)
 was then built, validated and published. The same agent passed backup/restore
 again after upgrading the server, and completion API checks passed against both
 old and freshly generated history.
+
+## Resumable client preview — 2026-11-20
+
+Published [preview.1](https://github.com/rikka-chunibyo/PBS-X/releases/tag/pbsx-clients-2026.11.20-preview.1)
+at https://pbsx.rikka.ca/downloads/:
+
+- Android `0.5.12-preview`, code 21, source
+  `e2517ed9fe6cbef2b8b8a7c47b750c0d4ddf526e`, retaining the established signing
+  certificate. **Update the server to `4.2.9-1+pbsx3` before updating Android.**
+- Windows/Linux desktop, agent and CLI `0.7.6-preview`, source
+  `9efc9ae3e9ba52e7a046232f7aa81c05c586d501`.
+- [Native run 44690266988](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44690266988)
+  passed Linux races, actual Windows tests, both bundle builds, installer/CLI
+  checks and the Linux graphical smoke test. Mandatory checked bundles were
+  collected from the draft release transport after the Actions quota prevented
+  normal artifact uploads.
+- [Android run 44689015434](https://github.com/rikka-chunibyo/PBS-X/actions/runs/44689015434)
+  passed Go races, universal bindings, app builds, unit/lint checks and 18 Android
+  13 instrumentation cases. The signed local APK also passed source provenance,
+  certificate, ABI, alignment and non-debuggable checks.
+
+All five public assets (three applications, `release.json` and `SHA256SUMS`)
+were downloaded and hash/size-verified from both public HTTPS and GitHub. Latest
+metadata, the downloads redirect, version listing and minimum-server note were
+verified. Server APT and its matching ISO were activated before the new apps.
+See [the server publication report](server-pbsx3-publication.md) for live
+plain/encrypted resume and ordinary PBS compatibility results.
+
+The release adds Shizuku file-restore destinations, independent APK/data/obb
+selection, weekday/time/time-zone schedules, local chunk deduplication, MMS
+inline-text export fixes and durable encrypted pause/retry recovery. Provider
+exports restore as files; safe imports into Android's live provider databases
+remain deferred. Physical Samsung authorization/restores and charging/network
+interruption testing are still needed. Windows binaries remain unsigned.
