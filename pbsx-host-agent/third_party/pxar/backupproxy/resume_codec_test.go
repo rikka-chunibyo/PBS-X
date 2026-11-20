@@ -2,6 +2,8 @@ package backupproxy
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -9,13 +11,19 @@ import (
 
 func TestResumeStateIsAlwaysEncryptedAndBoundToRunAndSequence(t *testing.T) {
 	key := bytes.Repeat([]byte{1}, 32)
-	want := documentResumeEnvelope{Version: 1, Sequence: 7, Binding: strings.Repeat("a", 64), Streams: []StreamCheckpoint{{Name: "root.mpxar.didx"}, {Name: "root.ppxar.didx"}}, Walk: json.RawMessage(`{"private_path":"Download/private-file.txt"}`), UploadedBytes: 12345}
+	digest := sha256.Sum256([]byte("private file prefix"))
+	encodedDigest := hex.EncodeToString(digest[:])
+	walk, err := json.Marshal(map[string]string{"private_path": "Download/private-file.txt", "digest": encodedDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := documentResumeEnvelope{Version: 1, Sequence: 7, Binding: strings.Repeat("a", 64), Streams: []StreamCheckpoint{{Name: "root.mpxar.didx"}, {Name: "root.ppxar.didx"}}, Walk: walk, UploadedBytes: 12345}
 	sealed, err := sealResumeEnvelope(key, want)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(sealed, []byte("private-file")) {
-		t.Fatal("plaintext source metadata reached encrypted state")
+	if bytes.Contains(sealed, []byte("private-file")) || bytes.Contains(sealed, []byte(encodedDigest)) || bytes.Contains(sealed, digest[:]) {
+		t.Fatal("plaintext source metadata or file-prefix hash reached encrypted state")
 	}
 	got, err := openResumeEnvelope(key, want.Binding, want.Sequence, sealed)
 	if err != nil {

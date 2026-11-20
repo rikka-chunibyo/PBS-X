@@ -439,19 +439,14 @@ func (c *Client) backupNamed(store, namespace, backupID, jobID, jobName string, 
 	if previousErr != nil {
 		result.Warning = "Could not inspect the previous snapshot; this run used a full upload"
 	}
-	if jobID != "" {
+	if jobID != "" && c.crypt == nil {
 		report.phase("Saving snapshot notes", "", -1)
-		values := map[string]any{"backup-type": "host", "backup-id": backupID, "backup-time": stamp, "notes": "PBS-X Android: " + jobName + "\nJob ID: " + jobID}
-		if namespace != "" {
-			values["ns"] = namespace
+	}
+	if err := c.saveJobNotes(ctx, store, namespace, backupID, stamp, jobID, jobName); err != nil {
+		if result.Warning != "" {
+			result.Warning += "; "
 		}
-		body, _ := json.Marshal(values)
-		if _, err := c.request(ctx, "PUT", "/admin/datastore/"+url.PathEscape(store)+"/notes", body, true); err != nil {
-			if result.Warning != "" {
-				result.Warning += "; "
-			}
-			result.Warning += "Snapshot saved; job label could not be attached"
-		}
+		result.Warning += "Snapshot saved; job label could not be attached"
 	}
 	return result, nil
 }

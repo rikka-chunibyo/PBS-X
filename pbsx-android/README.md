@@ -41,6 +41,30 @@ keys somewhere other than the device being backed up. See
 [settings format and key management](SETTINGS-FORMAT.md) for details.
 App settings are not a backup source in this release.
 
+### Encryption privacy and deduplication
+
+Existing snapshots already contain PBS chunk hashes. Keep them and run another
+backup normally: the phone reads and hashes the selected files locally, then
+uploads only missing compatible chunks. Encrypted backups use opaque chunk IDs
+derived from both the content and a secret key, so an ordinary plaintext file
+hash cannot identify a stored encrypted chunk. Reusing the same encryption key
+preserves deduplication; changing keys or switching from plaintext to encryption
+requires fresh encrypted chunks. Old snapshots keep their original encryption
+state. Backup format/chunk-boundary changes can also reduce initial reuse.
+
+File contents and the archive's filenames, paths and file metadata are encrypted
+before upload. File-prefix hashes in resume checkpoints are inside an encrypted
+envelope too. PBS still sees namespace/Backup IDs, snapshot timestamps, archive
+and chunk sizes/counts, key fingerprints and repeated-chunk relationships.
+Normal PBS deduplication therefore does not provide an "only total size is
+visible" privacy guarantee. Choose nonsensitive namespace and Backup ID values;
+administrator-entered snapshot notes are also plaintext.
+
+The source fix on `pbsx-encrypted-notes-privacy` stops encrypted jobs from
+attaching their job labels/IDs as plaintext PBS snapshot notes. Labels remain in
+the app's local job settings/history. This fix is not in the published
+`0.5.12-preview` APK yet, and does not remove notes from older snapshots.
+
 ## Try it
 
 1. Install `artifacts/pbsx-android-preview.apk`. Permit installation from the

@@ -382,12 +382,7 @@ func (c *Client) BackupGroupResumable(raw, source string, docs Documents, journa
 	if previousErr != nil {
 		warning = "Could not inspect previous snapshot; deduplication used only this run's known chunks"
 	}
-	values := map[string]any{"backup-type": "host", "backup-id": run.BackupID, "backup-time": run.Stamp, "notes": "PBS-X Android: " + run.JobName + "\nJob ID: " + run.JobID}
-	if run.Namespace != "" {
-		values["ns"] = run.Namespace
-	}
-	body, _ := json.Marshal(values)
-	if _, err = c.request(ctx, "PUT", "/admin/datastore/"+url.PathEscape(run.Store)+"/notes", body, true); err != nil {
+	if err = c.saveJobNotes(ctx, run.Store, run.Namespace, run.BackupID, run.Stamp, run.JobID, run.JobName); err != nil {
 		if warning != "" {
 			warning += "; "
 		}
