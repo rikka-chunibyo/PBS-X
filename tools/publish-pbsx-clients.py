@@ -203,6 +203,7 @@ def page(data):
 <h1>PBS-X app downloads</h1><p>Preview builds for backing up your devices to PBS-X.</p><table><tr><th>App</th><th>Version</th><th>Platform</th><th>File</th></tr>'''+body+'''</table>
 <p>Windows: extract the ZIP and run the included installer from an Administrator PowerShell. Linux: extract, then run <code>sudo python3 install.py</code>; add <code>--headless</code> for CLI-only installation. Android: open the APK and allow installation from your browser or file manager.</p>
 <p>The desktop companion enrolls and controls the background agent. Configure desktop backup jobs in the PBS-X server web UI. Android manages jobs in the app. Existing managed credentials are retained during updates.</p>
+<p>Android 0.5.12 and later requires PBS-X 4.2.9-1+pbsx3 or later for backups. Update the server through APT before updating the Android app.</p>
 <p>These are preview builds. Windows executables are unsigned; Android retains its existing development signing certificate. Automatic client updates are not enabled.</p>
 <p><a href="'''+prefix+'''SHA256SUMS">Checksums</a> · <a href="'''+prefix+'''release.json">Build details</a> · <a href="/iso/latest/pbsx-offline-amd64.iso">Server ISO</a> · <a href="/">APT repository</a></p><small>Release: '''+tag+'''</small></html>\n'''
 
