@@ -230,8 +230,11 @@ final class SettingsTransfer {
                     "Resume or cancel current pending backups before importing settings");
               JSONArray pending = root.optJSONArray("pending_backups");
               if (pending == null) pending = new JSONArray();
-              for (int i = 0; i < pending.length(); i++)
-                pending.getJSONObject(i).put("automatic", false).put("state", "paused");
+              for (int i = 0; i < pending.length(); i++) {
+                JSONObject task = pending.getJSONObject(i);
+                task.put("automatic", false);
+                if (!PendingBackups.cleanupOnly(task)) task.put("state", "paused");
+              }
               Vault.install(c, root.getJSONObject("vault"), preferences, pending);
               ScheduleService.configureAll(c);
             });

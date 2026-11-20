@@ -172,11 +172,25 @@ final class PendingBackups {
   static synchronized void put(Context c, JSONObject run) throws Exception {
     String id = run.getJSONObject("job").getString("id");
     JSONArray all = all(c), out = new JSONArray();
-    for (int i = 0; i < all.length(); i++)
-      if (!id.equals(all.getJSONObject(i).getJSONObject("job").getString("id")))
-        out.put(all.get(i));
+    for (int i = 0; i < all.length(); i++) {
+      JSONObject previous = all.getJSONObject(i);
+      if (id.equals(previous.getJSONObject("job").getString("id"))) {
+        if (!run.getString("history").equals(previous.getString("history")))
+          throw new Exception("This job already has an unfinished task");
+      } else out.put(all.get(i));
+    }
     out.put(run);
     install(c, out);
+  }
+
+  /** Terminal tasks retain cleanup secrets, not a resumable job state. */
+  static boolean cleanupOnly(JSONObject run) {
+    return run != null
+        && ("failed".equals(run.optString("state")) || "cancelling".equals(run.optString("state")));
+  }
+
+  static boolean canResume(JSONObject run) {
+    return run != null && !cleanupOnly(run);
   }
 
   static synchronized void remove(Context c, String jobID) throws Exception {

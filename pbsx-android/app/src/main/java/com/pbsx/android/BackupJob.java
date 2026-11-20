@@ -11,6 +11,7 @@ final class BackupJob {
   String connectionID = "", encryptionKeyID = "";
   JSONArray sources = new JSONArray();
   JSONArray shizukuFolders = new JSONArray();
+  JSONArray excludes = new JSONArray();
   int hours = 0, schedulerId = 0;
   boolean calendar = false;
   int scheduleDays = 127;
@@ -21,38 +22,42 @@ final class BackupJob {
   JSONObject appSelections = new JSONObject();
 
   JSONObject json() throws Exception {
-    return new JSONObject()
-        .put("id", id)
-        .put("name", name)
-        .put("store", store)
-        .put("namespace", namespace)
-        .put("backup_id", backupID)
-        .put("connection_id", connectionID)
-        .put("encryption_key_id", encryptionKeyID)
-        .put("sources", sources)
-        .put("shizuku_folders", shizukuFolders)
-        .put("hours", hours)
-        .put("calendar", calendar)
-        .put("schedule_days", scheduleDays)
-        .put("schedule_times", scheduleTimes)
-        .put("schedule_zone", scheduleZone)
-        .put("scheduler_id", schedulerId)
-        .put("wifi", wifi)
-        .put("charging", charging)
-        .put("shizuku", shizuku)
-        .put("apks", apks)
-        .put("data", data)
-        .put("obb", obb)
-        .put("all_apps", allApps)
-        .put("packages", packages)
-        .put("app_selections", appSelections)
-        .put("exports", exports);
+    JSONObject value =
+        new JSONObject()
+            .put("id", id)
+            .put("name", name)
+            .put("store", store)
+            .put("namespace", namespace)
+            .put("backup_id", backupID)
+            .put("connection_id", connectionID)
+            .put("encryption_key_id", encryptionKeyID)
+            .put("sources", sources)
+            .put("shizuku_folders", shizukuFolders)
+            .put("hours", hours)
+            .put("calendar", calendar)
+            .put("schedule_days", scheduleDays)
+            .put("schedule_times", scheduleTimes)
+            .put("schedule_zone", scheduleZone)
+            .put("scheduler_id", schedulerId)
+            .put("wifi", wifi)
+            .put("charging", charging)
+            .put("shizuku", shizuku)
+            .put("apks", apks)
+            .put("data", data)
+            .put("obb", obb)
+            .put("all_apps", allApps)
+            .put("packages", packages)
+            .put("app_selections", appSelections)
+            .put("exports", exports);
+    // Preserve old frozen-run source identities when no exclusions were saved.
+    if (excludes.length() > 0) value.put("excludes", excludes);
+    return value;
   }
 
   static BackupJob from(JSONObject value) throws Exception {
     if (value.has("all_apps") && !(value.opt("all_apps") instanceof Boolean))
       throw new Exception("Invalid saved app selection mode");
-    for (String key : new String[] {"packages", "exports", "shizuku_folders"})
+    for (String key : new String[] {"packages", "exports", "shizuku_folders", "excludes"})
       if (value.has(key) && !(value.opt(key) instanceof JSONArray))
         throw new Exception("Invalid saved " + key + " selection");
     BackupJob j = new BackupJob();
@@ -69,6 +74,11 @@ final class BackupJob {
             value.optJSONArray("sources") == null
                 ? "[]"
                 : value.getJSONArray("sources").toString());
+    j.excludes =
+        new JSONArray(
+            value.optJSONArray("excludes") == null
+                ? "[]"
+                : value.getJSONArray("excludes").toString());
     j.shizukuFolders =
         new JSONArray(
             value.optJSONArray("shizuku_folders") == null
@@ -116,6 +126,7 @@ final class BackupJob {
   }
 
   void validate(boolean runnable) throws Exception {
+    new BackupExclusions(excludes);
     if (!id.matches("[A-Za-z0-9_-]{1,64}")) throw new Exception("Invalid job identity");
     for (String identity : new String[] {connectionID, encryptionKeyID})
       if (!identity.isEmpty() && !identity.matches("[A-Za-z0-9_-]{1,64}"))

@@ -15,6 +15,7 @@ final class AndroidDocuments implements RestoreOutput {
   private final ShizukuBridge bridge;
   private final DocumentTree output;
   private final ExportCache exports;
+  private final BackupExclusions exclusions;
   private final Map<String, java.util.Set<String>> selected = new LinkedHashMap<>();
   private final java.util.Set<String> sharedFolders = new java.util.HashSet<>();
   private final java.util.Set<String> allApps = new java.util.HashSet<>();
@@ -75,6 +76,7 @@ final class AndroidDocuments implements RestoreOutput {
       throws Exception {
     output = null;
     job.validate(true);
+    exclusions = new BackupExclusions(job.excludes);
     String[] kinds = {"apks", "data", "obb"},
         labels = {"Installed-APKs", "Android-data", "Android-obb"};
     for (int i = 0; i < kinds.length; i++) {
@@ -90,31 +92,44 @@ final class AndroidDocuments implements RestoreOutput {
       for (int i = 0; i < job.sources.length(); i++) {
         JSONObject s = job.sources.getJSONObject(i);
         String label = s.getString("label");
+        if (exclusions.excludes(label)) continue;
         if (Paths.parts(label).length != 1 || trees.containsKey(label))
           throw new Exception("Invalid or duplicate source label");
         trees.put(
             label, new DocumentTree(context.getContentResolver(), Uri.parse(s.getString("uri"))));
       }
-      if (job.shizuku
-          && (job.apks
-              || job.data
-              || job.obb
-              || job.exports.length() > 0
-              || job.shizukuFolders.length() > 0)) {
+      JSONArray exportCategories = new JSONArray();
+      for (int i = 0; i < job.exports.length(); i++) {
+        String category = job.exports.getString(i);
+        if (!exclusions.excludes("Device-data/" + category + ".zip"))
+          exportCategories.put(category);
+      }
+      boolean needsShizuku =
+          (job.apks && !exclusions.excludes("Installed-APKs"))
+              || (job.data && !exclusions.excludes("Android-data"))
+              || (job.obb && !exclusions.excludes("Android-obb"))
+              || exportCategories.length() > 0;
+      for (int i = 0; i < job.shizukuFolders.length(); i++)
+        if (!exclusions.excludes(job.shizukuFolders.getJSONObject(i).getString("label")))
+          needsShizuku = true;
+      if (job.shizuku && needsShizuku) {
         opened = new ShizukuBridge(context, service);
         for (int i = 0; i < job.shizukuFolders.length(); i++) {
           JSONObject folder = job.shizukuFolders.getJSONObject(i);
           String label = folder.getString("label");
+          if (exclusions.excludes(label)) continue;
           String path = "/@shared/" + folder.getString("path");
           if (!new JSONObject(opened.files().stat(path)).getBoolean("directory"))
             throw new Exception("Shizuku source is no longer a folder: " + label);
           privileged.put(label, path);
           sharedFolders.add(label);
         }
-        if (job.apks) privileged.put("Installed-APKs", "/@apps");
-        if (job.data) privileged.put("Android-data", "/@data");
-        if (job.obb) privileged.put("Android-obb", "/@obb");
-        if (job.exports.length() > 0) {
+        if (job.apks && !exclusions.excludes("Installed-APKs"))
+          privileged.put("Installed-APKs", "/@apps");
+        if (job.data && !exclusions.excludes("Android-data"))
+          privileged.put("Android-data", "/@data");
+        if (job.obb && !exclusions.excludes("Android-obb")) privileged.put("Android-obb", "/@obb");
+        if (exportCategories.length() > 0) {
           cache =
               pending == null
                   ? new ExportCache(context)
@@ -122,13 +137,13 @@ final class AndroidDocuments implements RestoreOutput {
                       context,
                       pending.getString("history"),
                       new JSONObject(pending.getString("descriptor")).getLong("confirmed") > 0);
-          cache.prepare(opened.files(), job.exports, cancellation, progress);
+          cache.prepare(opened.files(), exportCategories, cancellation, progress);
         }
       }
       for (String label : privileged.keySet())
         if (trees.containsKey(label))
           throw new Exception("Source label conflicts with Shizuku source");
-      if (trees.isEmpty() && privileged.isEmpty() && cache == null)
+      if (trees.isEmpty() && privileged.isEmpty() && cache == null && job.sourceCount() == 0)
         throw new Exception("Select at least one backup folder or Shizuku source");
     } catch (Exception e) {
       if (opened != null) opened.close();
@@ -143,6 +158,7 @@ final class AndroidDocuments implements RestoreOutput {
     this.output = output;
     bridge = null;
     exports = null;
+    exclusions = null;
   }
 
   private String label(String path) {
@@ -195,6 +211,7 @@ final class AndroidDocuments implements RestoreOutput {
   public String statJSON(String path) throws Exception {
     Paths.parts(path);
     if (output != null) return output.stat(path).toString();
+    requireIncluded(path);
     if (path.equals("."))
       return new JSONObject()
           .put("name", "root")
@@ -211,6 +228,23 @@ final class AndroidDocuments implements RestoreOutput {
   }
 
   public String listJSON(String path) throws Exception {
+    if (output != null) return output.list(path).toString();
+    requireIncluded(path);
+    JSONArray entries = new JSONArray(listIncludedParent(path)), result = new JSONArray();
+    for (int i = 0; i < entries.length(); i++) {
+      JSONObject entry = entries.getJSONObject(i);
+      String name = entry.getString("name");
+      if (Paths.parts(name).length != 1) throw new Exception("Invalid source entry");
+      if (!exclusions.excludes(path.equals(".") ? name : path + "/" + name)) result.put(entry);
+    }
+    return result.toString();
+  }
+
+  private void requireIncluded(String path) {
+    if (exclusions.excludes(path)) throw new SecurityException("Path is excluded from this backup");
+  }
+
+  private String listIncludedParent(String path) throws Exception {
     Paths.parts(path);
     if (output != null) return output.list(path).toString();
     if (path.equals(".")) {
@@ -234,7 +268,8 @@ final class AndroidDocuments implements RestoreOutput {
           && label(path).equals("Installed-APKs")) {
         JSONArray out = new JSONArray();
         for (String pkg : new java.util.TreeSet<>(selected.get(label(path))))
-          out.put(new JSONObject(bridge.files().stat("/@apps/" + pkg)).put("name", pkg));
+          if (!exclusions.excludes(path + "/" + pkg))
+            out.put(new JSONObject(bridge.files().stat("/@apps/" + pkg)).put("name", pkg));
         return out.toString();
       }
       JSONArray all = new JSONArray(bridge.files().list(privilegedPath(path)));
@@ -253,6 +288,7 @@ final class AndroidDocuments implements RestoreOutput {
   public long openRead(String path) throws Exception {
     Paths.parts(path);
     if (output != null) return output.read(path);
+    requireIncluded(path);
     if (exportPath(path))
       return ParcelFileDescriptor.open(exportFile(path), ParcelFileDescriptor.MODE_READ_ONLY)
           .detachFd();

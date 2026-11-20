@@ -87,12 +87,14 @@ public final class BackupService extends Service {
       return START_NOT_STICKY;
     }
     if ("pause".equals(intent.getAction())) {
-      Operations.pause("Paused by you", false);
+      if (cancellation != null) cancellation.pause("Paused by you", false);
+      else Operations.pause("Paused by you", false);
       if (!working) stopSelf();
       return START_NOT_STICKY;
     }
     if ("cancel".equals(intent.getAction())) {
-      Operations.cancel();
+      if (cancellation != null) cancellation.cancel();
+      else Operations.cancel();
       if (!working) stopSelf();
       return START_NOT_STICKY;
     }
@@ -151,7 +153,8 @@ public final class BackupService extends Service {
                 Settings.status(this, result + " · Could not update schedules: " + e.getMessage());
               }
               stopForeground(STOP_FOREGROUND_REMOVE);
-              getSystemService(NotificationManager.class).notify(ID, notification(result));
+              if (cancellation.paused()) getSystemService(NotificationManager.class).cancel(ID);
+              else getSystemService(NotificationManager.class).notify(ID, notification(result));
               stopSelf();
             },
             "pbsx-operation")

@@ -81,7 +81,7 @@ app cache. The following information is included:
 | --- | --- |
 | `vault` | All connection profiles, default selection, API credentials, enrolled certificates/private identities, backup keys, fingerprints and names. |
 | `preferences.settings` | Every saved general preference, including browsing Wi-Fi settings and saved status. |
-| `preferences.jobs-v1` | Every job, source label/URI, Shizuku shared-folder label/path, Backup ID, connection/key reference, schedule, constraints, Shizuku/app selections, export categories, scheduler allocator and retained activity history. |
+| `preferences.jobs-v1` | Every job, source label/URI, Shizuku shared-folder label/path, file/directory exclusion rules, Backup ID, connection/key reference, schedule, constraints, Shizuku/app selections, export categories, scheduler allocator and retained activity history. |
 | `folder_permissions` | Descriptions of the current persisted folder grants, for reference. |
 | Metadata | Format version, app version and export time. |
 
@@ -147,3 +147,12 @@ All apps unchecked and no selected packages. While Shizuku is disabled, its
 source checkboxes, app controls and export choices are disabled and dimmed.
 Toggling the master switch preserves the job's choices. Existing saved jobs
 retain their explicit selections.
+
+
+Per-job `excludes` is an optional array of backup-relative path/glob strings.
+Empty rules are omitted when writing jobs to preserve existing frozen-run source
+identities. Validation rejects unsafe paths, non-string entries and unbounded
+rule sets; compiled matching avoids regex backtracking. Nonempty exclusions are
+part of a pending task's frozen source identity and survive export/import.
+Import holds live tasks as paused, while failed/cancelling cleanup records retain
+their terminal state and cannot be accidentally resumed.

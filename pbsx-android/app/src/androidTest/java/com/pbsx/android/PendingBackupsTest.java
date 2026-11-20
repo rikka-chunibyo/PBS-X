@@ -37,7 +37,7 @@ public class PendingBackupsTest {
     };
   }
 
-  private JSONObject run(Context c) throws Exception {
+  JSONObject run(Context c) throws Exception {
     BackupJob job = new BackupJob();
     job.sources.put(
         new JSONObject().put("label", "Download").put("uri", "content://fixture/tree/download"));
@@ -70,6 +70,60 @@ public class PendingBackupsTest {
         .put("descriptor", descriptor.toString())
         .put("state", "paused")
         .put("automatic", false);
+  }
+
+  @Test
+  public void failedTasksAreTerminalWithoutResumingAndDoNotHoldSchedules() throws Exception {
+    Context c = isolated();
+    JSONObject run = run(c);
+    BackupJob job = BackupJob.from(run.getJSONObject("job"));
+    job.hours = 12;
+    JobStore.save(c, job);
+    run.put("state", "failed").put("message", "Synthetic source failed");
+    PendingBackups.put(c, run);
+    JobStore.state(c, run.getString("history"), "failed", "Synthetic source failed");
+    assertTrue(PendingBackups.cleanupOnly(PendingBackups.get(c, job.id)));
+    assertFalse(PendingBackups.canResume(PendingBackups.get(c, job.id)));
+    assertTrue(JobStore.history(c).getJSONObject(0).has("finished"));
+    android.app.job.JobScheduler scheduler = c.getSystemService(android.app.job.JobScheduler.class);
+    try {
+      ScheduleService.configureAll(c);
+      assertNotNull(scheduler.getPendingJob(job.schedulerId));
+      // A failed task retains only its cleanup key until the next attempt.
+      assertEquals(
+          run.getString("descriptor"), PendingBackups.get(c, job.id).getString("descriptor"));
+    } finally {
+      scheduler.cancel(job.schedulerId);
+      ExportCache.remove(c.getFilesDir());
+      PendingBackups.forgetCache();
+    }
+  }
+
+  @Test
+  public void aJobCannotReplaceItsTaskButOtherJobsCanRunWhileItIsPaused() throws Exception {
+    Context c = isolated();
+    JSONObject run = run(c);
+    PendingBackups.put(c, run);
+    BackupJob job = BackupJob.from(run.getJSONObject("job"));
+    try {
+      JobStore.start(c, job, "backup");
+      fail("Started a second task for one job");
+    } catch (Exception expected) {
+      assertTrue(expected.getMessage().contains("unfinished"));
+    }
+    try {
+      PendingBackups.put(
+          c, new JSONObject(run.toString()).put("history", UUID.randomUUID().toString()));
+      fail("Replaced another task's recovery descriptor");
+    } catch (Exception expected) {
+      assertTrue(expected.getMessage().contains("unfinished"));
+    }
+    BackupJob other = new BackupJob();
+    String history = JobStore.start(c, other, "backup");
+    JobStore.finish(c, history, true, "Synthetic other job completed");
+    assertEquals(run.getString("history"), PendingBackups.get(c, job.id).getString("history"));
+    ExportCache.remove(c.getFilesDir());
+    PendingBackups.forgetCache();
   }
 
   private String repeat(String value, int count) {
@@ -177,6 +231,7 @@ public class PendingBackupsTest {
     JSONObject run = run(from);
     BackupJob job = BackupJob.from(run.getJSONObject("job"));
     job.connectionID = connection;
+    job.excludes = BackupExclusions.parse("Download/cache\n**/*.tmp");
     JobStore.save(from, job);
     String source = PendingBackups.sourceIdentity(run.getString("device"), job);
     JSONObject descriptor = new JSONObject(run.getString("descriptor")).put("source", source);
@@ -198,7 +253,25 @@ public class PendingBackupsTest {
     assertEquals(run.getString("descriptor"), imported.getString("descriptor"));
     assertFalse(imported.getBoolean("automatic"));
     assertEquals("paused", imported.getString("state"));
+    assertEquals(
+        job.excludes.toString(), BackupJob.from(imported.getJSONObject("job")).excludes.toString());
     assertTrue(Settings.prefs(to).getBoolean("imported_schedule_hold", false));
+    for (String terminalState : new String[] {"failed", "cancelling"}) {
+      Context terminal = isolated();
+      JSONObject copy = new JSONObject(exported);
+      copy.getJSONArray("pending_backups").getJSONObject(0).put("state", terminalState);
+      SettingsTransfer.importJSON(terminal, copy.toString());
+      JSONObject retained = PendingBackups.get(terminal, job.id);
+      assertEquals(terminalState, retained.getString("state"));
+      assertTrue(PendingBackups.cleanupOnly(retained));
+      assertFalse(PendingBackups.canResume(retained));
+      assertEquals(
+          terminalState.equals("failed") ? "failed" : "cancelled",
+          JobStore.history(terminal).getJSONObject(0).getString("state"));
+      assertTrue(JobStore.history(terminal).getJSONObject(0).has("finished"));
+      PendingBackups.remove(terminal, job.id);
+      ExportCache.remove(terminal.getFilesDir());
+    }
     try {
       SettingsTransfer.importJSON(to, exported);
       fail("Replaced an existing pending backup");

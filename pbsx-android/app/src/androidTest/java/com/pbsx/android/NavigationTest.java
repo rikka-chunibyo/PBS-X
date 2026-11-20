@@ -77,6 +77,53 @@ public class NavigationTest {
     capture(activity.getWindow().getDecorView(), name);
   }
 
+  @Test
+  public void pausedTasksOwnResumeAndFailedJobsCanStartAgain() throws Exception {
+    Context c = instrumentation.getTargetContext();
+    Activity main = null;
+    try (TaskFixtureState state = new TaskFixtureState(c)) {
+      JSONObject task = new PendingBackupsTest().run(c);
+      PendingBackups.put(c, task);
+      main =
+          instrumentation.startActivitySync(
+              new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+      waitFor(main, "Resume backup", false);
+      Activity shown = main;
+      instrumentation.runOnMainSync(
+          () -> {
+            View root = shown.findViewById(android.R.id.content);
+            assertNull(find(root, "Resume", false));
+            assertNull(find(root, "Cancel saved run", false));
+            assertFalse(find(root, "Back up", false).isEnabled());
+          });
+      task.put("state", "failed").put("message", "Synthetic source failure");
+      PendingBackups.put(c, task);
+      JobStore.state(c, task.getString("history"), "failed", "Synthetic source failure");
+      long end = System.currentTimeMillis() + 10000;
+      java.util.concurrent.atomic.AtomicBoolean ready =
+          new java.util.concurrent.atomic.AtomicBoolean();
+      do {
+        instrumentation.runOnMainSync(
+            () -> {
+              View root = shown.findViewById(android.R.id.content),
+                  backup = find(root, "Back up", false);
+              ready.set(
+                  find(root, "Resume backup", false) == null
+                      && backup != null
+                      && backup.isEnabled());
+            });
+        if (!ready.get()) Thread.sleep(50);
+      } while (!ready.get() && System.currentTimeMillis() < end);
+      assertTrue("Failed task left job controls stuck", ready.get());
+      assertTrue(JobStore.history(c).getJSONObject(0).has("finished"));
+      instrumentation.runOnMainSync(shown::finish);
+      main = null;
+    } finally {
+      Activity shown = main;
+      if (shown != null) instrumentation.runOnMainSync(shown::finish);
+    }
+  }
+
   private void capture(View decor, String name) throws Exception {
     if (!"true".equals(InstrumentationRegistry.getArguments().getString("pbsx_screenshots")))
       return;

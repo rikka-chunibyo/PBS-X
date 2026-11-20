@@ -235,8 +235,15 @@ final class Operations {
       if (destination == null
           && cancellation.scheduled
           && (Settings.prefs(context).getBoolean("imported_schedule_hold", false)
-              || (pending != null && !pending.optBoolean("automatic"))))
-        return "Backup held until you resume or cancel its saved run";
+              || (PendingBackups.canResume(pending) && !pending.optBoolean("automatic"))))
+        return "Backup held until you resume its paused task";
+      if (destination == null && PendingBackups.cleanupOnly(pending)) {
+        TransferState.phase("Clearing previous unfinished task");
+        Settings.status(context, "Clearing previous unfinished task");
+        String completed = clearTerminalTask(context, pending);
+        pending = null;
+        if (!completed.isEmpty()) return completed;
+      }
       job =
           pending == null
               ? (destination == null ? JobStore.get(context, requestedJob.id) : requestedJob)
@@ -487,7 +494,8 @@ final class Operations {
       Context c, JSONObject run, boolean automatic, String state, String message) throws Exception {
     run.put("state", state).put("automatic", automatic).put("message", message);
     PendingBackups.put(c, run);
-    JobStore.state(c, run.getString("history"), state, message);
+    JobStore.state(
+        c, run.getString("history"), state.equals("cancelling") ? "cancelled" : state, message);
   }
 
   private static String finishBackup(
@@ -505,6 +513,17 @@ final class Operations {
   }
 
   private static String cancelPending(Context c, JSONObject run, boolean wifi) throws Exception {
+    return clearPending(c, run, wifi, false);
+  }
+
+  /** Called before creating a new task, never reopens a failed run as running. */
+  private static String clearTerminalTask(Context c, JSONObject run) throws Exception {
+    BackupJob frozen = BackupJob.from(run.getJSONObject("job"));
+    return clearPending(c, run, frozen.wifi, true);
+  }
+
+  private static String clearPending(Context c, JSONObject run, boolean wifi, boolean terminal)
+      throws Exception {
     BackupJob job = BackupJob.from(run.getJSONObject("job"));
     Client cleanup =
         client(c, KeyProfiles.config(c, job.connectionID, job.encryptionKeyID, true), null, wifi);
@@ -513,16 +532,17 @@ final class Operations {
     if (!completed.isEmpty())
       return finishBackup(c, job, run.getString("history"), run, new JSONObject(completed));
     cleanup.discardBackupRun(run.getString("descriptor"), run.getString("source"));
-    JobStore.state(
-        c,
-        run.getString("history"),
-        "cancelled",
-        "Backup cancelled; incomplete server snapshot removed");
+    if (!terminal)
+      JobStore.state(
+          c,
+          run.getString("history"),
+          "cancelled",
+          "Backup cancelled; incomplete server snapshot removed");
     PendingBackups.remove(c, job.id);
     ExportCache.discard(c, run.getString("history"));
-    if (run.optLong("occurrence", 0) > 0)
+    if (!terminal && run.optLong("occurrence", 0) > 0)
       ScheduleService.completed(c, job.id, run.getLong("occurrence"));
-    return "Backup cancelled";
+    return terminal ? "" : "Backup cancelled";
   }
 
   static String discardPending(Context c, String jobID) throws Exception {

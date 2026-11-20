@@ -275,6 +275,7 @@ public final class MainActivity extends Activity {
               });
         Ui.button(running, "Cancel transfer", false, v -> Operations.cancel());
       }
+      pausedTasks();
       if (tab == 0) jobs(cfg);
       else if (tab == 1) restore(cfg);
       else if (tab == 2) activity();
@@ -284,6 +285,54 @@ public final class MainActivity extends Activity {
     } catch (Exception e) {
       Ui.hint(page, e.getMessage() == null ? "Could not load app data" : e.getMessage());
     }
+  }
+
+  private void pausedTasks() throws Exception {
+    JSONArray runs = PendingBackups.all(this);
+    for (int i = 0; i < runs.length(); i++) {
+      JSONObject task = runs.getJSONObject(i);
+      if (!PendingBackups.canResume(task)
+          || task.optString("history").equals(Operations.activeRunId())) continue;
+      BackupJob frozen = BackupJob.from(task.getJSONObject("job"));
+      LinearLayout card = Ui.card(page);
+      Ui.text(card, frozen.name, 17, Ui.BLUE);
+      Ui.text(card, "Paused", 16, Ui.TEXT);
+      Ui.hint(card, task.optString("message", "Checkpoint retained"));
+      JSONObject descriptor = new JSONObject(task.getString("descriptor"));
+      Ui.hint(
+          card,
+          descriptor.optLong("files")
+              + " files · "
+              + android.text.format.Formatter.formatFileSize(this, descriptor.optLong("bytes"))
+              + " read · "
+              + android.text.format.Formatter.formatFileSize(this, descriptor.optLong("uploaded"))
+              + " uploaded");
+      Ui.hint(
+          card,
+          "Resumes the same snapshot using this task's saved sources and credentials. Job edits"
+              + " apply to the next task.");
+      Button resume = Ui.button(card, "Resume backup", true, v -> run(frozen));
+      resume.setEnabled(!Operations.running());
+      Button cancel = Ui.button(card, "Cancel task", false, v -> discardTask(frozen.id));
+      cancel.setEnabled(!Operations.running());
+    }
+  }
+
+  private void discardTask(String jobID) {
+    new AlertDialog.Builder(this)
+        .setTitle("Clear unfinished task?")
+        .setMessage(
+            "Remove only this task's unfinished backup and recovery data? Completed snapshots are"
+                + " kept.")
+        .setNegativeButton("Keep task", null)
+        .setPositiveButton(
+            "Clear task",
+            (dialog, which) ->
+                startForegroundService(
+                    new Intent(this, BackupService.class)
+                        .setAction("discard")
+                        .putExtra("job_id", jobID)))
+        .show();
   }
 
   private void jobs(JSONObject cfg) throws Exception {
@@ -379,47 +428,11 @@ public final class MainActivity extends Activity {
         runningJobLabel = lastLabel;
       LinearLayout actions = Ui.row(this);
       JSONObject pending = PendingBackups.get(this, job.id);
-      if (pending != null) {
-        BackupJob frozen = BackupJob.from(pending.getJSONObject("job"));
+      Button backup = Ui.button(actions, "Back up", true, v -> run(job));
+      backup.setEnabled(!Operations.running() && !PendingBackups.canResume(pending));
+      if (PendingBackups.canResume(pending))
         Ui.hint(
-            card,
-            "Saved run · "
-                + frozen.target()
-                + "\n"
-                + pending.optString("message", "Checkpoint retained")
-                + "\nUses the saved sources and credentials; job edits apply to the next run.");
-        if ("cancelling".equals(pending.optString("state")))
-          Ui.button(
-              actions,
-              "Retry cancel",
-              true,
-              v ->
-                  startForegroundService(
-                      new Intent(this, BackupService.class)
-                          .setAction("discard")
-                          .putExtra("job_id", job.id)));
-        else Ui.button(actions, "Resume", true, v -> run(job));
-        Ui.button(
-            actions,
-            "Cancel saved run",
-            false,
-            v ->
-                new AlertDialog.Builder(this)
-                    .setTitle("Cancel unfinished backup?")
-                    .setMessage(
-                        "Remove this run's incomplete server snapshot and its local recovery data?"
-                            + " Completed backups are kept.")
-                    .setPositiveButton(
-                        "Cancel backup",
-                        (dialog, which) -> {
-                          startForegroundService(
-                              new Intent(this, BackupService.class)
-                                  .setAction("discard")
-                                  .putExtra("job_id", job.id));
-                        })
-                    .setNegativeButton("Keep", null)
-                    .show());
-      } else Ui.button(actions, "Back up", true, v -> run(job));
+            card, "This job has a task above. Resume or cancel that task before starting another.");
       Ui.button(actions, "Snapshots", false, v -> browse(job));
       card.addView(actions);
     }
@@ -473,6 +486,16 @@ public final class MainActivity extends Activity {
       Ui.hint(card, date(r.optLong("started")) + " · " + r.optString("target"));
       TextView message = Ui.hint(card, r.optString("message"));
       if (r.optString("id").equals(Operations.activeRunId())) runningHistoryLabel = message;
+      JSONObject saved = PendingBackups.get(this, r.optString("job_id"));
+      if (PendingBackups.cleanupOnly(saved)
+          && r.optString("id").equals(saved.optString("history"))) {
+        Ui.hint(
+            card,
+            "Unfinished data will be cleared automatically before the next backup of this job.");
+        Button clear =
+            Ui.button(card, "Clear task", false, v -> discardTask(r.optString("job_id")));
+        clear.setEnabled(!Operations.running());
+      }
     }
   }
 

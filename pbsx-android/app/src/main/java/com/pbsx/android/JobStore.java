@@ -88,6 +88,8 @@ final class JobStore {
   }
 
   static synchronized String start(Context c, BackupJob job, String kind) throws Exception {
+    if (kind.equals("backup") && PendingBackups.get(c, job.id) != null)
+      throw new Exception("This job already has an unfinished task");
     JSONObject run =
         new JSONObject()
             .put("id", java.util.UUID.randomUUID().toString())
@@ -140,8 +142,9 @@ final class JobStore {
       if (id.equals(run.getString("id"))) {
         run.put("state", state)
             .put("message", message.length() > 4096 ? message.substring(0, 4096) : message);
-        if (state.equals("running")) run.remove("finished");
-        else if (state.equals("cancelled")) run.put("finished", System.currentTimeMillis());
+        if (state.equals("running") || state.equals("paused")) run.remove("finished");
+        else if (state.equals("cancelled") || state.equals("failed"))
+          run.put("finished", System.currentTimeMillis());
         if (!prefs(c).edit().putString("history", runs.toString()).commit())
           throw new Exception("Could not save backup status");
         return;
@@ -175,10 +178,20 @@ final class JobStore {
       if ("running".equals(r.optString("state"))) {
         JSONObject pending = PendingBackups.get(c, r.optString("job_id"));
         if (pending != null && r.optString("id").equals(pending.optString("history"))) {
-          r.put("state", "paused")
+          boolean terminal = PendingBackups.cleanupOnly(pending);
+          r.put(
+                  "state",
+                  terminal
+                      ? ("failed".equals(pending.optString("state")) ? "failed" : "cancelled")
+                      : "paused")
               .put(
                   "message",
-                  "Android stopped the app; saved backup will resume from its checkpoint");
+                  terminal
+                      ? pending.optString(
+                          "message",
+                          "Task finished; unfinished data will be cleared before the next backup")
+                      : "Android stopped the app; saved backup will resume from its checkpoint");
+          if (terminal) r.put("finished", System.currentTimeMillis());
           changed = true;
           continue;
         }

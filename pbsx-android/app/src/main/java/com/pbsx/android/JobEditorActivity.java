@@ -12,7 +12,7 @@ import org.json.JSONObject;
 
 public final class JobEditorActivity extends Activity {
   private BackupJob job;
-  private EditText name, store, namespace, backupID, hours;
+  private EditText name, store, namespace, backupID, hours, excludes;
   private CheckBox wifi, charging, shizuku;
   private CheckBox calendar;
   private EditText scheduleTimes, scheduleZone;
@@ -82,6 +82,24 @@ public final class JobEditorActivity extends Activity {
       sourceCard.addView(folders);
       renderFolders();
       Ui.button(sourceCard, "+ Add folder", false, v -> pick());
+      LinearLayout exclusions = Ui.card(page);
+      Ui.text(exclusions, "Exclude files & directories", 18, Ui.TEXT);
+      excludes =
+          Ui.input(
+              exclusions,
+              "One backup-relative path or pattern per line",
+              BackupExclusions.text(job.excludes),
+              false);
+      excludes.setSingleLine(false);
+      excludes.setMinLines(3);
+      excludes.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+      excludes.setContentDescription("Backup exclusions");
+      Ui.hint(
+          exclusions,
+          "For example DCIM/.thumbnails excludes that folder and everything inside it. Use the"
+              + " folder labels shown in this job. * matches within one name, ? matches one"
+              + " character, and ** matches any depth; **/*.tmp excludes temporary files anywhere."
+              + " Exclusions also apply to Shizuku sources.");
       LinearLayout options = Ui.card(page);
       Ui.text(options, "Schedule & connection", 18, Ui.TEXT);
       hours =
@@ -180,6 +198,7 @@ public final class JobEditorActivity extends Activity {
                     .show());
       if (state != null) {
         name.setText(state.getString("name", job.name));
+        excludes.setText(state.getString("excludes", BackupExclusions.text(job.excludes)));
         store.setText(state.getString("store", job.store));
         namespace.setText(state.getString("namespace", job.namespace));
         backupID.setText(state.getString("backup_id", job.backupID(this)));
@@ -474,6 +493,7 @@ public final class JobEditorActivity extends Activity {
   private void save() {
     try {
       job.name = name.getText().toString();
+      job.excludes = BackupExclusions.parse(excludes.getText().toString());
       job.store = store.getText().toString();
       job.namespace = namespace.getText().toString();
       job.backupID = backupID.getText().toString();
@@ -516,6 +536,7 @@ public final class JobEditorActivity extends Activity {
     out.putString("sources", job.sources.toString());
     out.putString("shizuku_folders", job.shizukuFolders.toString());
     out.putString("name", name.getText().toString());
+    out.putString("excludes", excludes.getText().toString());
     out.putString("store", store.getText().toString());
     out.putString("namespace", namespace.getText().toString());
     out.putString("backup_id", backupID.getText().toString());

@@ -11,6 +11,29 @@ import org.junit.runner.RunWith;
 @RunWith(AndroidJUnit4.class)
 public class SharedFolderJobTest {
   @Test
+  public void exclusionsRoundTripAndEmptyRulesPreserveFrozenJobIdentity() throws Exception {
+    BackupJob job = new BackupJob();
+    JSONObject old = job.json();
+    assertFalse(old.has("excludes"));
+    assertEquals(old.toString(), BackupJob.from(old).json().toString());
+    job.excludes = BackupExclusions.parse("DCIM/.thumbnails\nDCIM/Camera/private.jpg\n**/*.tmp");
+    BackupJob saved = BackupJob.from(job.json());
+    assertEquals(job.excludes.toString(), saved.excludes.toString());
+    saved.excludes.remove(0);
+    assertEquals(3, job.excludes.length());
+    try {
+      BackupJob.from(job.json().put("excludes", "not-an-array"));
+      fail("Malformed exclusions accepted");
+    } catch (Exception expected) {
+    }
+    try {
+      BackupJob.from(job.json().put("excludes", new JSONArray().put(123)));
+      fail("Non-string exclusion accepted");
+    } catch (Exception expected) {
+    }
+  }
+
+  @Test
   public void appFiltersAreIndependentAndLegacyChoicesArePreserved() throws Exception {
     BackupJob job = new BackupJob();
     job.shizuku = true;

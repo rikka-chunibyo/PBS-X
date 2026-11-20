@@ -60,7 +60,7 @@ Normal PBS deduplication therefore does not provide an "only total size is
 visible" privacy guarantee. Choose nonsensitive namespace and Backup ID values;
 administrator-entered snapshot notes are also plaintext.
 
-The source fix on `pbsx-encrypted-notes-privacy` stops encrypted jobs from
+The 0.5.13 source includes the privacy fix that stops encrypted jobs from
 attaching their job labels/IDs as plaintext PBS snapshot notes. Labels remain in
 the app's local job settings/history. This fix is not in the published
 `0.5.12-preview` APK yet, and does not remove notes from older snapshots.
@@ -161,6 +161,17 @@ optimization, since document providers may report missing or unreliable mtimes.
 Deleting a file from the phone removes it from the next snapshot; earlier
 snapshots remain subject to PBS retention settings. There is no file syncing.
 
+Each job also has **Exclude files & directories**, with one backup-relative rule
+per line. `DCIM/.thumbnails` skips that directory and all descendants; an exact
+file path skips that file. Paths start with the selected folder's backup label,
+are case-sensitive, and work with SAF and Shizuku. `*` matches within one name,
+`?` matches one Unicode character and a complete `**` component spans any depth
+(including zero directories), so `**/*.tmp` excludes temporary files anywhere.
+Excluded subtrees are not traversed or uploaded; direct attempts to read an
+excluded path are refused. Exclusions are included in settings exports and frozen
+with a paused task, so later edits cannot change a resumed snapshot midway.
+Existing snapshots are not modified by new exclusion rules.
+
 Manual runs are the default. Each job can use an interval in whole hours or
 selected weekdays and times, optionally in a fixed time zone. Directories can
 use separate jobs for independent schedules. Android may defer the requested
@@ -174,9 +185,19 @@ pauses when Wi-Fi is lost; a restore cancels. Scheduled backups pause when Andro
 stops them or charging/network requirements cease to be met, then resume the same
 saved run when retried. Enrollment is a setup request and is not gated by Wi-Fi-only.
 
-The development branch adds **Pause** in the active transfer and notification,
-plus **Resume** and **Cancel saved run** on jobs. Resuming keeps the original
-snapshot, sources, credentials and history entry. Job edits apply to the next
+The task card offers **Pause** while running and **Resume backup** while paused.
+Paused tasks remain visible without a notification; resuming starts the foreground
+notification again. Job cards keep **Back up** and **Snapshots**, with no saved-run
+Resume/Cancel controls. At most one unfinished task belongs to each job, and one
+transfer runs at a time across the app; a paused task does not prevent other jobs
+from running. Task cancellation remains on the task card.
+
+A genuine failure finishes that activity entry as failed. The next attempt clears
+its own unfinished server snapshot before creating a new task; cleanup secrets
+stay private until the server confirms deletion. An uncertain completed snapshot
+is verified instead of deleted. Failed tasks can also be cleared from Activity.
+Android/charging/network pauses retain the original snapshot and history entry.
+Resuming keeps the original sources and credentials. Job edits apply to the next
 run. Manual pause holds automatic scheduling until you resume. An interrupted
 file's saved prefix is checked locally; files completed before the checkpoint
 are not reread. A small amount of work since the last checkpoint may be repeated

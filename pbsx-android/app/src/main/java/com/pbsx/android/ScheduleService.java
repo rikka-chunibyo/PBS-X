@@ -40,6 +40,7 @@ public final class ScheduleService extends JobService {
         continue;
       }
       org.json.JSONObject run = PendingBackups.get(c, j.id);
+      if (PendingBackups.cleanupOnly(run)) run = null;
       if (run != null && !run.optBoolean("automatic")) continue;
       BackupJob constraints = run == null ? j : BackupJob.from(run.getJSONObject("job"));
       long due = ScheduleState.due(c, j, false);
@@ -144,6 +145,7 @@ public final class ScheduleService extends JobService {
                 try {
                   org.json.JSONObject pending =
                       job == null ? null : PendingBackups.get(this, job.id);
+                  if (PendingBackups.cleanupOnly(pending)) pending = null;
                   if (pending != null || token.paused())
                     retry = pending == null || pending.optBoolean("automatic");
                   jobFinished(params, retry);
