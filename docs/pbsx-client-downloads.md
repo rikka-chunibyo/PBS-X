@@ -16,6 +16,24 @@ are unsigned, and Android retains its established development signing
 certificate, with debugging disabled in the downloadable release-mode APK.
 This does not enable automatic client updates.
 
+## Explicit release builds and CI storage quotas
+
+When Actions artifact storage is unavailable, native publication can use an
+existing draft release named `pbsx-client-build-*` as transport. Create that draft
+at the exact pushed commit, dispatch `host-app.yml` with `version` and
+`release_tag`, and pass `--build-release TAG` with the successful run ID to the
+client publisher. Only explicitly dispatched release jobs receive ephemeral
+`contents: write` permission. Push/PR jobs keep read-only permission and optional
+short-lived artifact uploads; mandatory release mirrors still fail on error.
+
+The same native tests/build/installer/CLI checks run in both modes. Linux also
+runs the desktop smoke check. Each platform uploads only an allowlisted bundle
+and provenance tying its hash to repository, commit, run ID and attempt. The
+collector checks GitHub digests, that provenance, archive paths and payload
+manifests before using the existing publication path. Existing completed assets
+are never overwritten. The draft build transport does not activate public
+application downloads; the normal maintainer publisher does that separately.
+
 ## Install
 
 - Windows amd64: extract the ZIP, open a 64-bit Administrator PowerShell in the

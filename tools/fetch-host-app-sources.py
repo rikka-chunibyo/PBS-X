@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
-FILES = {'.gitignore', 'tools/build-host-app.py'}
+FILES = {'.gitignore', 'tools/build-host-app.py', 'tools/host_release_transfer.py'}
 TREES = ('pbsx-host-agent/', 'packaging/host-app/')
 LIMIT = 128 * 1024 * 1024
 

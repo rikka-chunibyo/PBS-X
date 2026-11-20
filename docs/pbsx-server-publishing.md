@@ -48,7 +48,8 @@ Internet connection.
 CI verifies the mirrored hashes/identities, pinned upstream ISO, signed runtime
 dependencies, offline dependency closure, final embedded package bytes and
 BIOS/UEFI boot entries. The maintainer publisher waits for a successful run from
-the exact pushed source, downloads the artifact, and checks its checksum,
+the exact pushed source, downloads the artifact (or the checked GitHub release
+mirror if a quota prevented the optional artifact upload), and checks its checksum,
 embedded manifest, version, package hashes and clean build provenance.
 
 Only then does publication upload and verify GitHub assets and transfer the

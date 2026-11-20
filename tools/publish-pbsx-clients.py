@@ -408,7 +408,11 @@ def collect(args):
     with tempfile.TemporaryDirectory(prefix='pbsx-client-artifacts-') as name:
         work = Path(name)
         for system in ('linux', 'windows'):
-            run(['gh', 'run', 'download', str(args.run_id), '--repo', repository, '--name', 'host-app-'+system+'-preview', '--dir', work/system])
+            if getattr(args,'build_release',None):
+                import host_release_transfer
+                host_release_transfer.collect(repository,args.build_release,info,system,work/system)
+            else:
+                run(['gh', 'run', 'download', str(args.run_id), '--repo', repository, '--name', 'host-app-'+system+'-preview', '--dir', work/system])
             candidates = list((work/system).rglob('manifest.json'))
             if len(candidates) != 1:
                 raise ValueError('ambiguous CI bundle layout')
@@ -429,6 +433,7 @@ if __name__ == '__main__':
             sub.add_argument('--run-id', type=int, required=True)
             sub.add_argument('--tag', required=True)
             sub.add_argument('--build-android', action='store_true')
+            sub.add_argument('--build-release', help='draft pbsx-client-build-* transport release from the same successful dispatched run')
         if name != 'prepare':
             sub.add_argument('--host', required=True)
             sub.add_argument('--identity', type=Path)

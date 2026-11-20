@@ -101,6 +101,24 @@ def build_run(repository, commit, ref, tag, version, existing=None):
     raise ValueError('ISO build timed out; stable APT was not changed')
 
 
+def download_iso_assets(repository, tag, commit, destination):
+    info = release_info(repository, tag)
+    if info is None or info.get('target_commitish') != commit or info.get('draft'):
+        raise ValueError('ISO asset release does not match the successful build source')
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in publication.PUBLIC_FILES[:4]:
+        asset = next((a for a in info['assets'] if a['name'] == name), None)
+        maximum = 4*1024**3 if name == publication.IMAGE else 1024*1024
+        if (not asset or asset.get('state') != 'uploaded' or not 0 < asset.get('size', 0) <= maximum
+                or not re.fullmatch(r'sha256:[a-f0-9]{64}', asset.get('digest', ''))):
+            raise ValueError('missing or invalid mirrored ISO asset: '+name)
+        run(['gh', 'release', 'download', tag, '--repo', repository, '--pattern', name, '--dir', destination])
+        path = destination/name
+        publication.regular(path)
+        if path.stat().st_size != asset['size'] or 'sha256:'+publication.digest(path) != asset['digest']:
+            raise ValueError('mirrored ISO download hash mismatch: '+name)
+
+
 def prepare(args):
     if os.path.lexists(args.output):
         raise ValueError('output already exists; retry with publish --output on a prepared bundle')
@@ -143,8 +161,17 @@ def prepare(args):
         ensure_assets(repository, tag, [stage/d['filename'] for d in descriptors]+[stage/'iso-inputs.json'])
         info = build_run(repository, commit, args.ref, tag, version, args.run_id)
         artifact = work/'artifact'
-        run(['gh', 'run', 'download', str(info['id']), '--repo', repository,
-             '--name', 'pbsx-offline-iso-amd64', '--dir', artifact])
+        try:
+            run(['gh', 'run', 'download', str(info['id']), '--repo', repository,
+                 '--name', 'pbsx-offline-iso-amd64', '--dir', artifact])
+        except subprocess.CalledProcessError:
+            # The dispatched job mirrors these exact files before its optional
+            # artifact upload. Use the verified release transport if the Actions
+            # quota prevented that redundant upload; retain all source/hash gates.
+            print('Collecting checked ISO from its immutable GitHub release mirror...', flush=True)
+            if artifact.exists():
+                shutil.rmtree(artifact)
+            download_iso_assets(repository, tag, commit, artifact)
         images = list(artifact.rglob(publication.IMAGE))
         if len(images) != 1:
             raise ValueError('ambiguous ISO artifact layout')

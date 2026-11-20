@@ -11,16 +11,22 @@ on:
         required: true
         default: '0.7.6-preview'
         type: string
+      release_tag:
+        description: 'Existing draft pbsx-client-build-* release for verified output transport'
+        required: false
+        default: ''
+        type: string
 permissions:
   contents: read
 concurrency:
-  group: host-app-${{ github.ref }}
+  group: host-app-${{ github.ref }}-${{ inputs.release_tag || 'checks' }}
   cancel-in-progress: true
 jobs:
   linux:
+    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    steps:
+    steps: &linux_steps
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -42,6 +48,7 @@ jobs:
           node tests/host-backup-browser.test.cjs
           python3 tests/host-app-bundle.test.py
           python3 tests/host-source-download.test.py
+          python3 tests/host-release-transfer.test.py
           python3 packaging/pbsx-repository/test_apt_guard.py
       - name: Build matched Linux preview bundle
         env:
@@ -56,17 +63,25 @@ jobs:
       - name: Native window smoke test
         run: xvfb-run -a -s '-screen 0 1200x800x24 -noreset' env LIBGL_ALWAYS_SOFTWARE=1 python3 tools/smoke-host-desktop.py artifacts/host-app-linux/pbsx-desktop artifacts/desktop-linux.png
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        if: always()
+        if: always() && inputs.release_tag == ''
+        continue-on-error: true
         with:
           name: host-app-linux-preview
           path: |
             artifacts/host-app-linux
             artifacts/desktop-linux.png
           retention-days: 3
+      - name: Mirror checked Linux bundle to draft build release
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PBSX_BUILD_RELEASE: ${{ inputs.release_tag }}
+        run: python3 -c "import os,sys;sys.path.insert(0,'tools');import host_release_transfer as t;t.mirror('artifacts/host-app-linux','linux',os.environ['PBSX_BUILD_RELEASE'])"
   windows:
+    if: github.event_name != 'workflow_dispatch' || inputs.release_tag == ''
     runs-on: windows-latest
     timeout-minutes: 40
-    steps:
+    steps: &windows_steps
       # Windows cannot check out incompatible upstream PBS filenames. Extract
       # only the portable client tree from a ZIP pinned to this exact commit.
       - name: Fetch portable host app sources at this commit
@@ -108,7 +123,29 @@ jobs:
           & ./artifacts/host-app-windows/pbsx-agentctl.exe version
           if ($LASTEXITCODE -ne 0) { throw 'CLI failed' }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: inputs.release_tag == ''
+        continue-on-error: true
         with:
           name: host-app-windows-preview
           path: artifacts/host-app-windows
           retention-days: 3
+      - name: Mirror checked Windows bundle to draft build release
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PBSX_BUILD_RELEASE: ${{ inputs.release_tag }}
+        run: python -c "import os,sys;sys.path.insert(0,'tools');import host_release_transfer as t;t.mirror('artifacts/host-app-windows','windows',os.environ['PBSX_BUILD_RELEASE'])"
+  linux-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps: *linux_steps
+  windows-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps: *windows_steps

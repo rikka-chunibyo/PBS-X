@@ -343,4 +343,37 @@ class HostedBuildChecks(unittest.TestCase):
                 run.assert_not_called()
 
 
+class MirroredISOCollection(unittest.TestCase):
+    def test_checked_mirror_download_and_corruption_rejection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);destination=root/'download'
+            content=b'synthetic ISO transport fixture'
+            assets=[{'name':name,'state':'uploaded','size':len(content),'digest':'sha256:'+hashlib.sha256(content).hexdigest()}
+                    for name in pub.PUBLIC_FILES[:4]]
+            info={'target_commitish':'a'*40,'draft':False,'assets':assets}
+            def download(args):
+                name=args[args.index('--pattern')+1]
+                (Path(args[args.index('--dir')+1])/name).write_bytes(content)
+            with patch.object(publisher,'release_info',return_value=info),patch.object(publisher,'run',side_effect=download):
+                publisher.download_iso_assets('org/repo','tag','a'*40,destination)
+            self.assertEqual({p.name for p in destination.iterdir()},set(pub.PUBLIC_FILES[:4]))
+            shutil.rmtree(destination)
+            def corrupt(args):
+                name=args[args.index('--pattern')+1]
+                (Path(args[args.index('--dir')+1])/name).write_bytes(b'corrupt')
+            with patch.object(publisher,'release_info',return_value=info),patch.object(publisher,'run',side_effect=corrupt):
+                with self.assertRaisesRegex(ValueError,'hash mismatch'):
+                    publisher.download_iso_assets('org/repo','tag','a'*40,destination)
+
+    def test_wrong_source_draft_or_missing_asset_does_not_collect(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for info in [None,{'target_commitish':'b'*40,'draft':False},
+                    {'target_commitish':'a'*40,'draft':True},
+                    {'target_commitish':'a'*40,'draft':False,'assets':[]}]:
+                with self.subTest(info=info),patch.object(publisher,'release_info',return_value=info),patch.object(publisher,'run') as download:
+                    with self.assertRaises(ValueError):
+                        publisher.download_iso_assets('org/repo','tag','a'*40,Path(directory)/'download')
+                    download.assert_not_called()
+
+
 if __name__ == '__main__':unittest.main()
