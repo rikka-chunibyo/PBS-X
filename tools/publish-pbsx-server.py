@@ -177,7 +177,7 @@ def prepare(args):
             raise ValueError('ambiguous ISO artifact layout')
         for filename in publication.PUBLIC_FILES[:4]:
             publication.regular(images[0].parent/filename)
-            shutil.copy2(images[0].parent/filename, stage/filename)
+            os.replace(images[0].parent/filename, stage/filename)
         manifest = publication.read_json(stage/'pbsx-offline-amd64.manifest.json')
         metadata = {'schema': 1, 'release_id': tag, 'version': version, 'repository_version': repo_version,
                     'builder_commit': commit, 'ci_run_id': info['id'], 'created_at': manifest['created_at'],
