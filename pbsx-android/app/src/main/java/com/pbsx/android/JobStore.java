@@ -180,10 +180,15 @@ final class JobStore {
     boolean changed = false;
     for (int i = 0; i < out.length(); i++) {
       JSONObject r = out.getJSONObject(i);
-      if ("running".equals(r.optString("state"))) {
+      boolean wasRunning = "running".equals(r.optString("state"));
+      if (wasRunning || "paused".equals(r.optString("state"))) {
         JSONObject pending = PendingBackups.get(c, r.optString("job_id"));
         if (pending != null && r.optString("id").equals(pending.optString("history"))) {
           boolean terminal = PendingBackups.cleanupOnly(pending);
+          // The checkpoint and history are separate durable records. A crash
+          // between their writes must not leave a failed task looking paused.
+          // Preserve the original reason for an already-reconciled live pause.
+          if (!wasRunning && !terminal) continue;
           r.put(
                   "state",
                   terminal
@@ -200,6 +205,7 @@ final class JobStore {
           changed = true;
           continue;
         }
+        if (!wasRunning) continue;
         r.put("state", "interrupted")
             .put("finished", System.currentTimeMillis())
             .put(

@@ -195,6 +195,47 @@ public class PendingBackupsTest {
   }
 
   @Test
+  public void terminalCheckpointRepairsPausedActivityAfterInterruptedStateWrite() throws Exception {
+    Context c = isolated();
+    JSONObject task = run(c);
+    String history = task.getString("history");
+    try {
+      PendingBackups.put(c, task);
+      JobStore.state(c, history, "paused", "Paused by you");
+      JobStore.recover(c);
+      assertEquals("Paused by you", JobStore.history(c).getJSONObject(0).getString("message"));
+      assertFalse(JobStore.history(c).getJSONObject(0).has("finished"));
+      for (String terminal : new String[] {"failed", "cancelling"}) {
+        JobStore.state(c, history, "paused", "Previous paused state");
+        task.put("state", terminal).put("message", "Terminal checkpoint saved before Activity");
+        PendingBackups.put(c, task);
+        PendingBackups.forgetCache();
+        JobStore.recover(c);
+        JSONObject activity = JobStore.history(c).getJSONObject(0);
+        assertEquals(
+            terminal.equals("failed") ? "failed" : "cancelled", activity.getString("state"));
+        assertEquals("Terminal checkpoint saved before Activity", activity.getString("message"));
+        assertTrue(activity.has("finished"));
+        assertFalse(
+            PendingBackups.canResume(
+                PendingBackups.get(c, task.getJSONObject("job").getString("id"))));
+      }
+      // Completion is recorded before checkpoint removal; preserve that success
+      // if Android stops in between those two writes.
+      JobStore.finish(c, history, true, "Verified completed snapshot");
+      task.put("state", "running");
+      PendingBackups.put(c, task);
+      JobStore.recover(c);
+      assertEquals("success", JobStore.history(c).getJSONObject(0).getString("state"));
+      assertEquals(
+          "Verified completed snapshot", JobStore.history(c).getJSONObject(0).getString("message"));
+    } finally {
+      ExportCache.remove(c.getFilesDir());
+      PendingBackups.forgetCache();
+    }
+  }
+
+  @Test
   public void importedActivityCannotAliasAnotherTaskOrRestore() throws Exception {
     Context c = isolated();
     KeyProfiles.addConnection(
