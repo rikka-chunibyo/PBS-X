@@ -1,3 +1,12 @@
+rust-proxmox-backup (4.2.9-1+pbsx3) trixie; urgency=medium
+
+  * Add authenticated same-snapshot checkpoints for Android backup pause/resume.
+  * Preserve acknowledged backup prefixes across disconnects and garbage collection.
+  * Keep paused checkpoints through pruning when jobs share a backup group.
+  * Protect completed snapshots from unfinished-run cancellation.
+
+ -- PBS-X Developers <pbsx@localhost>  Fri, 20 Nov 2026 00:00:00 -0500
+
 rust-proxmox-backup (4.2.9-1+pbsx2) trixie; urgency=medium
 
   * Make native backup and restore completion acknowledgements retry-safe and
