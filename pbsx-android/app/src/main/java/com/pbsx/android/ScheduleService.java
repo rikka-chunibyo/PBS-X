@@ -45,11 +45,13 @@ public final class ScheduleService extends JobService {
       BackupJob constraints = run == null ? j : BackupJob.from(run.getJSONObject("job"));
       long due = ScheduleState.due(c, j, false);
       wanted.add(j.schedulerId);
+      // Only changes to the actual OS constraints/due time should replace a job.
+      // Creating a checkpoint or editing next-run sources must not stop its worker.
       String hash =
           android.util.Base64.encodeToString(
               java.security.MessageDigest.getInstance("SHA-256")
                   .digest(
-                      (j.json().toString() + (run == null ? "" : run.getString("history")))
+                      (j.id + "/" + constraints.wifi + "/" + constraints.charging)
                           .getBytes(java.nio.charset.StandardCharsets.UTF_8)),
               android.util.Base64.NO_WRAP);
       JobInfo old = pending.get(j.schedulerId);

@@ -63,10 +63,8 @@ final class ConnectionDialogs {
               background.run(
                   "Enrolling…",
                   () -> {
-                    KeyProfiles.label(profileName);
-                    String config =
-                        Mobilecore.enroll(value, Build.MANUFACTURER + " " + Build.MODEL);
-                    KeyProfiles.addConnection(a, profileName, config);
+                    KeyProfiles.enrollConnection(
+                        a, profileName, value, Build.MANUFACTURER + " " + Build.MODEL);
                     return "Connected. Your backup jobs can use an authorized datastore and"
                         + " namespace.";
                   });

@@ -75,6 +75,174 @@ public class SettingsSafetyTest {
     void apply(JSONObject root) throws Exception;
   }
 
+  private interface Edit {
+    void apply(Context context) throws Exception;
+  }
+
+  @Test
+  public void credentialJobAndExportOperationsReserveTheTransferGate() throws Exception {
+    Context c = isolated();
+    connect(c);
+    String first = KeyProfiles.selected(c);
+    String config = KeyProfiles.connection(c, first).getJSONObject("config").toString();
+    String other = KeyProfiles.addConnection(c, "Other", config);
+    String key = KeyProfiles.addKey(c, "Unused", Mobilecore.generateEncryptionKey());
+    String freshKey = Mobilecore.generateEncryptionKey();
+    BackupJob saved = job(c);
+    JobStore.save(c, saved);
+    Edit[] edits = {
+      context -> KeyProfiles.addConnection(context, "New", config),
+      context -> KeyProfiles.addKey(context, "New key", freshKey),
+      context -> KeyProfiles.setDefault(context, other),
+      context -> KeyProfiles.rename(context, "connections", first, "Renamed"),
+      context -> KeyProfiles.updateConnection(context, first, new JSONObject(config)),
+      context -> KeyProfiles.remove(context, "keys", key),
+      context -> KeyProfiles.saveJob(context, saved),
+      context -> KeyProfiles.deleteJob(context, saved.id),
+      context -> SettingsTransfer.exportJSON(context)
+    };
+    for (Edit edit : edits) {
+      CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+      java.util.concurrent.atomic.AtomicBoolean intercept =
+          new java.util.concurrent.atomic.AtomicBoolean(true);
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      Context blocked =
+          new ContextWrapper(c) {
+            @Override
+            public SharedPreferences getSharedPreferences(String name, int mode) {
+              if ((name.equals("vault") || name.equals("jobs-v1"))
+                  && intercept.compareAndSet(true, false)) {
+                entered.countDown();
+                try {
+                  if (!release.await(10, TimeUnit.SECONDS))
+                    throw new AssertionError("Vault fixture timed out");
+                } catch (InterruptedException e) {
+                  throw new AssertionError(e);
+                }
+              }
+              return super.getSharedPreferences(name, mode);
+            }
+          };
+      Thread worker =
+          new Thread(
+              () -> {
+                try {
+                  edit.apply(blocked);
+                } catch (Throwable error) {
+                  failure.set(error);
+                }
+              },
+              "credential-write-race-fixture");
+      worker.start();
+      try {
+        assertTrue("Edit never reached the vault", entered.await(5, TimeUnit.SECONDS));
+        assertTrue("Transfer gate was released during credential save", Operations.running());
+        try {
+          Operations.changeSettings(
+              () -> {
+                throw new AssertionError("Second operation entered");
+              });
+          fail("A transfer could start during a credential write");
+        } catch (Operations.BusyException expected) {
+        }
+      } finally {
+        release.countDown();
+        worker.join(5000);
+        assertFalse("Credential writer did not finish", worker.isAlive());
+      }
+      if (failure.get() != null) throw new AssertionError(failure.get());
+      assertFalse("Edit left the transfer gate locked", Operations.running());
+    }
+    try {
+      KeyProfiles.addConnection(c, "", config);
+      fail("Invalid edit accepted");
+    } catch (Exception expected) {
+    }
+    assertFalse("Failed edit left the transfer gate locked", Operations.running());
+  }
+
+  @Test
+  public void busyEnrollmentIsRejectedBeforeConsumingACodeAndReleasesOnFailure() throws Exception {
+    Context c = isolated();
+    Operations.changeSettings(
+        () -> {
+          try {
+            KeyProfiles.enrollConnection(
+                c, "Fixture", "invalid-code-must-not-be-parsed", "Fixture");
+            fail("Enrollment entered an active transfer");
+          } catch (Operations.BusyException expected) {
+          }
+        });
+    try {
+      KeyProfiles.enrollConnection(c, "Fixture", "invalid-code", "Fixture");
+      fail("Invalid code was accepted");
+    } catch (Exception expected) {
+      assertTrue(expected.getMessage().contains("enrollment"));
+    }
+    assertFalse(Operations.running());
+    assertEquals(0, Vault.data(c).getJSONArray("connections").length());
+  }
+
+  @Test
+  public void jobSaveChecksNormalizedHistoryPolicyAndKeepsOldSettingsOnFailure() throws Exception {
+    Context c = isolated();
+    connect(c);
+    BackupJob first = job(c);
+    first.namespace = "photos";
+    first.encryptionKeyID = KeyProfiles.addKey(c, "Photos", Mobilecore.generateEncryptionKey());
+    KeyProfiles.saveJob(c, first);
+    BackupJob other = job(c);
+    other.namespace = " photos ";
+    other.backupID = first.backupID;
+    try {
+      KeyProfiles.saveJob(c, other);
+      fail("Saved a different encryption policy under the same normalized history");
+    } catch (Exception expected) {
+      assertTrue(expected.getMessage().contains("same encryption"));
+    }
+    assertFalse(Operations.running());
+    assertEquals(1, JobStore.all(c).size());
+    Operations.changeSettings(
+        () -> {
+          try {
+            KeyProfiles.saveJob(c, first);
+            fail("Edited a job during a transfer");
+          } catch (Operations.BusyException expected) {
+          }
+          try {
+            KeyProfiles.deleteJob(c, first.id);
+            fail("Deleted a job during a transfer");
+          } catch (Operations.BusyException expected) {
+          }
+        });
+    assertEquals(first.json().toString(), JobStore.get(c, first.id).json().toString());
+  }
+
+  @Test
+  public void staleScheduledCallbacksCannotStartDisabledOrSupersededOccurrences() throws Exception {
+    Context c = isolated();
+    connect(c);
+    BackupJob requested = job(c);
+    requested.hours = 12;
+    JobStore.save(c, requested);
+    long due = ScheduleState.due(c, requested, false);
+    BackupJob disabled = BackupJob.from(requested.json());
+    disabled.hours = 0;
+    JobStore.save(c, disabled);
+    for (boolean enabled : new boolean[] {false, true}) {
+      if (enabled) JobStore.save(c, requested);
+      Operations.Cancellation token = new Operations.Cancellation();
+      token.scheduled = true;
+      token.occurrence = enabled ? due - 1 : due;
+      assertEquals(
+          "Scheduled occurrence is no longer current",
+          Operations.runJob(c, requested, null, null, 0, "[\".\"]", "fail", null, token));
+      assertEquals(0, JobStore.history(c).length());
+      assertNull(PendingBackups.get(c, requested.id));
+      assertFalse(Operations.running());
+    }
+  }
+
   @Test
   public void brokenJobReferencesAndSchedulerIdentitiesCannotReplaceSavedState() throws Exception {
     Context c = isolated();

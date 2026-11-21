@@ -73,6 +73,48 @@ public class PendingBackupsTest {
   }
 
   @Test
+  public void scheduleRefreshDoesNotReplaceTheJobWhenItsTaskGetsACheckpoint() throws Exception {
+    Context c = isolated();
+    JSONObject task = run(c);
+    BackupJob job = BackupJob.from(task.getJSONObject("job"));
+    job.hours = 12;
+    JobStore.save(c, job);
+    android.app.job.JobScheduler scheduler = c.getSystemService(android.app.job.JobScheduler.class);
+    try {
+      ScheduleService.configureAll(c);
+      android.app.job.JobInfo initial = scheduler.getPendingJob(job.schedulerId);
+      String hash = initial.getExtras().getString("config_hash");
+      long due = initial.getExtras().getLong("due");
+      PendingBackups.put(c, task.put("automatic", true));
+      ScheduleService.configureAll(c);
+      android.app.job.JobInfo checkpoint = scheduler.getPendingJob(job.schedulerId);
+      assertEquals(
+          "Creating a task would replace/stop the running scheduled job",
+          hash,
+          checkpoint.getExtras().getString("config_hash"));
+      assertEquals(due, checkpoint.getExtras().getLong("due"));
+      assertEquals(initial.getMinLatencyMillis(), checkpoint.getMinLatencyMillis());
+      job.name = "New label for the next task";
+      job.wifi = false;
+      job.charging = false;
+      JobStore.save(c, job);
+      ScheduleService.configureAll(c);
+      android.app.job.JobInfo frozen = scheduler.getPendingJob(job.schedulerId);
+      assertEquals(hash, frozen.getExtras().getString("config_hash"));
+      assertTrue(frozen.isRequireCharging());
+      PendingBackups.remove(c, job.id);
+      ScheduleService.configureAll(c);
+      android.app.job.JobInfo changed = scheduler.getPendingJob(job.schedulerId);
+      assertNotEquals(hash, changed.getExtras().getString("config_hash"));
+      assertFalse(changed.isRequireCharging());
+    } finally {
+      scheduler.cancel(job.schedulerId);
+      ExportCache.remove(c.getFilesDir());
+      PendingBackups.forgetCache();
+    }
+  }
+
+  @Test
   public void failedTasksAreTerminalWithoutResumingAndDoNotHoldSchedules() throws Exception {
     Context c = isolated();
     JSONObject run = run(c);

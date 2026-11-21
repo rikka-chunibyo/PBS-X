@@ -41,36 +41,36 @@ final class SettingsTransfer {
   }
 
   private static String exportLocked(Context c) throws Exception {
-    if (Operations.running())
-      throw new Exception("Wait for the active transfer before exporting settings");
-    Vault.data(c); // Finish an interrupted import before capturing any settings section.
-    JobStore.all(c);
-    JSONObject preferences =
-        new JSONObject()
-            .put("settings", preferences(Settings.prefs(c)))
-            .put("jobs-v1", preferences(c.getSharedPreferences("jobs-v1", 0)));
-    JSONArray permissions = new JSONArray();
-    for (UriPermission p : c.getContentResolver().getPersistedUriPermissions())
-      permissions.put(
+    try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      Vault.data(c); // Finish an interrupted import before capturing any settings section.
+      JobStore.all(c);
+      JSONObject preferences =
           new JSONObject()
-              .put("uri", p.getUri().toString())
-              .put("read", p.isReadPermission())
-              .put("write", p.isWritePermission()));
-    String out =
-        new JSONObject()
-            .put("format", "pbsx-android-settings")
-            .put("version", 1)
-            .put("app_version", BuildConfig.VERSION_NAME)
-            .put("exported_at", System.currentTimeMillis())
-            .put("vault", Vault.data(c))
-            .put("pending_backups", PendingBackups.all(c))
-            .put("preferences", preferences)
-            .put("folder_permissions", permissions)
-            .toString(2);
-    if (out.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > LIMIT)
-      throw new Exception("Settings export exceeds 16 MiB");
-    validate(out);
-    return out;
+              .put("settings", preferences(Settings.prefs(c)))
+              .put("jobs-v1", preferences(c.getSharedPreferences("jobs-v1", 0)));
+      JSONArray permissions = new JSONArray();
+      for (UriPermission p : c.getContentResolver().getPersistedUriPermissions())
+        permissions.put(
+            new JSONObject()
+                .put("uri", p.getUri().toString())
+                .put("read", p.isReadPermission())
+                .put("write", p.isWritePermission()));
+      String out =
+          new JSONObject()
+              .put("format", "pbsx-android-settings")
+              .put("version", 1)
+              .put("app_version", BuildConfig.VERSION_NAME)
+              .put("exported_at", System.currentTimeMillis())
+              .put("vault", Vault.data(c))
+              .put("pending_backups", PendingBackups.all(c))
+              .put("preferences", preferences)
+              .put("folder_permissions", permissions)
+              .toString(2);
+      if (out.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > LIMIT)
+        throw new Exception("Settings export exceeds 16 MiB");
+      validate(out);
+      return out;
+    }
   }
 
   static JSONObject validate(String raw) throws Exception {

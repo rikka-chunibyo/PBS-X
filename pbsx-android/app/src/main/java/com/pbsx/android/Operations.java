@@ -99,12 +99,25 @@ final class Operations {
     void run() throws Exception;
   }
 
-  static void changeSettings(SettingsChange action) throws Exception {
+  static final class SettingsGuard implements AutoCloseable {
+    private final AtomicBoolean closed = new AtomicBoolean();
+
+    private SettingsGuard() {}
+
+    @Override
+    public void close() {
+      if (closed.compareAndSet(false, true)) running.set(false);
+    }
+  }
+
+  static SettingsGuard reserveSettings() throws BusyException {
     if (!running.compareAndSet(false, true)) throw new BusyException();
-    try {
+    return new SettingsGuard();
+  }
+
+  static void changeSettings(SettingsChange action) throws Exception {
+    try (SettingsGuard ignored = reserveSettings()) {
       action.run();
-    } finally {
-      running.set(false);
     }
   }
 
@@ -237,6 +250,12 @@ final class Operations {
           && (Settings.prefs(context).getBoolean("imported_schedule_hold", false)
               || (PendingBackups.canResume(pending) && !pending.optBoolean("automatic"))))
         return "Backup held until you resume its paused task";
+      if (destination == null && cancellation.scheduled) {
+        BackupJob current = JobStore.get(context, requestedJob.id);
+        if (!current.scheduled()
+            || !ScheduleState.isDue(context, current.id, cancellation.occurrence))
+          return "Scheduled occurrence is no longer current";
+      }
       if (destination == null && PendingBackups.cleanupOnly(pending)) {
         TransferState.phase("Clearing previous unfinished task");
         Settings.status(context, "Clearing previous unfinished task");

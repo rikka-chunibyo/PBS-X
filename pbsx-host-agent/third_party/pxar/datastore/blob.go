@@ -20,7 +20,9 @@ var zstdEncoderPool = sync.Pool{
 
 var zstdDecoderPool = sync.Pool{
 	New: func() any {
-		dec, err := zstd.NewReader(nil)
+		// Apply the encoder's format limit on reads too, including unknown-size
+		// and concatenated frames. Never expand unchecked data without a bound.
+		dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(MaxBlobSize), zstd.WithDecoderMaxWindow(MaxBlobSize))
 		if err != nil {
 			panic(fmt.Sprintf("zstd decoder init: %v", err))
 		}
@@ -83,6 +85,9 @@ func EncodeCompressedBlob(dst []byte, data []byte) ([]byte, error) {
 // For uncompressed blobs, returns a slice into raw (zero allocation).
 // For encrypted blobs, use DecodeEncryptedBlob with a CryptConfig.
 func DecodeBlob(dst []byte, raw []byte) ([]byte, error) {
+	if len(raw) > MaxBlobSize+BlobHeaderSize {
+		return nil, fmt.Errorf("encoded blob too large: %d", len(raw))
+	}
 	if len(raw) < BlobHeaderSize {
 		return nil, fmt.Errorf("blob too short: %d bytes", len(raw))
 	}
@@ -210,6 +215,9 @@ func EncodeEncryptedBlob(dst []byte, data []byte, cc *CryptConfig, compress bool
 
 // DecodeEncryptedBlob decrypts a blob, reusing dst when possible.
 func DecodeEncryptedBlob(dst []byte, raw []byte, cc *CryptConfig) ([]byte, error) {
+	if len(raw) > MaxBlobSize+EncryptedBlobHeaderSize {
+		return nil, fmt.Errorf("encoded encrypted blob too large: %d", len(raw))
+	}
 	if cc == nil {
 		return nil, fmt.Errorf("CryptConfig required for encrypted blob")
 	}
@@ -217,6 +225,9 @@ func DecodeEncryptedBlob(dst []byte, raw []byte, cc *CryptConfig) ([]byte, error
 	hdr, err := UnmarshalEncryptedBlobHeader(raw)
 	if err != nil {
 		return nil, err
+	}
+	if hdr.Magic != MagicEncryptedBlob && hdr.Magic != MagicEncrComprBlob {
+		return nil, fmt.Errorf("invalid encrypted blob magic: %x", hdr.Magic)
 	}
 
 	data := raw[EncryptedBlobHeaderSize:]

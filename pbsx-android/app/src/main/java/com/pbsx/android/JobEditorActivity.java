@@ -188,7 +188,7 @@ public final class JobEditorActivity extends Activity {
                         "Delete",
                         (d, w) -> {
                           try {
-                            JobStore.delete(this, job.id);
+                            KeyProfiles.deleteJob(this, job.id);
                             ScheduleService.configureAll(this);
                             finish();
                           } catch (Exception e) {
@@ -513,8 +513,7 @@ public final class JobEditorActivity extends Activity {
       for (int i = 0; i < exportOptions.length; i++)
         if (exportOptions[i].isChecked()) job.exports.put(DeviceExport.CATEGORIES.get(i));
       job.validate(true);
-      KeyProfiles.validateJob(this, job);
-      JobStore.save(this, job);
+      KeyProfiles.saveJob(this, job);
       ScheduleService.configureAll(this);
       finish();
     } catch (Exception e) {

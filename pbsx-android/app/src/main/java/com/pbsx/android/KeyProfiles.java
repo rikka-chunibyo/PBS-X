@@ -49,7 +49,29 @@ final class KeyProfiles {
   }
 
   static synchronized String addConnection(Context c, String name, String config) throws Exception {
-    if (Operations.running()) throw new Exception("Wait for the active transfer");
+    try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      return storeConnection(c, name, config);
+    }
+  }
+
+  static String enrollConnection(Context c, String name, String code, String hostname)
+      throws Exception {
+    try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      label(name);
+      synchronized (KeyProfiles.class) {
+        if (Vault.data(c).getJSONArray("connections").length() >= 100)
+          throw new Exception("At most 100 connections are supported");
+      }
+      // Reserve before consuming a one-time code, but never hold the profile
+      // monitor across the network call (other UI actions must fail promptly).
+      String config = Mobilecore.enroll(code, hostname);
+      synchronized (KeyProfiles.class) {
+        return storeConnection(c, name, config);
+      }
+    }
+  }
+
+  private static String storeConnection(Context c, String name, String config) throws Exception {
     label(name);
     Mobilecore.newClient(config);
     JSONObject data = Vault.data(c);
@@ -67,80 +89,102 @@ final class KeyProfiles {
   }
 
   static synchronized String addKey(Context c, String name, String raw) throws Exception {
-    if (Operations.running()) throw new Exception("Wait for the active transfer");
-    label(name);
-    raw = raw.trim().toLowerCase(java.util.Locale.ROOT);
-    String fp = Mobilecore.encryptionFingerprint(raw);
-    JSONObject data = Vault.data(c);
-    JSONArray values = data.getJSONArray("keys");
-    if (values.length() >= 100) throw new Exception("At most 100 encryption keys are supported");
-    for (int i = 0; i < values.length(); i++)
-      if (fp.equals(values.getJSONObject(i).getString("fingerprint")))
-        throw new Exception("This key is already saved");
-    String id = UUID.randomUUID().toString();
-    values.put(
-        new JSONObject()
-            .put("id", id)
-            .put("name", name.trim())
-            .put("key", raw)
-            .put("fingerprint", fp));
-    Vault.store(c, data);
-    return id;
+    try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      label(name);
+      raw = raw.trim().toLowerCase(java.util.Locale.ROOT);
+      String fp = Mobilecore.encryptionFingerprint(raw);
+      JSONObject data = Vault.data(c);
+      JSONArray values = data.getJSONArray("keys");
+      if (values.length() >= 100) throw new Exception("At most 100 encryption keys are supported");
+      for (int i = 0; i < values.length(); i++)
+        if (fp.equals(values.getJSONObject(i).getString("fingerprint")))
+          throw new Exception("This key is already saved");
+      String id = UUID.randomUUID().toString();
+      values.put(
+          new JSONObject()
+              .put("id", id)
+              .put("name", name.trim())
+              .put("key", raw)
+              .put("fingerprint", fp));
+      Vault.store(c, data);
+      return id;
+    }
   }
 
   static synchronized void remove(Context c, String kind, String id) throws Exception {
-    if (Operations.running()) throw new Exception("Wait for the active transfer");
-    for (BackupJob job : JobStore.all(c))
-      if (id.equals(
-          kind.equals("keys")
-              ? job.encryptionKeyID
-              : job.connectionID.isEmpty() ? selected(c) : job.connectionID))
-        throw new Exception("Reassign jobs using this entry first");
-    for (BackupJob job : pendingJobs(c))
-      if (id.equals(kind.equals("keys") ? job.encryptionKeyID : job.connectionID))
-        throw new Exception("Resume or cancel pending backups using this entry first");
-    JSONObject data = Vault.data(c);
-    JSONArray values = data.getJSONArray(kind), out = new JSONArray();
-    for (int i = 0; i < values.length(); i++)
-      if (!id.equals(values.getJSONObject(i).getString("id"))) out.put(values.get(i));
-    data.put(kind, out);
-    if (kind.equals("connections") && id.equals(data.optString("default_connection")))
-      data.put("default_connection", out.length() == 0 ? "" : out.getJSONObject(0).getString("id"));
-    Vault.store(c, data);
+    try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      for (BackupJob job : JobStore.all(c))
+        if (id.equals(
+            kind.equals("keys")
+                ? job.encryptionKeyID
+                : job.connectionID.isEmpty() ? selected(c) : job.connectionID))
+          throw new Exception("Reassign jobs using this entry first");
+      for (BackupJob job : pendingJobs(c))
+        if (id.equals(kind.equals("keys") ? job.encryptionKeyID : job.connectionID))
+          throw new Exception("Resume or cancel pending backups using this entry first");
+      JSONObject data = Vault.data(c);
+      JSONArray values = data.getJSONArray(kind), out = new JSONArray();
+      for (int i = 0; i < values.length(); i++)
+        if (!id.equals(values.getJSONObject(i).getString("id"))) out.put(values.get(i));
+      data.put(kind, out);
+      if (kind.equals("connections") && id.equals(data.optString("default_connection")))
+        data.put(
+            "default_connection", out.length() == 0 ? "" : out.getJSONObject(0).getString("id"));
+      Vault.store(c, data);
+    }
   }
 
   static synchronized void setDefault(Context c, String id) throws Exception {
-    if (Operations.running()) throw new Exception("Wait for the active transfer");
-    JSONObject data = Vault.data(c);
-    find(data, "connections", id);
-    data.put("default_connection", id);
-    java.util.List<BackupJob> histories = JobStore.all(c);
-    histories.addAll(pendingJobs(c));
-    validateHistories(data, histories);
-    Vault.store(c, data);
+    try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      JSONObject data = Vault.data(c);
+      find(data, "connections", id);
+      data.put("default_connection", id);
+      java.util.List<BackupJob> histories = JobStore.all(c);
+      histories.addAll(pendingJobs(c));
+      validateHistories(data, histories);
+      Vault.store(c, data);
+    }
   }
 
   static synchronized void rename(Context c, String kind, String id, String name) throws Exception {
-    if (Operations.running()) throw new Exception("Wait for the active transfer");
-    label(name);
-    JSONObject data = Vault.data(c);
-    find(data, kind, id).put("name", name.trim());
-    Vault.store(c, data);
+    try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      label(name);
+      JSONObject data = Vault.data(c);
+      find(data, kind, id).put("name", name.trim());
+      Vault.store(c, data);
+    }
   }
 
   static synchronized void updateConnection(Context c, String id, JSONObject config)
       throws Exception {
-    if (Operations.running()) throw new Exception("Wait for the active transfer");
-    Mobilecore.newClient(config.toString());
-    for (BackupJob job : pendingJobs(c))
-      if (id.equals(job.connectionID))
-        throw new Exception("Resume or cancel pending backups using this connection first");
-    JSONObject data = Vault.data(c);
-    find(data, "connections", id).put("config", config);
-    java.util.List<BackupJob> histories = JobStore.all(c);
-    histories.addAll(pendingJobs(c));
-    validateHistories(data, histories);
-    Vault.store(c, data);
+    try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      Mobilecore.newClient(config.toString());
+      for (BackupJob job : pendingJobs(c))
+        if (id.equals(job.connectionID))
+          throw new Exception("Resume or cancel pending backups using this connection first");
+      JSONObject data = Vault.data(c);
+      find(data, "connections", id).put("config", config);
+      java.util.List<BackupJob> histories = JobStore.all(c);
+      histories.addAll(pendingJobs(c));
+      validateHistories(data, histories);
+      Vault.store(c, data);
+    }
+  }
+
+  static synchronized void saveJob(Context c, BackupJob job) throws Exception {
+    try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      synchronized (JobStore.class) {
+        job.validate(false);
+        validateJob(c, job);
+        JobStore.save(c, job);
+      }
+    }
+  }
+
+  static synchronized void deleteJob(Context c, String id) throws Exception {
+    try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      JobStore.delete(c, id);
+    }
   }
 
   private static java.util.List<BackupJob> pendingJobs(Context c) throws Exception {
