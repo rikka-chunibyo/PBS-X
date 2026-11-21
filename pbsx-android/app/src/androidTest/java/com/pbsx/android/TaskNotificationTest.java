@@ -195,8 +195,6 @@ public class TaskNotificationTest {
           BackupService started = startHeld(c, job);
           c.startService(started.controlIntent("pause"));
           instrumentation.waitForIdleSync();
-          long started = System.currentTimeMillis() + 5000;
-          while (!Operations.running() && System.currentTimeMillis() < started) Thread.sleep(20);
           assertTrue("Transfer worker did not start", Operations.running());
           boolean posted = false;
           for (android.service.notification.StatusBarNotification n :
