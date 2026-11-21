@@ -57,6 +57,36 @@ public class TaskNotificationTest {
     InstrumentationRegistry.getInstrumentation().waitForIdleSync();
   }
 
+  private int lastStartId(BackupService service) throws Exception {
+    java.lang.reflect.Field field = BackupService.class.getDeclaredField("lastStartId");
+    field.setAccessible(true);
+    int[] value = new int[1];
+    InstrumentationRegistry.getInstrumentation()
+        .runOnMainSync(
+            () -> {
+              try {
+                value[0] = field.getInt(service);
+              } catch (IllegalAccessException e) {
+                throw new AssertionError(e);
+              }
+            });
+    return value[0];
+  }
+
+  private void awaitCommand(BackupService service, int previousStartId) throws Exception {
+    long end = System.currentTimeMillis() + 5000;
+    while (lastStartId(service) == previousStartId && System.currentTimeMillis() < end)
+      Thread.sleep(20);
+    assertNotEquals("Service command was not delivered", previousStartId, lastStartId(service));
+  }
+
+  private void pause(Context c, BackupService service) throws Exception {
+    int previousStartId = lastStartId(service);
+    c.startService(service.controlIntent("pause"));
+    awaitCommand(service, previousStartId);
+    assertTrue("Pause command was not applied", token(service).paused());
+  }
+
   private void prepare(Instrumentation instrumentation, Context c) {
     if (Build.VERSION.SDK_INT >= 33
         && c.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
@@ -140,20 +170,19 @@ public class TaskNotificationTest {
         synchronized (Vault.class) {
           BackupService first = startHeld(c, job);
           old = cancelAction(c);
-          c.startService(first.controlIntent("pause"));
-          instrumentation.waitForIdleSync();
+          pause(c, first);
         }
         awaitStopped();
         synchronized (Vault.class) {
           BackupService second = startHeld(c, job);
           assertNotEquals(
               "Notification controls were reused across operations", old, cancelAction(c));
+          int previousStartId = lastStartId(second);
           old.send();
-          instrumentation.waitForIdleSync();
+          awaitCommand(second, previousStartId);
           assertFalse("Old notification cancelled the resumed task", token(second).cancelled());
           assertFalse(token(second).paused());
-          c.startService(second.controlIntent("pause"));
-          instrumentation.waitForIdleSync();
+          pause(c, second);
         }
         awaitStopped();
         assertEquals("paused", PendingBackups.get(c, job.id).getString("state"));
@@ -193,8 +222,7 @@ public class TaskNotificationTest {
       try {
         synchronized (Vault.class) {
           BackupService started = startHeld(c, job);
-          c.startService(started.controlIntent("pause"));
-          instrumentation.waitForIdleSync();
+          pause(c, started);
           assertTrue("Transfer worker did not start", Operations.running());
           boolean posted = false;
           for (android.service.notification.StatusBarNotification n :
@@ -222,6 +250,7 @@ public class TaskNotificationTest {
       } while ((!paused || notification) && System.currentTimeMillis() < end);
       assertTrue("Backup did not retain its paused task", paused);
       assertFalse("Paused backup left a completion/progress notification", notification);
+      awaitStopped();
       assertEquals(task.getString("history"), PendingBackups.get(c, job.id).getString("history"));
       assertEquals(1, JobStore.history(c).length());
     } finally {
