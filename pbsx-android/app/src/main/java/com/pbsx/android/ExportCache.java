@@ -27,18 +27,17 @@ final class ExportCache implements AutoCloseable {
 
   ExportCache(Context c) throws Exception {
     File root = new File(c.getCacheDir(), "device-exports");
-    if (!root.exists() && !root.mkdir())
-      throw new Exception("Could not create private export cache");
+    DurableFiles.ensureDirectory(root);
     directory = new File(root, UUID.randomUUID().toString());
-    if (!directory.mkdir()) throw new Exception("Could not create private export cache");
+    DurableFiles.ensureDirectory(directory);
   }
 
   ExportCache(Context c, String runID, boolean requireExisting) throws Exception {
     if (!runID.matches("[a-f0-9-]{36}")) throw new Exception("Invalid export run identity");
     File root = new File(c.getFilesDir(), "pending-exports");
+    DurableFiles.ensureDirectory(root);
     directory = new File(root, runID);
-    if (!directory.isDirectory() && !directory.mkdirs())
-      throw new Exception("Cannot create private export storage");
+    DurableFiles.ensureDirectory(directory);
     persistent = true;
     this.requireExisting = requireExisting;
   }
@@ -75,28 +74,9 @@ final class ExportCache implements AutoCloseable {
 
   private void complete(File file) throws Exception {
     if (!persistent) return;
-    android.util.AtomicFile marker =
-        new android.util.AtomicFile(new File(directory, file.getName() + ".complete"));
-    FileOutputStream output = marker.startWrite();
-    try {
-      output.write(
-          (file.length() + ":" + checksum(file)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
-      output.getFD().sync();
-      marker.finishWrite(output);
-      syncDirectory(directory);
-    } catch (Exception e) {
-      marker.failWrite(output);
-      throw e;
-    }
-  }
-
-  private static void syncDirectory(File directory) throws Exception {
-    java.io.FileDescriptor fd = Os.open(directory.getAbsolutePath(), OsConstants.O_RDONLY, 0);
-    try {
-      Os.fsync(fd);
-    } finally {
-      Os.close(fd);
-    }
+    DurableFiles.write(
+        new File(directory, file.getName() + ".complete"),
+        (file.length() + ":" + checksum(file)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
   }
 
   static void discard(Context c, String runID) throws Exception {

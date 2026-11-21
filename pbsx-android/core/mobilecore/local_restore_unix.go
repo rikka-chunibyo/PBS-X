@@ -77,11 +77,27 @@ func (r *LocalRestore) NewDirectory(relative string) (*LocalRestore, error) {
 	if err = unix.Mkdirat(fd, name, 0700); err != nil {
 		return nil, err
 	}
-	child, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	child, err := openSyncedRestoreDirectory(fd, name)
 	if err != nil {
 		return nil, err
 	}
 	return &LocalRestore{fd: child}, nil
+}
+
+func openSyncedRestoreDirectory(parent int, name string) (int, error) {
+	child, err := unix.Openat(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, err
+	}
+	if err = unix.Fsync(child); err != nil {
+		unix.Close(child)
+		return -1, fmt.Errorf("sync restore directory %q: %w", name, err)
+	}
+	if err = unix.Fsync(parent); err != nil {
+		unix.Close(child)
+		return -1, fmt.Errorf("sync parent of restore directory %q: %w", name, err)
+	}
+	return child, nil
 }
 
 func (r *LocalRestore) parent(relative string) (int, string, error) {
@@ -213,10 +229,7 @@ func (r *LocalRestore) MakeDirectory(relative string) error {
 		return err
 	}
 	defer unix.Close(fd)
-	if err = unix.Mkdirat(fd, name, 0700); err == nil {
-		return nil
-	}
-	if !errors.Is(err, unix.EEXIST) {
+	if err = unix.Mkdirat(fd, name, 0700); err != nil && !errors.Is(err, unix.EEXIST) {
 		return err
 	}
 	stat, err := restoreStat(fd, name)
@@ -226,7 +239,13 @@ func (r *LocalRestore) MakeDirectory(relative string) error {
 	if !stat["directory"].(bool) {
 		return errors.New("restore directory conflicts with an existing file")
 	}
-	return nil
+	// Sync on reuse too: a previous mkdir may have succeeded before its
+	// durability barrier failed. Opening under the same descriptor rejects links.
+	child, err := openSyncedRestoreDirectory(fd, name)
+	if err != nil {
+		return err
+	}
+	return unix.Close(child)
 }
 
 func stagingName(relative string) bool { return strings.HasPrefix(path.Base(relative), ".pbsx-stage-") }

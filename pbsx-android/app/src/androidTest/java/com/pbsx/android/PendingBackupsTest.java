@@ -172,6 +172,51 @@ public class PendingBackupsTest {
     return new String(new char[count]).replace("\0", value);
   }
 
+  @Test
+  public void failedJournalCommitCannotBecomeACachedRecoveryRecord() throws Exception {
+    Context c = isolated();
+    JSONObject task = run(c);
+    File target = new File(c.getFilesDir(), "pending-backups-v1");
+    assertTrue(target.mkdir());
+    File sentinel = new File(target, "keep");
+    Files.write(sentinel.toPath(), new byte[] {7});
+    try {
+      try {
+        PendingBackups.install(c, new JSONArray().put(task));
+        fail("A failed journal commit was acknowledged");
+      } catch (Exception expected) {
+      }
+      assertArrayEquals(new byte[] {7}, Files.readAllBytes(sentinel.toPath()));
+      // Do not clear the cache here: the failed commit must invalidate it itself.
+      try {
+        PendingBackups.all(c);
+        fail("Damaged storage was hidden by an uncommitted cached task");
+      } catch (Exception expected) {
+      }
+      assertArrayEquals(new String[] {"pending-backups-v1"}, c.getFilesDir().list());
+    } finally {
+      ExportCache.remove(c.getFilesDir());
+      PendingBackups.forgetCache();
+    }
+  }
+
+  @Test
+  public void anUncommittedLegacyFirstWriteIsNotTreatedAsNoTasks() throws Exception {
+    Context c = isolated();
+    Files.write(new File(c.getFilesDir(), "pending-backups-v1.new").toPath(), new byte[] {1, 2, 3});
+    PendingBackups.forgetCache();
+    try {
+      try {
+        PendingBackups.all(c);
+        fail("Uncommitted recovery data was treated as empty storage");
+      } catch (java.io.FileNotFoundException expected) {
+      }
+    } finally {
+      ExportCache.remove(c.getFilesDir());
+      PendingBackups.forgetCache();
+    }
+  }
+
   private Context refusingPreferenceWrites(Context base) {
     return new ContextWrapper(base) {
       @Override
@@ -332,6 +377,11 @@ public class PendingBackupsTest {
     assertFalse(new String(sealed, StandardCharsets.ISO_8859_1).contains(repeat("cd", 32)));
     PendingBackups.forgetCache();
     assertEquals(run.toString(), PendingBackups.get(c, job).toString());
+    Files.move(file.toPath(), new File(file + ".bak").toPath());
+    Files.write(file.toPath(), new byte[] {0});
+    PendingBackups.forgetCache();
+    assertEquals(run.toString(), PendingBackups.get(c, job).toString());
+    assertFalse(new File(file + ".bak").exists());
     sealed[sealed.length - 1] ^= 1;
     Files.write(file.toPath(), sealed);
     PendingBackups.forgetCache();
@@ -546,6 +596,29 @@ public class PendingBackupsTest {
       } catch (Exception e) {
         throw new RuntimeException(e);
       }
+    }
+  }
+
+  @Test
+  public void failedExportMarkerCommitCannotPublishAnUnpreparedSource() throws Exception {
+    Context c = isolated();
+    String id = UUID.randomUUID().toString();
+    try (ExportCache cache = new ExportCache(c, id, false)) {
+      File marker = new File(c.getFilesDir(), "pending-exports/" + id + "/sms.zip.complete");
+      assertTrue(marker.mkdir());
+      File sentinel = new File(marker, "keep");
+      Files.write(sentinel.toPath(), new byte[] {9});
+      try {
+        cache.prepare(
+            new Exports(c), new JSONArray().put("sms"), new Operations.Cancellation(), phase -> {});
+        fail("Failed marker commit was accepted as a prepared export");
+      } catch (Exception expected) {
+      }
+      assertTrue(cache.files.isEmpty());
+      assertArrayEquals(new byte[] {9}, Files.readAllBytes(sentinel.toPath()));
+    } finally {
+      ExportCache.remove(c.getFilesDir());
+      PendingBackups.forgetCache();
     }
   }
 

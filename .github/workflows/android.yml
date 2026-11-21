@@ -117,8 +117,8 @@ jobs:
           output = pathlib.Path(sys.argv[1]).read_text()
           match = re.search(r'OK \((\d+) tests?\)', output)
           completed = len(re.findall(r'^INSTRUMENTATION_STATUS_CODE: 0\r?$', output, re.MULTILINE))
-          if not match or int(match[1]) < 47 or completed != int(match[1]) or 'FAILURES!!!' in output or 'INSTRUMENTATION_FAILED' in output:
-              sys.exit('Android instrumentation must successfully complete all forty-seven tests without skips')
+          if not match or int(match[1]) < 52 or completed != int(match[1]) or 'FAILURES!!!' in output or 'INSTRUMENTATION_FAILED' in output:
+              sys.exit('Android instrumentation must successfully complete all fifty-two tests without skips')
           PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()

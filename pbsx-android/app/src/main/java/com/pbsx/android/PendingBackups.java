@@ -3,12 +3,8 @@ package com.pbsx.android;
 import android.content.Context;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
-import android.system.Os;
-import android.system.OsConstants;
-import android.util.AtomicFile;
 import com.pbsx.core.mobilecore.Mobilecore;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
 import javax.crypto.Cipher;
@@ -94,9 +90,9 @@ final class PendingBackups {
     File file = path(c);
     if (cached != null && file.getAbsolutePath().equals(cachedPath))
       return new JSONArray(cached.toString());
-    AtomicFile atomic = new AtomicFile(file);
+    DurableFiles.recoverLegacyBackup(file);
     byte[] sealed;
-    try (java.io.FileInputStream input = atomic.openRead()) {
+    try (java.io.FileInputStream input = new java.io.FileInputStream(file)) {
       if (input.getChannel().size() > LIMIT + 64)
         throw new Exception("Pending backup storage exceeds limit");
       java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
@@ -108,7 +104,8 @@ final class PendingBackups {
       }
       sealed = bytes.toByteArray();
     } catch (java.io.FileNotFoundException e) {
-      if (file.exists() || new File(file + ".bak").exists()) throw e;
+      if (file.exists() || new File(file + ".bak").exists() || new File(file + ".new").exists())
+        throw e;
       cachedPath = file.getAbsolutePath();
       cached = new JSONArray();
       return new JSONArray();
@@ -134,26 +131,18 @@ final class PendingBackups {
     cipher.init(Cipher.ENCRYPT_MODE, key());
     cipher.updateAAD(AAD);
     byte[] sealed = cipher.doFinal(checked.toString().getBytes(StandardCharsets.UTF_8));
-    File directory = c.getFilesDir();
-    if (!directory.isDirectory() && !directory.mkdirs())
-      throw new Exception("Cannot create private recovery storage");
-    AtomicFile atomic = new AtomicFile(path(c));
-    FileOutputStream output = atomic.startWrite();
     try {
-      output.write(1);
-      output.write(cipher.getIV());
-      output.write(sealed);
-      output.getFD().sync();
-      atomic.finishWrite(output);
-      java.io.FileDescriptor fd = Os.open(directory.getAbsolutePath(), OsConstants.O_RDONLY, 0);
-      try {
-        Os.fsync(fd);
-      } finally {
-        Os.close(fd);
-      }
+      DurableFiles.ensureDirectory(c.getFilesDir());
+      byte[] stored =
+          java.nio.ByteBuffer.allocate(13 + sealed.length)
+              .put((byte) 1)
+              .put(cipher.getIV())
+              .put(sealed)
+              .array();
+      DurableFiles.write(path(c), stored);
     } catch (Exception e) {
-      atomic.failWrite(output);
       cached = null;
+      cachedPath = null;
       throw e;
     }
     cachedPath = path(c).getAbsolutePath();

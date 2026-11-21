@@ -14,6 +14,8 @@ public final class BackupService extends Service {
   private static final int ID = 71;
   private volatile boolean working;
   private int lastStartId;
+  private boolean notificationsAllowed;
+  private String commandToken;
 
   static boolean busy() {
     BackupService service = owner;
@@ -26,7 +28,7 @@ public final class BackupService extends Service {
   private final Runnable refreshNotification =
       new Runnable() {
         public void run() {
-          if (!working) return;
+          if (!working || !notificationsAllowed || owner != BackupService.this) return;
           if (Operations.isActive(cancellation))
             getSystemService(NotificationManager.class)
                 .notify(ID, notification(TransferState.current().summary(BackupService.this)));
@@ -34,18 +36,39 @@ public final class BackupService extends Service {
         }
       };
 
+  Intent controlIntent(String action) {
+    return new Intent(this, BackupService.class)
+        .setAction(action)
+        .setData(android.net.Uri.parse("pbsx-operation:" + commandToken))
+        .putExtra("operation_token", commandToken);
+  }
+
+  private PendingIntent control(String action, int requestCode) {
+    return PendingIntent.getService(
+        this,
+        requestCode,
+        controlIntent(action),
+        PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+  }
+
+  private void progressNotification(Operations.Cancellation token, String text) {
+    handler.post(
+        () -> {
+          if (owner == this
+              && cancellation == token
+              && working
+              && notificationsAllowed
+              && Operations.isActive(token))
+            getSystemService(NotificationManager.class).notify(ID, notification(text));
+        });
+  }
+
   private Notification notification(String text) {
     PendingIntent open =
         PendingIntent.getActivity(
             this,
             0,
             new Intent(this, MainActivity.class),
-            PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-    PendingIntent cancel =
-        PendingIntent.getService(
-            this,
-            1,
-            new Intent(this, BackupService.class).setAction("cancel"),
             PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
     Notification.Builder builder =
         new Notification.Builder(this, "backups")
@@ -59,16 +82,9 @@ public final class BackupService extends Service {
     if (working) {
       if (Operations.canPause())
         builder.addAction(
-            new Notification.Action.Builder(
-                    null,
-                    "Pause",
-                    PendingIntent.getService(
-                        this,
-                        2,
-                        new Intent(this, BackupService.class).setAction("pause"),
-                        PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT))
-                .build());
-      builder.addAction(new Notification.Action.Builder(null, "Cancel", cancel).build());
+            new Notification.Action.Builder(null, "Pause", control("pause", 2)).build());
+      builder.addAction(
+          new Notification.Action.Builder(null, "Cancel", control("cancel", 1)).build());
     }
     if (working) {
       TransferState.Snapshot state = TransferState.current();
@@ -92,25 +108,36 @@ public final class BackupService extends Service {
   public int onStartCommand(Intent intent, int flags, int startId) {
     lastStartId = startId;
     if (intent == null) {
-      stopSelf();
+      stopSelf(startId);
       return START_NOT_STICKY;
+    }
+    if ("pause".equals(intent.getAction()) || "cancel".equals(intent.getAction())) {
+      if (!working
+          || owner != this
+          || commandToken == null
+          || !commandToken.equals(intent.getStringExtra("operation_token"))) {
+        if (!working) stopSelf(startId);
+        return START_NOT_STICKY;
+      }
     }
     if ("pause".equals(intent.getAction())) {
       if (cancellation != null) cancellation.pause("Paused by you", false);
       else Operations.pause("Paused by you", false);
-      if (!working) stopSelf();
+      if (!working) stopSelf(startId);
       return START_NOT_STICKY;
     }
     if ("cancel".equals(intent.getAction())) {
       if (cancellation != null) cancellation.cancel();
       else Operations.cancel();
-      if (!working) stopSelf();
+      if (!working) stopSelf(startId);
       return START_NOT_STICKY;
     }
     if (working) return START_NOT_STICKY;
-    owner = this;
     working = true;
     cancellation = new Operations.Cancellation();
+    commandToken = java.util.UUID.randomUUID().toString();
+    notificationsAllowed = true;
+    owner = this;
     final Operations.Cancellation token = cancellation;
     startForeground(ID, notification("Preparing transfer…"));
     handler.post(refreshNotification);
@@ -147,9 +174,7 @@ public final class BackupService extends Service {
                             long now = System.currentTimeMillis();
                             if (now - lastUpdate > 1000) {
                               lastUpdate = now;
-                              String progress = stage;
-                              getSystemService(NotificationManager.class)
-                                  .notify(ID, notification(progress));
+                              progressNotification(token, stage);
                             }
                           },
                           token);
@@ -171,7 +196,8 @@ public final class BackupService extends Service {
                     handler.removeCallbacks(refreshNotification);
                     Settings.status(this, finished);
                     stopForeground(STOP_FOREGROUND_REMOVE);
-                    if (token.paused()) getSystemService(NotificationManager.class).cancel(ID);
+                    if (!notificationsAllowed || token.paused())
+                      getSystemService(NotificationManager.class).cancel(ID);
                     else
                       getSystemService(NotificationManager.class)
                           .notify(ID, notification(finished));
@@ -185,23 +211,30 @@ public final class BackupService extends Service {
 
   @Override
   public void onTimeout(int startId, int type) {
+    notificationsAllowed = false;
+    handler.removeCallbacks(refreshNotification);
     if (cancellation != null) {
       if (TransferState.current().restore) cancellation.cancel();
       else cancellation.pause("Paused: Android background transfer time limit reached", false);
     }
     Settings.status(this, "Android background time limit reached; backup checkpoint retained");
     stopForeground(STOP_FOREGROUND_REMOVE);
+    if (owner == this) getSystemService(NotificationManager.class).cancel(ID);
     stopSelf();
   }
 
   @Override
   public void onDestroy() {
+    notificationsAllowed = false;
     handler.removeCallbacks(refreshNotification);
     if (working && cancellation != null) {
       if (TransferState.current().restore) cancellation.cancel();
       else cancellation.pause("Paused: Android stopped the transfer service", false);
     }
-    if (owner == this) owner = null;
+    if (owner == this) {
+      owner = null;
+      if (working) getSystemService(NotificationManager.class).cancel(ID);
+    }
     super.onDestroy();
   }
 

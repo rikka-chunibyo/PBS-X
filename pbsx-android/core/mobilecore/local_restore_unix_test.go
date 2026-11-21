@@ -24,6 +24,43 @@ func writeLocalStage(t *testing.T, docs *LocalRestore, name, content string) {
 	}
 }
 
+func TestLocalRestoreCreatesAndReusesDurableDirectoryHierarchy(t *testing.T) {
+	root := t.TempDir()
+	docs, err := NewLocalRestore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer docs.Close()
+	fresh, err := docs.NewDirectory("fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = fresh.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"nested", "nested/empty", "nested/empty"} {
+		if err = docs.MakeDirectory(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"fresh", "nested", "nested/empty"} {
+		info, err := os.Stat(filepath.Join(root, name))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("directory %q: %v", name, err)
+		}
+	}
+	if err = os.WriteFile(filepath.Join(root, "keep"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = docs.MakeDirectory("keep"); err == nil {
+		t.Fatal("replaced a file with a directory")
+	}
+	value, err := os.ReadFile(filepath.Join(root, "keep"))
+	if err != nil || string(value) != "keep" {
+		t.Fatalf("conflicting file changed: %v", err)
+	}
+}
+
 func TestLocalRestoreCommitPreservesConflictsAndDoesNotTruncateOriginal(t *testing.T) {
 	root := t.TempDir()
 	docs, err := NewLocalRestore(root)
