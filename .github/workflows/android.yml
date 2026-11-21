@@ -76,7 +76,14 @@ jobs:
           export ANDROID_SERIAL=emulator-5554
           "$ANDROID_HOME/emulator/emulator" -avd pbsx-ci -port 5554 -no-metrics -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader -accel on -memory 2048 -cores 2 > "$RUNNER_TEMP/pbsx-emulator.log" 2>&1 &
           emulator_pid=$!
-          trap '"$adb" -s emulator-5554 emu kill >/dev/null 2>&1 || true' EXIT
+          cleanup() {
+            result=$?
+            "$adb" -s emulator-5554 logcat -d -t 500 > "$RUNNER_TEMP/pbsx-instrumentation-logcat.log" 2>&1 || true
+            if [ "$result" != 0 ]; then tail -n 150 "$RUNNER_TEMP/pbsx-instrumentation-logcat.log"; fi
+            "$adb" -s emulator-5554 emu kill >/dev/null 2>&1 || true
+            exit "$result"
+          }
+          trap cleanup EXIT
           device=
           for attempt in $(seq 1 120); do
             if ! kill -0 "$emulator_pid" 2>/dev/null; then cat "$RUNNER_TEMP/pbsx-emulator.log"; exit 1; fi
@@ -130,4 +137,5 @@ jobs:
             pbsx-android/app/build/test-results
             ${{ runner.temp }}/pbsx-emulator.log
             ${{ runner.temp }}/pbsx-instrumentation.log
+            ${{ runner.temp }}/pbsx-instrumentation-logcat.log
           retention-days: 3

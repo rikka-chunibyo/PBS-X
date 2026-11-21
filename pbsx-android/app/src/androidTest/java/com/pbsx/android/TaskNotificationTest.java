@@ -32,22 +32,28 @@ public class TaskNotificationTest {
   private BackupService startHeld(Context c, BackupJob job) throws Exception {
     c.startForegroundService(
         new Intent(c, BackupService.class).putExtra("job_config", job.json().toString()));
-    InstrumentationRegistry.getInstrumentation().waitForIdleSync();
-    BackupService service = service();
-    assertNotNull(service);
+    // An idle main looper does not mean ActivityManager has delivered the
+    // asynchronous service start. Wait for the service to acquire its transfer.
+    BackupService service;
     long end = System.currentTimeMillis() + 5000;
-    while (!Operations.isActive(token(service)) && System.currentTimeMillis() < end)
+    do {
+      service = service();
+      if (service != null && Operations.isActive(token(service))) break;
       Thread.sleep(20);
+    } while (System.currentTimeMillis() < end);
+    assertNotNull("Foreground service was not created", service);
     assertTrue("Transfer did not acquire its operation", Operations.isActive(token(service)));
+    InstrumentationRegistry.getInstrumentation().waitForIdleSync();
     return service;
   }
 
   private void awaitStopped() throws Exception {
     long end = System.currentTimeMillis() + 10000;
-    while ((Operations.running() || BackupService.busy()) && System.currentTimeMillis() < end)
+    while ((Operations.running() || service() != null) && System.currentTimeMillis() < end)
       Thread.sleep(20);
     assertFalse("Transfer did not stop", Operations.running());
     assertFalse("Service did not stop", BackupService.busy());
+    assertNull("Stopped service was not destroyed", service());
     InstrumentationRegistry.getInstrumentation().waitForIdleSync();
   }
 
@@ -98,9 +104,8 @@ public class TaskNotificationTest {
               () -> {
                 service.onTimeout(
                     1, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-                late
-                    .run(); // Already queued before the timeout; must not recreate the
-                            // notification.
+                late.run(); // Already queued before the timeout; must not recreate the
+                // notification.
               });
           instrumentation.waitForIdleSync();
           Thread.sleep(100);
@@ -187,10 +192,8 @@ public class TaskNotificationTest {
               "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND");
       try {
         synchronized (Vault.class) {
-          c.startForegroundService(
-              new Intent(c, BackupService.class).putExtra("job_config", job.json().toString()));
-          instrumentation.waitForIdleSync();
-          c.startService(service().controlIntent("pause"));
+          BackupService started = startHeld(c, job);
+          c.startService(started.controlIntent("pause"));
           instrumentation.waitForIdleSync();
           long started = System.currentTimeMillis() + 5000;
           while (!Operations.running() && System.currentTimeMillis() < started) Thread.sleep(20);
