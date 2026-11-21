@@ -219,6 +219,64 @@ public class SettingsSafetyTest {
   }
 
   @Test
+  public void interruptedImportIsRecoveredBeforeCredentialAndJobReferenceChecks() throws Exception {
+    Context from = isolated();
+    connect(from);
+    String connection = KeyProfiles.selected(from);
+    String key = KeyProfiles.addKey(from, "Recovery fixture", Mobilecore.generateEncryptionKey());
+    JSONObject task = new PendingBackupsTest().run(from);
+    BackupJob frozen = BackupJob.from(task.getJSONObject("job"));
+    frozen.connectionID = connection;
+    frozen.encryptionKeyID = key;
+    JobStore.save(from, frozen);
+    String source = PendingBackups.sourceIdentity(task.getString("device"), frozen);
+    JSONObject descriptor = new JSONObject(task.getString("descriptor")).put("source", source);
+    task.put("job", frozen.json()).put("source", source).put("descriptor", descriptor.toString());
+    PendingBackups.put(from, task);
+    JSONObject exported = new JSONObject(SettingsTransfer.exportJSON(from));
+    JSONObject originalConfig = KeyProfiles.connection(from, connection).getJSONObject("config");
+    for (int action = 0; action < 3; action++) {
+      Context to = isolated();
+      try {
+        Vault.store(
+            to,
+            new JSONObject(exported.getJSONObject("vault").toString())
+                .put("pending_import", exported.getJSONObject("preferences"))
+                .put("pending_import_runs", exported.getJSONArray("pending_backups")));
+        try {
+          if (action == 0) KeyProfiles.remove(to, "keys", key);
+          else if (action == 1)
+            KeyProfiles.updateConnection(
+                to,
+                connection,
+                new JSONObject(originalConfig.toString()).put("secret", "different"));
+          else KeyProfiles.deleteJob(to, frozen.id);
+          fail("Mutation ignored references in the interrupted import: " + action);
+        } catch (Exception expected) {
+          assertTrue(
+              expected.getMessage(),
+              expected.getMessage().contains(action == 0 ? "Reassign" : "pending"));
+        }
+        assertFalse(Operations.running());
+        assertFalse(Vault.data(to).has("pending_import"));
+        assertEquals(
+            originalConfig.toString(),
+            KeyProfiles.connection(to, connection).getJSONObject("config").toString());
+        assertEquals(key, KeyProfiles.find(Vault.data(to), "keys", key).getString("id"));
+        assertEquals(
+            task.getString("descriptor"),
+            PendingBackups.get(to, frozen.id).getString("descriptor"));
+        assertEquals(frozen.json().toString(), JobStore.get(to, frozen.id).json().toString());
+      } finally {
+        ExportCache.remove(to.getFilesDir());
+        PendingBackups.forgetCache();
+      }
+    }
+    ExportCache.remove(from.getFilesDir());
+    PendingBackups.forgetCache();
+  }
+
+  @Test
   public void staleScheduledCallbacksCannotStartDisabledOrSupersededOccurrences() throws Exception {
     Context c = isolated();
     connect(c);

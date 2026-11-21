@@ -306,8 +306,11 @@ public class JobStoreTest {
       assertTrue(
           scheduler.getPendingJob(photos.schedulerId).getMinLatencyMillis() <= 24 * 3600000L);
       assertTrue(scheduler.getPendingJob(photos.schedulerId).getMinLatencyMillis() > 23 * 3600000L);
-      assertNotEquals(
+      // The constraint hash stays stable; the separately checked due time
+      // changes and must still replace the scheduled occurrence.
+      assertEquals(
           hash, scheduler.getPendingJob(photos.schedulerId).getExtras().getString("config_hash"));
+      assertNotEquals(due, scheduler.getPendingJob(photos.schedulerId).getExtras().getLong("due"));
       photos.hours = 0;
       JobStore.save(c, photos);
       JobStore.delete(c, docs.id);

@@ -113,6 +113,7 @@ final class KeyProfiles {
 
   static synchronized void remove(Context c, String kind, String id) throws Exception {
     try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      JSONObject data = Vault.data(c);
       for (BackupJob job : JobStore.all(c))
         if (id.equals(
             kind.equals("keys")
@@ -122,7 +123,6 @@ final class KeyProfiles {
       for (BackupJob job : pendingJobs(c))
         if (id.equals(kind.equals("keys") ? job.encryptionKeyID : job.connectionID))
           throw new Exception("Resume or cancel pending backups using this entry first");
-      JSONObject data = Vault.data(c);
       JSONArray values = data.getJSONArray(kind), out = new JSONArray();
       for (int i = 0; i < values.length(); i++)
         if (!id.equals(values.getJSONObject(i).getString("id"))) out.put(values.get(i));
@@ -159,10 +159,10 @@ final class KeyProfiles {
       throws Exception {
     try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
       Mobilecore.newClient(config.toString());
+      JSONObject data = Vault.data(c);
       for (BackupJob job : pendingJobs(c))
         if (id.equals(job.connectionID))
           throw new Exception("Resume or cancel pending backups using this connection first");
-      JSONObject data = Vault.data(c);
       find(data, "connections", id).put("config", config);
       java.util.List<BackupJob> histories = JobStore.all(c);
       histories.addAll(pendingJobs(c));
@@ -183,6 +183,7 @@ final class KeyProfiles {
 
   static synchronized void deleteJob(Context c, String id) throws Exception {
     try (Operations.SettingsGuard ignored = Operations.reserveSettings()) {
+      Vault.data(c);
       JobStore.delete(c, id);
     }
   }
