@@ -218,6 +218,10 @@ public class PendingBackupsTest {
   }
 
   private Context refusingPreferenceWrites(Context base) {
+    return refusingPreferenceWrites(base, null);
+  }
+
+  private Context refusingPreferenceWrites(Context base, String key) {
     return new ContextWrapper(base) {
       @Override
       public SharedPreferences getSharedPreferences(String name, int mode) {
@@ -229,17 +233,80 @@ public class PendingBackupsTest {
                 (proxy, method, args) -> {
                   if (!method.getName().equals("edit")) return method.invoke(prefs, args);
                   SharedPreferences.Editor editor = prefs.edit();
+                  boolean[] refused = {key == null};
                   return java.lang.reflect.Proxy.newProxyInstance(
                       SharedPreferences.Editor.class.getClassLoader(),
                       new Class<?>[] {SharedPreferences.Editor.class},
                       (editProxy, editMethod, editArgs) -> {
-                        if (editMethod.getName().equals("commit")) return false;
+                        if (editMethod.getName().equals("putString")
+                            && key != null
+                            && key.equals(editArgs[0])) refused[0] = true;
+                        if (editMethod.getName().equals("commit") && refused[0]) {
+                          // Model SharedPreferences exposing the new value in
+                          // memory even though commit reported disk failure.
+                          if (key != null) editor.apply();
+                          return false;
+                        }
                         Object result = editMethod.invoke(editor, editArgs);
                         return result == editor ? editProxy : result;
                       });
                 });
       }
     };
+  }
+
+  @Test
+  public void completedBackupKeepsSuccessAndItsCheckpointUntilScheduleAdvances() throws Exception {
+    Context c = isolated();
+    try {
+      JSONObject task = run(c);
+      BackupJob job = BackupJob.from(task.getJSONObject("job"));
+      job.hours = 12;
+      JobStore.save(c, job);
+      long due = System.currentTimeMillis() - 3600000;
+      String schedule =
+          new JSONObject()
+              .put(job.id, new JSONObject().put("signature", "interval/12").put("due", due))
+              .toString();
+      assertTrue(
+          c.getSharedPreferences("jobs-v1", 0)
+              .edit()
+              .putString("schedule_state", schedule)
+              .commit());
+      String history = task.getString("history");
+      task.put("occurrence", due).put("automatic", true);
+      PendingBackups.put(c, task);
+      JSONObject snapshot = new JSONObject().put("snapshot", "host/main/2026-11-24T12:00:00Z");
+
+      String result =
+          Operations.finishBackup(
+              refusingPreferenceWrites(c, "schedule_state"), job, history, task, snapshot);
+      assertTrue(result, result.startsWith("Backup complete"));
+      assertTrue(result, result.contains("Could not save the next schedule time"));
+      assertEquals(
+          task.getString("descriptor"), PendingBackups.get(c, job.id).getString("descriptor"));
+      assertTrue(
+          "Failed commit changed the visible occurrence", ScheduleState.isDue(c, job.id, due));
+      JSONObject success = JobStore.history(c).getJSONObject(0);
+      assertEquals("success", success.getString("state"));
+
+      JobStore.state(c, history, "running", "Rechecking the previous snapshot");
+      JobStore.state(c, history, "failed", "Temporary connectivity failure while checking");
+      JobStore.finish(c, history, false, "Temporary error");
+      assertEquals(success.toString(), JobStore.history(c).getJSONObject(0).toString());
+
+      assertFalse(Operations.finishBackup(c, job, history, task, snapshot).contains("cleanup"));
+      assertNull(PendingBackups.get(c, job.id));
+      long next = ScheduleState.due(c, job, false);
+      assertTrue(next > System.currentTimeMillis());
+      // After successful cleanup, a stale callback cannot advance the new due time.
+      ScheduleService.advanceCompletedOccurrence(c, job.id, due);
+      assertTrue(ScheduleState.isDue(c, job.id, next));
+      assertEquals(success.toString(), JobStore.history(c).getJSONObject(0).toString());
+    } finally {
+      ExportCache.remove(c.getFilesDir());
+      PendingBackups.forgetCache();
+    }
   }
 
   @Test
@@ -251,11 +318,16 @@ public class PendingBackupsTest {
     Context failing = refusingPreferenceWrites(c);
     try {
       try {
-        JobStore.finish(failing, task.getString("history"), true, "Synthetic completed backup");
+        JobStore.finish(
+            refusingPreferenceWrites(c, "history"),
+            task.getString("history"),
+            true,
+            "Synthetic completed backup");
         fail("Completion silently accepted an unsuccessful durable write");
       } catch (Exception expected) {
         assertTrue(expected.getMessage().contains("save backup activity"));
       }
+      assertEquals("running", JobStore.history(c).getJSONObject(0).getString("state"));
       try {
         JobStore.recover(failing);
         fail("Recovery silently accepted an unsuccessful durable write");

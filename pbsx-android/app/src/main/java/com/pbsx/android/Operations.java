@@ -517,17 +517,25 @@ final class Operations {
         c, run.getString("history"), state.equals("cancelling") ? "cancelled" : state, message);
   }
 
-  private static String finishBackup(
+  static String finishBackup(
       Context c, BackupJob job, String history, JSONObject run, JSONObject backup)
       throws Exception {
     String result = "Backup complete: " + job.name + " · " + backup.getString("snapshot");
     if (!backup.optString("warning").isEmpty()) result += " · " + backup.getString("warning");
     // Record completion first: a crash before removing the descriptor can verify it again.
     JobStore.finish(c, history, true, result);
-    PendingBackups.remove(c, job.id);
-    ExportCache.discard(c, run.getString("history"));
-    if (run.optLong("occurrence", 0) > 0)
-      ScheduleService.completed(c, job.id, run.getLong("occurrence"));
+    try {
+      // Advance the durable due time before dropping the descriptor. A stale
+      // callback can then replay cleanup without starting a second snapshot.
+      long occurrence = run.optLong("occurrence", 0);
+      if (occurrence > 0) ScheduleService.advanceCompletedOccurrence(c, job.id, occurrence);
+      PendingBackups.remove(c, job.id);
+      ExportCache.discard(c, history);
+    } catch (Exception e) {
+      // The snapshot and its success record are already committed. A local
+      // cleanup error is not a failed backup.
+      return result + " · Could not finish local cleanup: " + e.getMessage();
+    }
     return result;
   }
 
@@ -557,10 +565,10 @@ final class Operations {
           run.getString("history"),
           "cancelled",
           "Backup cancelled; incomplete server snapshot removed");
+    if (!terminal && run.optLong("occurrence", 0) > 0)
+      ScheduleService.advanceCompletedOccurrence(c, job.id, run.getLong("occurrence"));
     PendingBackups.remove(c, job.id);
     ExportCache.discard(c, run.getString("history"));
-    if (!terminal && run.optLong("occurrence", 0) > 0)
-      ScheduleService.completed(c, job.id, run.getLong("occurrence"));
     return terminal ? "" : "Backup cancelled";
   }
 

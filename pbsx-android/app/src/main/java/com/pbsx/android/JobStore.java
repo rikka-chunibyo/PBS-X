@@ -121,11 +121,14 @@ final class JobStore {
 
   static synchronized void finish(Context c, String id, boolean success, String message)
       throws Exception {
-    JSONArray out = new JSONArray(prefs(c).getString("history", "[]"));
+    SharedPreferences preferences = prefs(c);
+    String saved = preferences.getString("history", "[]");
+    JSONArray out = new JSONArray(saved);
     boolean found = false;
     for (int i = 0; i < out.length(); i++) {
       JSONObject r = out.getJSONObject(i);
       if (id.equals(r.getString("id"))) {
+        if ("success".equals(r.optString("state"))) return;
         r.put("state", success ? "success" : "failed")
             .put("finished", System.currentTimeMillis())
             .put("message", message.length() > 4096 ? message.substring(0, 4096) : message);
@@ -135,8 +138,12 @@ final class JobStore {
     }
     if (!found) throw new Exception("Backup activity entry is missing");
     // The caller may erase the checkpoint only after completion is durable.
-    if (!prefs(c).edit().putString("history", out.toString()).commit())
+    if (!preferences.edit().putString("history", out.toString()).commit()) {
+      // A failed commit may have published the new value in memory. A retry
+      // must not mistake that value for an already durable success.
+      preferences.edit().putString("history", saved).apply();
       throw new Exception("Could not save backup activity");
+    }
   }
 
   static synchronized void state(Context c, String id, String state, String message)
@@ -145,6 +152,9 @@ final class JobStore {
     for (int i = 0; i < runs.length(); i++) {
       JSONObject run = runs.getJSONObject(i);
       if (id.equals(run.getString("id"))) {
+        // A recovery descriptor can outlive a successful backup. Retrying
+        // its verification or cleanup must not reopen completed activity.
+        if ("success".equals(run.optString("state"))) return;
         run.put("state", state)
             .put("message", message.length() > 4096 ? message.substring(0, 4096) : message);
         if (state.equals("running") || state.equals("paused")) run.remove("finished");

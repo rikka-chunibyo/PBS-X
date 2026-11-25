@@ -30,9 +30,15 @@ final class ScheduleState {
     return state != null && expected > 0 && state.optLong("due") == expected;
   }
 
+  static synchronized void advanceIfDue(Context c, BackupJob job, long occurrence)
+      throws Exception {
+    if (isDue(c, job.id, occurrence)) due(c, job, true);
+  }
+
   static synchronized long due(Context c, BackupJob job, boolean advance) throws Exception {
     android.content.SharedPreferences prefs = c.getSharedPreferences("jobs-v1", 0);
-    JSONObject all = new JSONObject(prefs.getString("schedule_state", "{}"));
+    String saved = prefs.getString("schedule_state", "{}");
+    JSONObject all = new JSONObject(saved);
     String signature =
         job.calendar
             ? "calendar/"
@@ -55,8 +61,12 @@ final class ScheduleState {
             ? old.getLong("due")
             : job.nextDue(now);
     all.put(job.id, new JSONObject().put("signature", signature).put("due", due));
-    if (!prefs.edit().putString("schedule_state", all.toString()).commit())
+    if (!prefs.edit().putString("schedule_state", all.toString()).commit()) {
+      // SharedPreferences can expose a failed commit in memory. Restore the
+      // last known value so a retry still sees and advances this occurrence.
+      prefs.edit().putString("schedule_state", saved).apply();
       throw new Exception("Could not save the next schedule time");
+    }
     return due;
   }
 

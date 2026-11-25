@@ -3,6 +3,8 @@ package mobilecore
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -72,6 +74,48 @@ func TestResumeDescriptorStrictValidation(t *testing.T) {
 	raw, _ = json.Marshal(run)
 	if err := ValidateBackupRun(string(raw)); err == nil {
 		t.Fatal("accepted duplicate final indexes")
+	}
+}
+
+func TestDiscardRequiresExplicitSnapshotListBeforeForgettingRun(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		body  string
+		allow bool
+	}{
+		{"empty list", `{"data":[]}`, true},
+		{"omitted list", `{}`, false},
+		{"null list", `{"data":null}`, false},
+		{"null response", `null`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api2/json/admin/datastore/backups/snapshots" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+					return
+				}
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			client, err := NewClient(configForServer(t, server))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, run := runForTest(t)
+			run.Binding = client.runBinding(run)
+			raw, err := json.Marshal(run)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = client.DiscardBackupRun(string(raw), run.Source)
+			if tc.allow && err != nil {
+				t.Fatal("explicit empty snapshot list was refused:", err)
+			}
+			if !tc.allow && (err == nil || !strings.Contains(err.Error(), "snapshot list")) {
+				t.Fatal("discard accepted an ambiguous snapshot list:", err)
+			}
+		})
 	}
 }
 func TestCancelCannotBeDowngradedToPause(t *testing.T) {

@@ -171,6 +171,9 @@ func (c *Client) runSnapshots(ctx context.Context, store, namespace, id string) 
 	if err = json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
+	if result.Data == nil {
+		return nil, errors.New("server did not return a snapshot list")
+	}
 	for _, item := range result.Data {
 		if item.Type != "host" || item.ID != id {
 			return nil, errors.New("server returned a different backup group")

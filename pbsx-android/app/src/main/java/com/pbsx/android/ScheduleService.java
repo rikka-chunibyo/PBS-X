@@ -85,23 +85,23 @@ public final class ScheduleService extends JobService {
   }
 
   static void completed(Context c, String id, long occurrence) throws Exception {
-    synchronized (KeyProfiles.class) {
-      synchronized (JobStore.class) {
-        completedLocked(c, id, occurrence);
-      }
-    }
+    advanceCompletedOccurrence(c, id, occurrence);
+    configureAll(c);
   }
 
-  private static void completedLocked(Context c, String id, long occurrence) throws Exception {
-    // Reload after the transfer: a deleted/disabled job must not regain a
-    // schedule, and a stale callback must not advance a newer occurrence.
-    for (BackupJob current : JobStore.all(c)) {
-      if (current.id.equals(id) && current.scheduled() && ScheduleState.isDue(c, id, occurrence)) {
-        ScheduleState.due(c, current, true);
-        break;
+  static void advanceCompletedOccurrence(Context c, String id, long occurrence) throws Exception {
+    synchronized (KeyProfiles.class) {
+      synchronized (JobStore.class) {
+        // A deleted/disabled job cannot regain a schedule, and an old
+        // completion cannot advance an occurrence that has already changed.
+        for (BackupJob current : JobStore.all(c)) {
+          if (current.id.equals(id) && current.scheduled()) {
+            ScheduleState.advanceIfDue(c, current, occurrence);
+            return;
+          }
+        }
       }
     }
-    configureAll(c);
   }
 
   @Override
@@ -115,12 +115,19 @@ public final class ScheduleService extends JobService {
     new Thread(
             () -> {
               boolean retry = false;
+              boolean recoveringEarlierOccurrence = false;
               BackupJob job = null;
               try {
                 job = JobStore.get(this, params.getExtras().getString("job_id", ""));
                 if (job.scheduled()
-                    && ScheduleState.isDue(this, job.id, params.getExtras().getLong("due", 0))
-                    && !Settings.prefs(this).getBoolean("imported_schedule_hold", false))
+                    && ScheduleState.isDue(this, job.id, token.occurrence)
+                    && !Settings.prefs(this).getBoolean("imported_schedule_hold", false)) {
+                  org.json.JSONObject saved = PendingBackups.get(this, job.id);
+                  long savedOccurrence = saved == null ? 0 : saved.optLong("occurrence");
+                  recoveringEarlierOccurrence =
+                      PendingBackups.canResume(saved)
+                          && savedOccurrence > 0
+                          && savedOccurrence != token.occurrence;
                   Settings.status(
                       this,
                       Operations.runJob(
@@ -133,6 +140,7 @@ public final class ScheduleService extends JobService {
                           "fail",
                           (stage, files, bytes) -> {},
                           token));
+                }
               } catch (Operations.BusyException e) {
                 retry = true;
               } catch (Exception e) {
@@ -144,19 +152,32 @@ public final class ScheduleService extends JobService {
                 if (owns) active.remove(params.getJobId());
               }
               if (owns) {
+                boolean advance = false;
                 try {
                   org.json.JSONObject pending =
                       job == null ? null : PendingBackups.get(this, job.id);
                   if (PendingBackups.cleanupOnly(pending)) pending = null;
-                  if (pending != null || token.paused())
+                  boolean stillDue =
+                      job != null
+                          && job.scheduled()
+                          && ScheduleState.isDue(this, job.id, token.occurrence);
+                  if (!stillDue) retry = false;
+                  else if (pending != null || token.paused())
                     retry = pending == null || pending.optBoolean("automatic");
-                  jobFinished(params, retry);
-                  if (!retry && pending == null && job != null && job.scheduled())
-                    completed(this, job.id, params.getExtras().getLong("due", 0));
-                  else if (!retry) configureAll(this);
+                  else if (recoveringEarlierOccurrence) retry = true;
+                  advance = !retry && pending == null && stillDue;
                 } catch (Exception e) {
                   Settings.status(this, "Could not update schedule: " + e.getMessage());
-                  jobFinished(params, false);
+                  retry = false;
+                }
+                jobFinished(params, retry);
+                if (!retry) {
+                  try {
+                    if (advance) completed(this, job.id, token.occurrence);
+                    else configureAll(this);
+                  } catch (Exception e) {
+                    Settings.status(this, "Could not update schedule: " + e.getMessage());
+                  }
                 }
               }
             },
