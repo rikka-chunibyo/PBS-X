@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -32,10 +33,11 @@ import (
 //     sendCond when it runs out of credit, unblocked by the readLoop on
 //     WINDOW_UPDATE frames.
 type pbsH2Conn struct {
-	conn      net.Conn
-	framer    *http2.Framer
-	authority string
-	hdec      *hpack.Decoder
+	conn       net.Conn
+	stopCancel func() bool
+	framer     *http2.Framer
+	authority  string
+	hdec       *hpack.Decoder
 
 	writeCh   chan writeJob
 	writeDone chan struct{}
@@ -191,9 +193,24 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 	var d tls.Dialer
 	d.NetDialer = dialer
 	d.Config = tlsCfg
-	conn, err := d.DialContext(ctx, "tcp", host)
+	handshake, cancelHandshake := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelHandshake()
+	conn, err := d.DialContext(handshake, "tcp", host)
 	if err != nil {
 		return nil, fmt.Errorf("TLS dial %s: %w", host, err)
+	}
+
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	connected := false
+	defer func() {
+		if !connected {
+			stopCancel()
+			_ = conn.Close()
+		}
+	}()
+	deadline, _ := handshake.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		return nil, fmt.Errorf("backup handshake deadline: %w", err)
 	}
 
 	hostHeader := u.Host
@@ -210,26 +227,32 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 		upgradePath, hostHeader, authToken, extraHeader,
 	)
 	if _, err := conn.Write([]byte(upgradeReq)); err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("write upgrade request: %w", err)
 	}
 
 	br := bufio.NewReaderSize(conn, 1<<20)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("read upgrade response: %w", err)
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
-		resp.Body.Close()
-		conn.Close()
+		const maxUpgradeError = 16 << 10
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxUpgradeError+1))
+		// Failed upgrades never reuse this connection. Close it before
+		// closing the body so a peer cannot stall while it drains.
+		_ = conn.Close()
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read upgrade error response: %w", err)
+		}
+		if len(body) > maxUpgradeError {
+			return nil, fmt.Errorf("upgrade failed: HTTP %d: response too large", resp.StatusCode)
+		}
 		return nil, &ProtocolUpgradeError{Status: resp.StatusCode, Message: string(body)}
 	}
 	resp.Body.Close()
 
 	if _, err := conn.Write([]byte(http2.ClientPreface)); err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("write H2 preface: %w", err)
 	}
 
@@ -245,11 +268,9 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 		http2.Setting{ID: http2.SettingInitialWindowSize, Val: targetWindow},
 		http2.Setting{ID: http2.SettingMaxFrameSize, Val: targetMaxFrame},
 	); err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("write SETTINGS: %w", err)
 	}
 	if err := framer.WriteWindowUpdate(0, uint32(targetWindow-65535)); err != nil {
-		conn.Close()
 		return nil, fmt.Errorf("write connection WINDOW_UPDATE: %w", err)
 	}
 
@@ -258,7 +279,6 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 	for !gotSettings {
 		fr, err := framer.ReadFrame()
 		if err != nil {
-			conn.Close()
 			return nil, fmt.Errorf("read server SETTINGS: %w", err)
 		}
 		sf, ok := fr.(*http2.SettingsFrame)
@@ -285,17 +305,23 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 
 		// Ack server settings.
 		if err := framer.WriteSettingsAck(); err != nil {
-			conn.Close()
 			return nil, fmt.Errorf("write SETTINGS ack: %w", err)
 		}
 		gotSettings = true
 
+		if err := handshake.Err(); err != nil {
+			return nil, err
+		}
+		if err := conn.SetDeadline(time.Time{}); err != nil {
+			return nil, fmt.Errorf("clear backup handshake deadline: %w", err)
+		}
 		hdrBuf := new(bytes.Buffer)
 		enc := hpack.NewEncoder(hdrBuf)
 		dec := hpack.NewDecoder(4096, nil)
 
 		c := &pbsH2Conn{
 			conn:            conn,
+			stopCancel:      stopCancel,
 			hdec:            dec,
 			framer:          framer,
 			authority:       u.Host,
@@ -320,10 +346,10 @@ func dialPBSH2(ctx context.Context, rawURL, datastore, authToken string, cfg Bac
 
 		go c.writeLoop(enc, hdrBuf)
 		go c.readLoop()
+		connected = true
 		return c, nil
 	}
 
-	conn.Close()
 	return nil, fmt.Errorf("unexpected: never received server SETTINGS")
 }
 
@@ -556,6 +582,7 @@ func (c *pbsH2Conn) fail(err error) {
 	}
 	e := err
 	c.closeErr.Store(&e)
+	c.stopCancel()
 	_ = c.conn.Close()
 	close(c.stopCh)
 	c.sendMu.Lock()

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pbs-plus/pxar/buzhash"
+	"github.com/pbs-plus/pxar/datastore"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 )
@@ -321,7 +323,36 @@ func TestInitialSettings(t *testing.T) {
 // Cancellation must own the socket after TLS dialing, before the reader is
 // published, and during reads after Connect has returned.
 func TestPBSReaderCancellationAcrossHandshakeAndReads(t *testing.T) {
-	for _, phase := range []string{"upgrade", "settings", "download"} {
+	testProtocolCancellation(t, "proxmox-backup-reader-protocol-v1", func(ctx context.Context, cfg PBSConfig, request bool) error {
+		reader := NewPBSReader(cfg, "host", "fixture", 1)
+		defer reader.Close()
+		err := reader.Connect(ctx)
+		if err == nil && request {
+			_, err = reader.DownloadFile("root.pxar.didx")
+		}
+		return err
+	})
+}
+
+func TestPBSBackupCancellationAcrossHandshakeAndRequests(t *testing.T) {
+	testProtocolCancellation(t, "proxmox-backup-protocol-v1", func(ctx context.Context, cfg PBSConfig, request bool) error {
+		session, err := NewPBSStore(cfg, buzhash.DefaultConfig(), false).StartSession(ctx, BackupConfig{
+			BackupType: datastore.BackupHost, BackupID: "fixture", BackupTime: 1,
+		})
+		if err != nil {
+			return err
+		}
+		defer session.Close()
+		if request {
+			_, err = session.(*pbsSession).proto.(*h2Protocol).conn.do("GET", "resume", nil, nil, "")
+		}
+		return err
+	})
+}
+
+func testProtocolCancellation(t *testing.T, protocol string, operation func(context.Context, PBSConfig, bool) error) {
+	t.Helper()
+	for _, phase := range []string{"upgrade", "settings", "response"} {
 		t.Run(phase, func(t *testing.T) {
 			reached := make(chan struct{})
 			release := make(chan struct{})
@@ -337,7 +368,7 @@ func TestPBSReaderCancellationAcrossHandshakeAndReads(t *testing.T) {
 					return
 				}
 				defer conn.Close()
-				_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: proxmox-backup-reader-protocol-v1\r\n\r\n")
+				_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + protocol + "\r\n\r\n")
 				if rw.Flush() != nil {
 					return
 				}
@@ -375,20 +406,15 @@ func TestPBSReaderCancellationAcrossHandshakeAndReads(t *testing.T) {
 			defer close(release)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			reader := NewPBSReader(PBSConfig{BaseURL: server.URL, Datastore: "fixture", AuthToken: "audit@pbs!fixture:dummy", SkipTLSVerify: true}, "host", "fixture", 1)
-			defer reader.Close()
 			done := make(chan error, 1)
 			go func() {
-				err := reader.Connect(ctx)
-				if err == nil && phase == "download" {
-					_, err = reader.DownloadFile("root.pxar.didx")
-				}
-				done <- err
+				cfg := PBSConfig{BaseURL: server.URL, Datastore: "fixture", AuthToken: "audit@pbs!fixture:dummy", SkipTLSVerify: true}
+				done <- operation(ctx, cfg, phase == "response")
 			}()
 			select {
 			case <-reached:
 			case err := <-done:
-				t.Fatalf("reader ended before %s: %v", phase, err)
+				t.Fatalf("connection ended before %s: %v", phase, err)
 			case <-time.After(3 * time.Second):
 				t.Fatal("fixture was not reached")
 			}
@@ -396,10 +422,10 @@ func TestPBSReaderCancellationAcrossHandshakeAndReads(t *testing.T) {
 			select {
 			case err := <-done:
 				if err == nil {
-					t.Fatal("cancelled reader succeeded")
+					t.Fatal("cancelled operation succeeded")
 				}
 			case <-time.After(time.Second):
-				t.Fatal("cancelled reader did not close its socket")
+				t.Fatal("cancelled operation did not close its socket")
 			}
 		})
 	}

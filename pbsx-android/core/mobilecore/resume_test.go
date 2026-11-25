@@ -3,14 +3,17 @@ package mobilecore
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pbs-plus/pxar/datastore"
+	"golang.org/x/net/http2"
 )
 
 func runForTest(t *testing.T) (*Client, *backupRun) {
@@ -77,47 +80,104 @@ func TestResumeDescriptorStrictValidation(t *testing.T) {
 	}
 }
 
-func TestDiscardRequiresExplicitSnapshotListBeforeForgettingRun(t *testing.T) {
+func TestDiscardRequiresExactAuthenticatedAbsence(t *testing.T) {
+	type reply struct {
+		status int
+		body   string
+	}
+	missing := reply{http.StatusNotFound, "incomplete checkpoint does not exist"}
+	refused := reply{http.StatusBadRequest, "backup owner check failed"}
+	accepted := reply{http.StatusSwitchingProtocols, ""}
 	for _, tc := range []struct {
-		name  string
-		body  string
-		allow bool
+		name   string
+		list   string
+		probes []reply
+		fail   string
 	}{
-		{"empty list", `{"data":[]}`, true},
-		{"omitted list", `{}`, false},
-		{"null list", `{"data":null}`, false},
-		{"null response", `null`, false},
+		{"absent", `{"data":[]}`, []reply{missing}, ""},
+		{"hidden by changed owner", `{"data":[]}`, []reply{refused}, "owner check failed"},
+		{"generic not found", `{"data":[]}`, []reply{{http.StatusNotFound, "unknown route"}}, "unknown route"},
+		{"acceptance followed by confirmation", `{"data":[]}`, []reply{accepted, missing}, ""},
+		{"ownership changes during cleanup", `{"data":[]}`, []reply{accepted, refused}, "owner check failed"},
+		{"completed snapshot", `{"data":[{"backup-type":"host","backup-id":"main","backup-time":12345,"size":0}]}`, nil, "already completed"},
+		{"omitted list", `{}`, nil, "snapshot list"},
+		{"null list", `{"data":null}`, nil, "snapshot list"},
+		{"null response", `null`, nil, "snapshot list"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			_, run := runForTest(t)
+			var probes atomic.Int32
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet || r.URL.Path != "/api2/json/admin/datastore/backups/snapshots" {
+				switch r.URL.Path {
+				case "/api2/json/admin/datastore/backups/snapshots":
+					_, _ = io.WriteString(w, tc.list)
+				case "/api2/json/backup":
+					i := int(probes.Add(1)) - 1
+					if i >= len(tc.probes) {
+						t.Error("unexpected discard probe")
+						http.Error(w, "unexpected probe", http.StatusBadRequest)
+						return
+					}
+					q := r.URL.Query()
+					if r.Method != http.MethodGet || q.Get("store") != "backups" || q.Get("ns") != "phone" ||
+						q.Get("backup-type") != "host" || q.Get("backup-id") != "main" || q.Get("backup-time") != "12345" ||
+						q.Get("pbsx-resume-discard") != "1" || r.Header.Get("PBSX-Resume-Token") != run.Token ||
+						r.Header.Get("Authorization") != "PBSAPIToken test@pbs!device:test-secret" ||
+						strings.Contains(r.URL.RawQuery, run.Token) {
+						t.Error("discard did not authenticate the exact target")
+					}
+					probe := tc.probes[i]
+					if probe.status != http.StatusSwitchingProtocols {
+						http.Error(w, probe.body, probe.status)
+						return
+					}
+					conn, rw, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					defer conn.Close()
+					_, _ = rw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: proxmox-backup-protocol-v1\r\n\r\n")
+					if rw.Flush() != nil {
+						return
+					}
+					if _, err = io.CopyN(io.Discard, rw, int64(len(http2.ClientPreface))); err != nil {
+						return
+					}
+					framer := http2.NewFramer(conn, rw)
+					if err = framer.WriteSettings(); err != nil {
+						return
+					}
+					_, _ = io.Copy(io.Discard, rw)
+				default:
 					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 					http.Error(w, "unexpected request", http.StatusBadRequest)
-					return
 				}
-				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer server.Close()
 			client, err := NewClient(configForServer(t, server))
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, run := runForTest(t)
 			run.Binding = client.runBinding(run)
 			raw, err := json.Marshal(run)
 			if err != nil {
 				t.Fatal(err)
 			}
 			err = client.DiscardBackupRun(string(raw), run.Source)
-			if tc.allow && err != nil {
-				t.Fatal("explicit empty snapshot list was refused:", err)
+			if tc.fail == "" && err != nil {
+				t.Fatal("confirmed absence was refused:", err)
 			}
-			if !tc.allow && (err == nil || !strings.Contains(err.Error(), "snapshot list")) {
-				t.Fatal("discard accepted an ambiguous snapshot list:", err)
+			if tc.fail != "" && (err == nil || !strings.Contains(err.Error(), tc.fail)) {
+				t.Fatal("discard did not preserve the descriptor on uncertainty:", err)
+			}
+			if got := int(probes.Load()); got != len(tc.probes) {
+				t.Fatalf("got %d discard probes, want %d", got, len(tc.probes))
 			}
 		})
 	}
 }
+
 func TestCancelCannotBeDowngradedToPause(t *testing.T) {
 	client, _ := runForTest(t)
 	ctx, done, err := client.beginMode(true)

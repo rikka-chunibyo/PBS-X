@@ -2,11 +2,14 @@ package backupproxy
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/pbs-plus/pxar/buzhash"
 	"github.com/pbs-plus/pxar/datastore"
 )
 
@@ -36,5 +39,24 @@ func TestResumeUpgradeRejectsInvalidTokensBeforeDial(t *testing.T) {
 		if err == nil || err.Error() != "invalid resume token" {
 			t.Fatalf("invalid token reached dial: %v", err)
 		}
+	}
+}
+
+func TestDiscardRefusesTruncatedAbsenceResponse(t *testing.T) {
+	const body = "incomplete checkpoint does not exist"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)+1))
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, body)
+	}))
+	defer server.Close()
+	store := NewPBSStore(PBSConfig{
+		BaseURL: server.URL, Datastore: "fixture", AuthToken: "audit@pbs!fixture:dummy", SkipTLSVerify: true,
+	}, buzhash.DefaultConfig(), false)
+	absent, err := store.RequestDocumentBackupDiscard(t.Context(), BackupConfig{
+		BackupType: datastore.BackupHost, BackupID: "fixture", BackupTime: 1, ResumeToken: strings.Repeat("a1", 32),
+	})
+	if absent || err == nil {
+		t.Fatalf("truncated reply was accepted as confirmation: absent=%t, error=%v", absent, err)
 	}
 }

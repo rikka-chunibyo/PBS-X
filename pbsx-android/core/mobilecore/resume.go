@@ -406,39 +406,43 @@ func (c *Client) DiscardBackupRun(raw, source string) error {
 		return err
 	}
 	defer done()
-	exists, complete, err := c.runPresence(ctx, run)
+	_, complete, err := c.runPresence(ctx, run)
 	if err != nil {
 		return err
 	}
 	if complete {
 		return errors.New("backup already completed; verify it before clearing this run")
 	}
-	if !exists {
-		return nil
-	}
 	cfg, err := c.pbsConfig(run.Store, run.Namespace)
 	if err != nil {
 		return err
 	}
 	store := backupproxy.NewPBSStore(cfg, buzhash.DefaultConfig(), true)
-	if err = store.DiscardDocumentBackup(ctx, backupproxy.BackupConfig{ResumeToken: run.Token, BackupType: datastore.BackupHost, BackupID: run.BackupID, Namespace: run.Namespace, BackupTime: run.Stamp}); err != nil {
+	discard := backupproxy.BackupConfig{ResumeToken: run.Token, BackupType: datastore.BackupHost, BackupID: run.BackupID, Namespace: run.Namespace, BackupTime: run.Stamp}
+	absent, err := store.RequestDocumentBackupDiscard(ctx, discard)
+	if err != nil || absent {
 		return err
 	}
 	for attempts := 0; attempts < 30; attempts++ {
-		exists, complete, err = c.runPresence(ctx, run)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+		exists, complete, err := c.runPresence(ctx, run)
 		if err != nil {
 			return err
 		}
 		if complete {
 			return errors.New("backup completed while cancelling; keep its descriptor for verification")
 		}
+		// The listing may hide a group after an ownership change. Once it
+		// stops showing the snapshot, ask PBS to check the exact target.
 		if !exists {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+			absent, err := store.RequestDocumentBackupDiscard(ctx, discard)
+			if err != nil || absent {
+				return err
+			}
 		}
 	}
 	return errors.New("server cleanup is still pending; keep this backup's recovery record and retry Cancel")

@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pbs-plus/pxar/buzhash"
@@ -270,19 +272,30 @@ func (ps *PBSStore) RunResumableDocumentBackup(ctx context.Context, cfg BackupCo
 // snapshot. It can cancel even when the opaque saved state/index is corrupt,
 // but cannot authorize deletion of a completed snapshot.
 func (ps *PBSStore) DiscardDocumentBackup(ctx context.Context, cfg BackupConfig) error {
+	_, err := ps.RequestDocumentBackupDiscard(ctx, cfg)
+	return err
+}
+
+// RequestDocumentBackupDiscard returns true only when PBS confirms the exact
+// snapshot is absent. An accepted discard session starts asynchronous cleanup
+// and returns false until a subsequent request confirms absence.
+func (ps *PBSStore) RequestDocumentBackupDiscard(ctx context.Context, cfg BackupConfig) (absent bool, err error) {
 	if cfg.ResumeToken == "" {
-		return errors.New("discard requires the original resume token")
+		return false, errors.New("discard requires the original resume token")
 	}
 	cfg.DiscardResume = true
 	session, err := ps.StartSession(ctx, cfg)
 	if err != nil {
 		var rejected *ProtocolUpgradeError
-		if errors.As(err, &rejected) && rejected.Status == 404 {
-			return nil
+		if errors.As(err, &rejected) && rejected.Status == http.StatusNotFound {
+			switch strings.TrimSpace(rejected.Message) {
+			case "incomplete checkpoint does not exist", "namespace not found":
+				return true, nil
+			}
 		}
-		return err
+		return false, err
 	}
 	// This opt-in session deliberately has no recovery/retention state. Closing
 	// it runs ordinary unfinished-backup cleanup under the server's group lock.
-	return session.Close()
+	return false, session.Close()
 }
